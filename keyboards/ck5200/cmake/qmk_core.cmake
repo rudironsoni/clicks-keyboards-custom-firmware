@@ -1,0 +1,31 @@
+# Minimal QMK core source set based on the known working O-H-M2/qmk_port_ch582 port.
+file(GLOB_RECURSE QMK_KEYMAP_EXTRAS "${QMK_DIR}/quantum/keymap_extras/*.c")
+
+set(QMK_CORE_SOURCES
+    "${QMK_DIR}/quantum/bootmagic/bootmagic.c"
+    "${QMK_DIR}/quantum/debounce/sym_eager_pk.c"
+    ${QMK_KEYMAP_EXTRAS}
+    "${QMK_DIR}/quantum/logging/debug.c"
+    "${QMK_DIR}/quantum/process_keycode/process_magic.c"
+    "${QMK_DIR}/quantum/action_layer.c"
+    "${QMK_DIR}/quantum/action_tapping.c"
+    "${QMK_DIR}/quantum/action_util.c"
+    "${QMK_DIR}/quantum/action.c"
+    "${QMK_DIR}/quantum/bitwise.c"
+    "${QMK_DIR}/quantum/caps_word.c"
+    "${QMK_DIR}/quantum/deferred_exec.c"
+    "${QMK_DIR}/quantum/keyboard.c"
+    "${QMK_DIR}/quantum/keycode_config.c"
+    "${QMK_DIR}/quantum/keymap_common.c"
+    "${QMK_DIR}/quantum/keymap_introspection.c"
+    "${QMK_DIR}/quantum/led.c"
+    "${QMK_DIR}/quantum/main.c"
+    "${QMK_DIR}/quantum/matrix_common.c"
+    "${QMK_DIR}/quantum/programmable_button.c"
+    "${QMK_DIR}/quantum/quantum.c"
+    "${QMK_DIR}/quantum/send_string/send_string.c"
+    "${QMK_DIR}/quantum/sync_timer.c"
+    "${QMK_DIR}/tmk_core/common/host.c"
+    "${QMK_DIR}/tmk_core/common/report.c"
+    "${QMK_DIR}/tmk_core/protocol/usb_device_state.c"
+)
