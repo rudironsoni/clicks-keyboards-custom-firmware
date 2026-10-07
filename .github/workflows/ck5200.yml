@@ -14,9 +14,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ck5200-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     defaults:
       run:
@@ -25,10 +30,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system packages
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check runner tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3 python3-venv python3-pip gcc libusb-1.0-0
+          cmake --version
+          ninja --version
+          cc --version
+          git --version
+          curl --version
 
       - name: Set up toolchain and dependencies
         run: bash scripts/setup.sh
