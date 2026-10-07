@@ -55,3 +55,19 @@ void platform_setup(void) {
 
     __enable_irq();
 }
+
+
+/*
+ * QMK expects these platform hooks even when the keymap does not expose a
+ * bootloader key. We do not yet know a safe software jump into a CK-5200
+ * bootloader, so both hooks perform the normal MCU reset for now.
+ */
+void mcu_reset(void) {
+    NVIC_SystemReset();
+    for (;;) {}
+}
+
+void bootloader_jump(void) {
+    NVIC_SystemReset();
+    for (;;) {}
+}

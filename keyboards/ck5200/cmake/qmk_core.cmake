@@ -6,6 +6,8 @@ set(QMK_CORE_SOURCES
     "${QMK_DIR}/quantum/debounce/sym_eager_pk.c"
     ${QMK_KEYMAP_EXTRAS}
     "${QMK_DIR}/quantum/logging/debug.c"
+    "${QMK_DIR}/quantum/logging/print.c"
+    "${QMK_DIR}/quantum/logging/sendchar.c"
     "${QMK_DIR}/quantum/process_keycode/process_magic.c"
     "${QMK_DIR}/quantum/action_layer.c"
     "${QMK_DIR}/quantum/action_tapping.c"
