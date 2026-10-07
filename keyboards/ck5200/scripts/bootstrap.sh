@@ -15,9 +15,11 @@ mkdir -p external
 
 clone_pin() {
   local url="$1" dir="$2" commit="$3"
+
   if [[ ! -d "$dir/.git" ]]; then
     git clone --filter=blob:none "$url" "$dir"
   fi
+
   git -C "$dir" fetch origin "$commit" --depth=1
   git -C "$dir" checkout --detach "$commit"
 }
@@ -26,12 +28,8 @@ clone_pin "$QMK_REPO" external/qmk_firmware "$QMK_COMMIT"
 clone_pin "$TINYUSB_REPO" external/tinyusb "$TINYUSB_COMMIT"
 clone_pin "$OPENWCH_REPO" external/ch32v20x "$OPENWCH_COMMIT"
 
-cat <<MSG
-Dependencies pinned:
-  QMK      $QMK_COMMIT
-  TinyUSB  $TINYUSB_COMMIT
-  CH32V20x $OPENWCH_COMMIT
-
-Next:
-  scripts/build.sh
-MSG
+echo
+echo "Source dependencies are ready."
+echo "QMK:      $QMK_COMMIT"
+echo "TinyUSB:  $TINYUSB_COMMIT"
+echo "CH32V20x: $OPENWCH_COMMIT"

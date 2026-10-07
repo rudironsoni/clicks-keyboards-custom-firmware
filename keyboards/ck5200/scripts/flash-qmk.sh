@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE="${1:-$ROOT/build/ck5200_qmk.bin}"
+PYTHON="$ROOT/.venv/bin/python"
 
-if [[ ! -f "$IMAGE" ]]; then
-  echo "missing image: $IMAGE" >&2
+if [[ ! -x "$PYTHON" ]]; then
+  echo "Python environment not found. Run: bash scripts/setup.sh" >&2
   exit 1
 fi
 
-python3 "$ROOT/tools/validate_image.py" "$IMAGE"
-python3 "$ROOT/tools/ck5200_usb.py" packets "$IMAGE"
+if [[ ! -f "$IMAGE" ]]; then
+  echo "Firmware not found: $IMAGE" >&2
+  echo "Build it first with: bash scripts/build.sh" >&2
+  exit 1
+fi
 
-cat <<'MSG'
-
-The commands above did not write the device.
-To perform the regular-USB write, rerun this script with FLASH=YES:
-
-  FLASH=YES scripts/flash-qmk.sh
-
-This is a custom image. The flasher will require both CK-5200 confirmation and
---allow-unknown-image.
-MSG
+"$PYTHON" "$ROOT/tools/validate_image.py" "$IMAGE"
+"$PYTHON" "$ROOT/tools/ck5200_usb.py" packets "$IMAGE"
 
 if [[ "${FLASH:-NO}" != "YES" ]]; then
+  echo
+  echo "Dry run only. Nothing was written to the keyboard."
+  echo "To install this image, run:"
+  echo "  bash scripts/install.sh"
   exit 0
 fi
 
-python3 "$ROOT/tools/ck5200_usb.py" flash "$IMAGE" \
-  --confirm CK-5200 \
-  --allow-unknown-image
+"$PYTHON" "$ROOT/tools/ck5200_usb.py" flash "$IMAGE"   --confirm CK-5200   --allow-unknown-image
