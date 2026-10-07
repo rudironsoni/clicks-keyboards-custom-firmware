@@ -101,7 +101,7 @@ target_compile_definitions(ck5200_qmk.elf PRIVATE
 )
 
 target_compile_options(ck5200_qmk.elf PRIVATE
-    -march=rv32imac
+    -march=rv32imac_zicsr_zifencei
     -mabi=ilp32
     -mcmodel=medany
     -msmall-data-limit=8
@@ -119,7 +119,7 @@ target_compile_options(ck5200_qmk.elf PRIVATE
 )
 
 target_link_options(ck5200_qmk.elf PRIVATE
-    -march=rv32imac
+    -march=rv32imac_zicsr_zifencei
     -mabi=ilp32
     -nostartfiles
     --specs=nano.specs
