@@ -26,6 +26,7 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/quantum/bootmagic"
     "${QMK_DIR}/quantum/debounce"
     "${QMK_DIR}/quantum/logging"
+    "${QMK_DIR}/quantum/keymap_extras"
     "${QMK_DIR}/quantum/process_keycode"
     "${QMK_DIR}/quantum/send_string"
     "${QMK_DIR}/tmk_core"
