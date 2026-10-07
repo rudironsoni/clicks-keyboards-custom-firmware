@@ -32,7 +32,6 @@ set(TINYUSB_SOURCES
     "${TINYUSB_DIR}/src/tusb.c"
     "${TINYUSB_DIR}/src/common/tusb_fifo.c"
     "${TINYUSB_DIR}/src/device/usbd.c"
-    "${TINYUSB_DIR}/src/device/usbd_control.c"
     "${TINYUSB_DIR}/src/class/hid/hid_device.c"
     "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
     "${TINYUSB_DIR}/src/portable/wch/dcd_ch32_usbfs.c"
