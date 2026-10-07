@@ -1,25 +1,55 @@
-# CK-5200 QMK port, bring-up package
+# CK-5200
 
-This is the working port package for the Clicks CK-5200 keyboard case. It is based on the supplied 1.2.1/1.2.2 firmware, Clicks Android updater APK, and firmware manifest capture.
+This folder contains my work on getting QMK running on the Clicks CK-5200 Keyboard Case.
 
-The useful new result is the matrix. Static analysis of stock 1.2.2 shows a 6x6 scan with PA0..PA5 as pull-down inputs and PB0..PB5 as driven outputs. The stock scanner selects one PB line high and reads PA0..PA5. `firmware/keyboard/matrix.c` reproduces that electrical behavior.
+The keyboard is already great as-is. I want to keep that hardware and give it more flexibility with QMK.
 
-## Regular USB updater
+The main goals are:
 
-Install PyUSB, then inspect the device without writing anything:
+- custom keymaps
+- layers
+- shortcuts and macros
+- a firmware update flow that works over the normal USB connection
+- no need to open the case for every firmware test
+
+## What I have figured out so far
+
+The stock keyboard scans a 6x6 key matrix.
+
+It uses:
+
+- PA0..PA5 as inputs
+- PB0..PB5 as outputs
+
+The stock firmware drives one PB line at a time and reads PA0..PA5. The QMK matrix scanner in this folder follows the same pattern.
+
+I also found the regular USB path used by the official firmware updater. That gives us a practical way to send firmware to the keyboard without soldering or opening the case.
+
+## Check the keyboard over USB
+
+Install PyUSB:
 
 ```sh
 python3 -m pip install -r tools/requirements.txt
+```
+
+Then:
+
+```sh
 python3 tools/ck5200_usb.py inspect
 ```
 
-Show the exact packet plan for the verified stock 1.2.2 image:
+This only checks that the keyboard and firmware-update interface are visible. It does not write anything.
+
+## Inspect a firmware image
+
+For the stock 1.2.2 firmware:
 
 ```sh
 python3 tools/ck5200_usb.py packets iKeyboard_CK-5200_V122_120.bin
 ```
 
-Expected facts for 1.2.2:
+That image should produce:
 
 ```text
 size        0x48d8
@@ -29,7 +59,9 @@ finish      06 a3 00 00 48 d8
 reboot      02 a0
 ```
 
-A write is intentionally explicit:
+## Flash over normal USB
+
+The write command is deliberately explicit:
 
 ```sh
 python3 tools/ck5200_usb.py flash firmware.bin \
@@ -37,30 +69,24 @@ python3 tools/ck5200_usb.py flash firmware.bin \
   --allow-unknown-image
 ```
 
-For a known stock 1.2.1/1.2.2 binary, `--allow-unknown-image` is not needed. The tool validates the response status byte and the A2 accepted offset after every chunk.
+The tool checks every response from the keyboard while sending the image.
 
-## First custom-flash gate
+For the known stock 1.2.1 and 1.2.2 images, `--allow-unknown-image` is not needed.
 
-We still have not proved what the reboot-time installer does with an arbitrary image. The lowest-information-loss experiment is a same-size stock probe, not QMK:
+## QMK test firmware
 
-```sh
-python3 tools/make_stock_probe.py \
-  iKeyboard_CK-5200_V122_120.bin \
-  ck5200-v122-probe.bin
-```
+The first QMK keymap is a diagnostic one.
 
-That changes one byte in the visible version string and nothing else. Do not treat it as risk-free. We still do not have an independent recovery dump.
+Each position in the 6x6 matrix sends a different character. That makes it easy to press every physical key and build the real key map without guessing which switch is connected where.
 
-## QMK bring-up target
+The firmware source is under `firmware/`.
 
-The first QMK keymap is intentionally diagnostic. Each electrical matrix position emits a different printable key. Once the MCU/USB port boots, pressing every physical key gives the exact physical-to-electrical mapping without guessing traces.
+## What still needs to work
 
-The source is under `firmware/keyboard/`.
+QMK does not have a ready-made CH32V203 target, so this project has to provide the low-level startup, USB and hardware glue itself.
 
-## What blocks the first QMK `.bin`
+That work is in progress now.
 
-QMK itself does not currently contain a CH32V203 platform. The practical reference is `O-H-M2/qmk_port_ch582`, which already demonstrates how to run QMK core on a WCH RISC-V target with a custom platform and USB implementation. CH32V203 still needs its own startup/linker, platform hooks and USBFS glue.
+See [STATUS.md](STATUS.md) for what already works and what still needs testing.
 
-`scripts/bootstrap.sh` pins that reference port and the OpenWCH CH32V20x SDK so the remaining work is reproducible.
-
-See `STATUS.md` for the exact gap. See `docs/USB_AND_IPHONE.md` before assuming a generic QMK HID image will work when plugged back into the iPhone.
+Also read [docs/USB_AND_IPHONE.md](docs/USB_AND_IPHONE.md) before assuming that a QMK build that works on a Mac or PC will automatically work with an iPhone.

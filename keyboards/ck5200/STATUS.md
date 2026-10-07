@@ -1,42 +1,46 @@
-# Status
+# CK-5200 status
 
-## Implemented
+## Working in code
 
-- Recovered stock A1/A2/A3/A0 regular-USB firmware protocol.
-- Host flasher with response status and accepted-offset validation.
-- Target-side implementation of the recovered updater protocol.
-- Stock staging layout at `0x08008A00`, 256-byte flash pages, image bytes from `0x08008A04`.
-- Recovered 6x6 electrical matrix, PA0..PA5 inputs and PB0..PB5 driven outputs.
-- QMK custom matrix scanner and 36-position diagnostic keymap.
-- CH32V20x D6 startup/linker build target with image capped at `0x6A00`.
-- CH32V20x timer/wait/GPIO glue.
-- TinyUSB CH32V20x USBFS integration.
-- Standard HID keyboard interface.
-- Vendor updater interface on the recovered `0x02/0x82` endpoints.
-- Build, image validation, dry-run and explicit regular-USB flash scripts.
-- Static confirmation that stock A0 leads to the normal `NVIC_SystemReset` value and the normal application reset path does not perform the staging copy.
+These parts are in the repo now:
 
-## Verified locally in this analysis environment
+- USB firmware update packets for A1, A2, A3 and A0
+- host-side USB flash tool
+- checks for device status and accepted byte offsets while flashing
+- the same firmware staging area used by the stock keyboard
+- 6x6 matrix scanner using PA0..PA5 and PB0..PB5
+- a 36-key diagnostic QMK keymap
+- CH32V20x startup and linker setup
+- basic timer, wait and GPIO code
+- TinyUSB support for the CH32V20x USBFS controller
+- standard USB keyboard HID
+- the firmware-update USB interface on endpoints `0x02` and `0x82`
+- build scripts and image checks
 
-- Host packet generation against the supplied stock 1.2.2 image.
-- Python protocol tests.
-- Target update-protocol parser C unit test.
-- Same-size one-byte stock probe generation.
+## Tests that already pass
 
-## Not yet verified
+- packet generation for the stock 1.2.2 image
+- Python protocol tests
+- the C test for the firmware-update command parser
+- generation of a same-size one-byte stock test image
 
-There is no claim that `ck5200_qmk.bin` has been successfully cross-compiled in this environment. The environment does not contain the required RISC-V embedded GCC toolchain or the pinned external source trees.
+## Still missing or not proven
 
-The next validation gates on a machine with the toolchain are:
+The big one is the actual custom firmware binary.
 
-1. `scripts/bootstrap.sh`
-2. `scripts/build.sh`
-3. inspect `build/ck5200_qmk.map` and disassemble `build/ck5200_qmk.elf`
-4. confirm binary is below `0x6A00`
-5. enumerate on a sacrificial/recoverable target if available
-6. only then run `FLASH=YES scripts/flash-qmk.sh` on the CK-5200
-7. record every physical key using the diagnostic keymap
-8. replace the diagnostic layout with the real Clicks layout
-9. investigate iAP2/MFi only if iPhone does not accept standard HID
+I still need a clean successful cross-build with the RISC-V toolchain and then I need to inspect the ELF, map file and final BIN before I trust it.
 
-The largest remaining uncertainty is not the A1/A2/A3 transport. It is whether the boot-time installer accepts an arbitrary custom image and whether standard HID is accepted by the iPhone path.
+After that, the plan is:
+
+1. build `ck5200_qmk.bin`
+2. confirm it stays below the keyboard's `0x6A00` firmware-size limit
+3. inspect the generated machine code and memory map
+4. test USB enumeration
+5. test the diagnostic matrix keymap
+6. map every physical key
+7. replace the diagnostic layout with the real Clicks layout
+8. test whether the iPhone accepts the QMK USB device
+
+The biggest unknown is what happens after the keyboard reboots with a newly staged custom image.
+
+The USB transfer itself is much better understood now. The reboot and install step is the part I still do not want to guess about.
