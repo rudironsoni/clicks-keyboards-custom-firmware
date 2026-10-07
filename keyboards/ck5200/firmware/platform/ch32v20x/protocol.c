@@ -80,9 +80,10 @@ void tud_hid_set_protocol_cb(uint8_t instance, uint8_t protocol) {
     keyboard_protocol = protocol;
 }
 
-void tud_hid_set_idle_cb(uint8_t instance, uint8_t idle_rate) {
+bool tud_hid_set_idle_cb(uint8_t instance, uint8_t idle_rate) {
     (void)instance;
     keyboard_idle = idle_rate;
+    return true;
 }
 
 void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
