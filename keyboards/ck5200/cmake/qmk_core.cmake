@@ -14,6 +14,7 @@ set(QMK_CORE_SOURCES
     "${QMK_DIR}/quantum/bitwise.c"
     "${QMK_DIR}/quantum/caps_word.c"
     "${QMK_DIR}/quantum/deferred_exec.c"
+    "${QMK_DIR}/quantum/eeconfig.c"
     "${QMK_DIR}/quantum/keyboard.c"
     "${QMK_DIR}/quantum/keycode_config.c"
     "${QMK_DIR}/quantum/keymap_common.c"
@@ -28,4 +29,6 @@ set(QMK_CORE_SOURCES
     "${QMK_DIR}/tmk_core/protocol/host.c"
     "${QMK_DIR}/tmk_core/protocol/report.c"
     "${QMK_DIR}/tmk_core/protocol/usb_device_state.c"
+    "${QMK_DIR}/drivers/eeprom/eeprom_driver.c"
+    "${QMK_DIR}/drivers/eeprom/eeprom_transient.c"
 )

@@ -33,6 +33,7 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/tmk_core/protocol"
     "${QMK_DIR}/platforms"
     "${QMK_DIR}/drivers"
+    "${QMK_DIR}/drivers/eeprom"
     "${QMK_DIR}/lib"
 )
 
@@ -92,6 +93,9 @@ target_compile_definitions(ck5200_qmk.elf PRIVATE
     NO_PRINT
     NO_DEBUG
     FAST_TIMER_T_SIZE=32
+    EEPROM_ENABLE
+    EEPROM_DRIVER
+    EEPROM_TRANSIENT
 )
 
 target_compile_options(ck5200_qmk.elf PRIVATE
@@ -107,6 +111,8 @@ target_compile_options(ck5200_qmk.elf PRIVATE
     -Wall
     -Wextra
     -Wno-unused-parameter
+    -include
+    ${CMAKE_CURRENT_SOURCE_DIR}/firmware/keyboard/config.h
     -Os
 )
 
