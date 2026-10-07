@@ -6,13 +6,59 @@ This is a hobby project. The goal is to keep the hardware that already works rea
 
 The CK-5200 is the first keyboard I am working on. Other Clicks models can live next to it later.
 
-## CK-5200
+## CK-5200 quick start
 
-Everything for the CK-5200 is in [keyboards/ck5200](keyboards/ck5200/).
+On macOS:
 
-If you have that model, start there. The README in that folder has the actual setup, build, install, and restore commands.
+```sh
+brew install cmake ninja python libusb
 
-Current state: the port is still experimental. CI builds the firmware and runs the protocol tests, but a successful build does not mean I have proven every failure mode on real hardware.
+git clone https://github.com/rudironsoni/clicks-keyboards-custom-firmware.git
+cd clicks-keyboards-custom-firmware/keyboards/ck5200
+
+bash scripts/setup.sh
+bash scripts/build.sh
+```
+
+The firmware is written to:
+
+```text
+build/ck5200_qmk.bin
+```
+
+Check the keyboard without writing anything:
+
+```sh
+.venv/bin/python tools/ck5200_usb.py inspect
+bash scripts/flash-qmk.sh
+```
+
+Install the QMK build:
+
+```sh
+bash scripts/install.sh
+```
+
+Restore the official Clicks 1.2.2 firmware while the USB updater is still reachable:
+
+```sh
+bash scripts/revert-stock.sh
+```
+
+The full CK-5200 notes are in [keyboards/ck5200](keyboards/ck5200/).
+
+## Current build
+
+The CK-5200 CI build is passing.
+
+The current QMK test image is 18,940 bytes, which is below the `0x6A00` limit used by the stock updater.
+
+```text
+ck5200_qmk.bin
+SHA-256 f23d782b15b3b445d540243306cd404a4bc0ebd17f5df4084998cbf6a3053c3d
+```
+
+This only means the source compiles, the tests pass, and the image passes the static checks. It does not mean I have proven the first custom flash and recovery path on real hardware yet.
 
 ## Repo layout
 

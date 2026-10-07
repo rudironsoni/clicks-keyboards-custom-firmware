@@ -1,46 +1,66 @@
 # CK-5200 status
 
-## Working in code
+## Builds now
 
-These parts are in the repo now:
+Yes. The current source builds successfully in GitHub Actions.
 
-- USB firmware update packets for A1, A2, A3 and A0
-- host-side USB flash tool
-- checks for device status and accepted byte offsets while flashing
-- the same firmware staging area used by the stock keyboard
-- 6x6 matrix scanner using PA0..PA5 and PB0..PB5
-- a 36-key diagnostic QMK keymap
-- CH32V20x startup and linker setup
-- basic timer, wait and GPIO code
-- TinyUSB support for the CH32V20x USBFS controller
-- standard USB keyboard HID
-- the firmware-update USB interface on endpoints `0x02` and `0x82`
-- build scripts and image checks
+Current test firmware:
 
-## Tests that already pass
+```text
+file     ck5200_qmk.bin
+size     18,940 bytes
+hex      0x49fc
+limit    0x6a00
+sha256   f23d782b15b3b445d540243306cd404a4bc0ebd17f5df4084998cbf6a3053c3d
+```
 
-- packet generation for the stock 1.2.2 image
-- Python protocol tests
-- the C test for the firmware-update command parser
-- generation of a same-size one-byte stock test image
+Flash use is 69.8 percent of the limit used by the stock updater.
 
-## Still missing or not proven
+The CI job also builds the ELF, HEX, map file and a full disassembly.
 
-The big one is the actual custom firmware binary.
+## Tests that pass
 
-I still need a clean successful cross-build with the RISC-V toolchain and then I need to inspect the ELF, map file and final BIN before I trust it.
+- Python tests for the USB update packets
+- C test for the firmware-update command parser
+- full RISC-V cross-build
+- image-size check
+- reset-instruction check
+- ELF inspection in CI
 
-After that, the plan is:
+## What is in the firmware
 
-1. build `ck5200_qmk.bin`
-2. confirm it stays below the keyboard's `0x6A00` firmware-size limit
-3. inspect the generated machine code and memory map
-4. test USB enumeration
-5. test the diagnostic matrix keymap
-6. map every physical key
-7. replace the diagnostic layout with the real Clicks layout
-8. test whether the iPhone accepts the QMK USB device
+- QMK core
+- 6x6 CK-5200 matrix scanner
+- TinyUSB keyboard HID
+- the Clicks firmware-update USB interface on `0x02` and `0x82`
+- A1, A2, A3 and A0 update commands
+- the same staging address used by the stock firmware
+- a diagnostic keymap where every matrix position types a different character
 
-The biggest unknown is what happens after the keyboard reboots with a newly staged custom image.
+## What I have not proven on the physical keyboard yet
 
-The USB transfer itself is much better understood now. The reboot and install step is the part I still do not want to guess about.
+The first custom flash is still the big test.
+
+The USB transfer format is understood and the image now builds cleanly, but I have not yet proven that the code which runs after reboot accepts this custom image and installs it correctly.
+
+I also have not proven that the iPhone will accept the QMK USB device. The original firmware has extra Apple accessory handling.
+
+## Build, install and restore
+
+From `keyboards/ck5200`:
+
+```sh
+bash scripts/setup.sh
+bash scripts/build.sh
+bash scripts/install.sh
+```
+
+To go back to official Clicks firmware:
+
+```sh
+bash scripts/revert-stock.sh
+```
+
+The USB restore only works while the keyboard can still expose its firmware-update interface. If the custom firmware prevents USB from starting, recovery needs a hardware programmer/debug connection.
+
+See [README.md](README.md) for the full commands and [docs/RECOVERY.md](docs/RECOVERY.md) for the restore details.
