@@ -20,13 +20,21 @@ endforeach()
 
 include(cmake/qmk_core.cmake)
 
-file(GLOB_RECURSE QMK_HEADERS "${QMK_DIR}/*.h")
-set(QMK_INCLUDE_DIRS "${QMK_DIR}")
-foreach(h ${QMK_HEADERS})
-    get_filename_component(d "${h}" DIRECTORY)
-    list(APPEND QMK_INCLUDE_DIRS "${d}")
-endforeach()
-list(REMOVE_DUPLICATES QMK_INCLUDE_DIRS)
+set(QMK_INCLUDE_DIRS
+    "${QMK_DIR}"
+    "${QMK_DIR}/quantum"
+    "${QMK_DIR}/quantum/bootmagic"
+    "${QMK_DIR}/quantum/debounce"
+    "${QMK_DIR}/quantum/logging"
+    "${QMK_DIR}/quantum/process_keycode"
+    "${QMK_DIR}/quantum/send_string"
+    "${QMK_DIR}/tmk_core"
+    "${QMK_DIR}/tmk_core/common"
+    "${QMK_DIR}/tmk_core/protocol"
+    "${QMK_DIR}/platforms"
+    "${QMK_DIR}/drivers"
+    "${QMK_DIR}/lib"
+)
 
 set(TINYUSB_SOURCES
     "${TINYUSB_DIR}/src/tusb.c"
@@ -50,7 +58,6 @@ set(WCH_SOURCES
 set(CK5200_SOURCES
     firmware/keyboard/ck5200.c
     firmware/keyboard/matrix.c
-    firmware/keyboard/keymaps/diagnostic/keymap.c
     firmware/platform/ch32v20x/gpio.c
     firmware/platform/ch32v20x/platform.c
     firmware/platform/ch32v20x/protocol.c
@@ -63,10 +70,11 @@ set(CK5200_SOURCES
 add_executable(ck5200_qmk.elf ${QMK_CORE_SOURCES} ${TINYUSB_SOURCES} ${WCH_SOURCES} ${CK5200_SOURCES})
 
 target_include_directories(ck5200_qmk.elf PRIVATE
-    ${QMK_INCLUDE_DIRS}
     firmware/keyboard
+    firmware/keyboard/keymaps/diagnostic
     firmware/platform/ch32v20x
     firmware/usb
+    ${QMK_INCLUDE_DIRS}
     "${TINYUSB_DIR}/src"
     "${TINYUSB_DIR}/hw"
     "${WCH_SRC}/Core"
