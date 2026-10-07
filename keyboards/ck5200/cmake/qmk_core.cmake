@@ -25,7 +25,7 @@ set(QMK_CORE_SOURCES
     "${QMK_DIR}/quantum/quantum.c"
     "${QMK_DIR}/quantum/send_string/send_string.c"
     "${QMK_DIR}/quantum/sync_timer.c"
-    "${QMK_DIR}/tmk_core/common/host.c"
-    "${QMK_DIR}/tmk_core/common/report.c"
+    "${QMK_DIR}/tmk_core/protocol/host.c"
+    "${QMK_DIR}/tmk_core/protocol/report.c"
     "${QMK_DIR}/tmk_core/protocol/usb_device_state.c"
 )
