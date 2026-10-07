@@ -29,6 +29,7 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/quantum/keymap_extras"
     "${QMK_DIR}/quantum/process_keycode"
     "${QMK_DIR}/quantum/send_string"
+    "${QMK_DIR}/quantum/sequencer"
     "${QMK_DIR}/tmk_core"
     "${QMK_DIR}/tmk_core/common"
     "${QMK_DIR}/tmk_core/protocol"
