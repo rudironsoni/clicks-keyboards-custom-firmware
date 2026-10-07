@@ -1,57 +1,29 @@
 # Clicks keyboards custom firmware
 
-I really like the Clicks Keyboard Case. This is a hobby project to see how far I can take it by running custom QMK firmware on it.
+I love the Clicks Keyboard Case and wanted to see how far I could take it with QMK.
 
-The goal is simple: keep the keyboard I already enjoy using, but add the kind of features and customization that QMK makes possible.
+This is a hobby project. The goal is to keep the hardware that already works really well and add the things I miss from a programmable keyboard: custom layouts, layers, shortcuts, macros, and whatever else turns out to be useful on a tiny phone keyboard.
 
-That means things like custom keymaps, layers, shortcuts, macros, and anything else that makes sense on such a tiny physical keyboard.
+The CK-5200 is the first keyboard I am working on. Other Clicks models can live next to it later.
 
-I am starting with the CK-5200 because that is the keyboard I have in hand. The repo is intentionally organized so other Clicks keyboard models can be added later.
+## CK-5200
 
-## Keyboards
+Everything for the CK-5200 is in [keyboards/ck5200](keyboards/ck5200/).
 
-| Model | Status |
-| --- | --- |
-| [CK-5200](keyboards/ck5200/) | Work in progress |
+If you have that model, start there. The README in that folder has the actual setup, build, install, and restore commands.
 
-## What is in here
-
-The CK-5200 work currently includes:
-
-- a QMK firmware port in progress
-- the keyboard matrix mapping work
-- CH32V20x startup and USB code
-- a USB firmware update tool
-- build and validation scripts
-- notes about what I have confirmed so far
-- GitHub Actions builds
-
-The interesting part is that the stock keyboard already has a USB firmware update path. I am trying to understand that path well enough to use it for my own firmware, without having to open the keyboard every time I want to test a build.
-
-## Current state
-
-The project is still experimental.
-
-The build system and USB update path are both being worked on. A compiled file is not automatically a safe file to flash, so each step is being tested separately before I trust it on the keyboard.
-
-For the latest state, see [keyboards/ck5200/STATUS.md](keyboards/ck5200/STATUS.md).
+Current state: the port is still experimental. CI builds the firmware and runs the protocol tests, but a successful build does not mean I have proven every failure mode on real hardware.
 
 ## Repo layout
 
 ```text
 keyboards/
   ck5200/
-    firmware/
-    scripts/
-    tools/
+    firmware/   QMK + CH32V20x code
+    scripts/    setup, build, install, restore
+    tools/      USB updater and image tools
     tests/
     docs/
 ```
 
-Each keyboard model gets its own folder. Shared code can come later if another model actually needs it.
-
-## A small warning
-
-This is hobby firmware for hardware I own and am happy to experiment with.
-
-If you try any of this on your own keyboard, assume that a bad firmware image can leave the device unusable until you find another recovery method.
+Each keyboard gets its own folder until there is something genuinely useful to share between models.
