@@ -23,6 +23,10 @@ The ignored local copy is `.stock/iKeyboard_CK-5200_V122_120.bin`. This is an ap
 
 The official Clicks app is the vendor's documented update path. This project's raw USB transport has not completed even a version exchange with the iPhone firmware. It refuses stock update commands before A1. Finding the expected endpoints does not establish a working updater.
 
+The local iOS inspector has now opened both External Accessory streams on Rudi's stock CK-5200, hardware `1.2.0`, firmware `1.2.2`. This removes the earlier uncertainty about this app's ability to open the advertised session. It does not establish memory access or restoration. The [stock command audit and backup coverage table](USB_AND_IPHONE.md#stock-ios-session-and-read-command-investigation-2026-10-08) distinguish fixed field reads from full storage readback.
+
+No supported arbitrary memory-read command was identified in the audited application dispatcher. The boot/install component has not been read, so its services and checks remain unknown. Full software-only backup is blocked on evidence of a memory-read service with known region coverage. Without that evidence, the physical procedure below remains the independent readback route to investigate. Neither route is a proven restore path yet.
+
 `revert-stock.sh` without `--download-only` retains an explicit confirmation for an experimental restore through an already-running custom updater. That path is **NOT VERIFIED** and is not a rescue method for a device that does not boot.
 
 ## Custom firmware does not boot

@@ -29,6 +29,7 @@ bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 
 ## Project state
 
+- [Read-only iPhone accessory inspector](ios/ClicksInspector/README.md).
 - [Current status and all eight work packages](keyboards/ck5200/STATUS.md).
 - [Build and image checks](keyboards/ck5200/docs/BUILD_AND_FLASH.md).
 - [Stock recovery requirements](keyboards/ck5200/docs/RECOVERY.md).

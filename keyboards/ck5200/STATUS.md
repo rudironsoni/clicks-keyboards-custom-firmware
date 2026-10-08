@@ -7,7 +7,7 @@
 | Package | Result | Remaining requirement |
 | --- | --- | --- |
 | Preserve evidence | Stock V122 application, official APK, live USB descriptors and handshake inspected. Investigation saved in `docs/ck5200-investigation.md`. | Downloaded application is not a full device backup. |
-| Stock transport | APK packet format traced; live `02 03` query returned the accessory handshake. Host logs bytes and rejects stock writes before A1. | iPhone accessory/update session is not implemented. |
+| Stock transport | Exact V122 handlers traced. Rudi's physical iPhone screenshots confirm all seven fixed reads completed through the local iOS inspector. Raw Mac USB query still returns the handshake. | No memory-read service or update session is established. |
 | Independent recovery | Documented programmer readback route and region checklist in `docs/RECOVERY.md`. | Board/chip/pads, debug probe, protection state, full dump and restore test are missing. |
 | Image layout | Application linked at `0x2000`, maximum `0x6a00`, end `0x8a00`. ELF startup/vector/RAM checks and exact ELF-to-BIN comparison pass. | Stock installer acceptance has not been tested. |
 | HID and staging | Pending HID reports retry, GET_REPORT/idle/resume behavior implemented, vendor reply retries, staging failures latch. Unsupported remote wake advertisement removed. | Synchronous macros can coalesce reports; no real USB timing, power-loss, or firmware-log validation. |
@@ -44,7 +44,9 @@ The offline flash wrapper also passed with `FLASH=YES`; it still produced only a
 
 ## Device boundary
 
-Live checks read USB descriptors and sent the stock read-only version query `02 03`. No A1/A2/A3/A0, erase, flash, reset, boot-mode or protection-change command was sent. The current firmware has not been installed.
+Rudi's screenshots establish stock External Accessory discovery, an open session, and successful version and six settings/status reads at 14:39 through 14:43. Reported identity is CK-5200, hardware `1.2.0`, firmware `1.2.2`. This is a stock-app experiment, not custom-firmware acceptance. The exact returned payloads, command audit, and zero-byte firmware-backup coverage are recorded in [USB_AND_IPHONE.md](docs/USB_AND_IPHONE.md#stock-ios-session-and-read-command-investigation-2026-10-08).
+
+Live checks read USB descriptors, sent the raw USB version query `02 03`, and completed the seven fixed reads through the iOS app. No A1/A2/A3/A0, erase, flash, reset, boot-mode or protection-change command was sent during this investigation. The custom firmware has not been installed.
 
 Skipped checks: full firmware extraction, restore, boot acceptance, matrix mapping, backlight, charging, sleep/wake, phone enumeration, layers and companion-app operation. These require missing physical access, a verified recovery path, and separate flash consent. **I cannot verify iOS compatibility.**
 
