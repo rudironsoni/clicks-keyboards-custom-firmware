@@ -1,9 +1,6 @@
 #include <string.h>
 #include "tusb.h"
-#include "qmk_config.h"
-
-#define USB_VID 0x352E
-#define USB_PID 0x2306
+#include "config.h"
 
 #define EPNUM_HID_OUT    0x01
 #define EPNUM_HID_IN     0x81
@@ -33,9 +30,9 @@ static tusb_desc_device_t const device_descriptor = {
     .bDeviceSubClass = 0x00,
     .bDeviceProtocol = 0x00,
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
-    .idVendor = USB_VID,
-    .idProduct = USB_PID,
-    .bcdDevice = 0x9001,
+    .idVendor = VENDOR_ID,
+    .idProduct = PRODUCT_ID,
+    .bcdDevice = DEVICE_VER,
     .iManufacturer = STRID_MANUFACTURER,
     .iProduct = STRID_PRODUCT,
     .iSerialNumber = STRID_SERIAL,
@@ -47,7 +44,7 @@ static uint8_t const hid_report_descriptor[] = {
 };
 
 static uint8_t const configuration_descriptor[] = {
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
 
     9, TUSB_DESC_INTERFACE, ITF_NUM_UPDATE, 0, 2,
        TUSB_CLASS_VENDOR_SPECIFIC, 0xF0, 0x00, 0,

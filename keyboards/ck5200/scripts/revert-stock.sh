@@ -39,9 +39,16 @@ if actual != expected:
 print("Stock firmware SHA-256 OK")
 PY
 
+if [[ "${1:-}" == "--download-only" ]]; then
+  echo "Verified stock application: $STOCK_IMAGE"
+  echo "No USB access. This file is not a full device backup."
+  exit 0
+fi
+
 echo
-echo "This will restore the official CK-5200 1.2.2 firmware."
-echo "It only works while the USB updater interface is still reachable."
+echo "Experimental stock application transfer, not a verified recovery procedure."
+echo "The stock iPhone update session is unsupported by this tool."
+echo "Only an already-running custom updater can accept the transfer below."
 echo
 read -r -p "Type STOCK-CK-5200 to continue: " answer
 

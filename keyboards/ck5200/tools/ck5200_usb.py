@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""CK-5200 stock updater protocol client.
+"""CK-5200 inspection and experimental update protocol tools.
 
-The stock firmware exposes a vendor bulk interface with EP 0x02 OUT and
-0x82 IN. This tool reproduces the A1/A2/A3/A0 protocol recovered from the
-Clicks Android updater, while validating the device status byte that the
-Android app appears not to validate.
-
-Nothing is written by `inspect` or `packets`. `flash` is the only command
-that writes to the device and it requires an explicit confirmation token.
+Endpoint presence does not prove stock update-session compatibility.
+`inspect` reads descriptors without configuring or claiming an interface.
+`packets` does not open USB. See docs/RECOVERY.md before any device write.
 """
 from __future__ import annotations
 
@@ -71,7 +67,9 @@ def iter_data_packets(image: bytes) -> Iterable[tuple[int, bytes, bytes]]:
 def parse_response(response: Sequence[int], expected_cmd: int) -> int:
     data = bytes(response)
     if len(data) < 8:
-        raise ProtocolError(f"short response: expected >=8 bytes, got {len(data)}")
+        raise ProtocolError(
+            f"short response: expected >=8 bytes, got {len(data)}, response={data.hex(' ')}"
+        )
     if data[0] != 0x08 or data[1] != 0x02:
         raise ProtocolError(f"bad response framing: {data[:8].hex(' ')}")
     if data[2] != expected_cmd:
@@ -99,7 +97,7 @@ def inspect_image(path: pathlib.Path) -> tuple[ImageInfo, bytes]:
     return ImageInfo(path, len(image), digest, stock), image
 
 class PyUsbTransport:
-    def __init__(self, timeout_ms: int = USB_TIMEOUT_MS):
+    def __init__(self, timeout_ms: int = USB_TIMEOUT_MS, *, claim: bool = True):
         try:
             import usb.core  # type: ignore
             import usb.util  # type: ignore
@@ -109,20 +107,17 @@ class PyUsbTransport:
         self.usb_core = usb.core
         self.usb_util = usb.util
         self.timeout_ms = timeout_ms
+        self.claimed = False
         self.device = usb.core.find(idVendor=VID, idProduct=PID)
         if self.device is None:
             raise RuntimeError(f"CK-5200 USB device {VID:04x}:{PID:04x} not found")
-
-        try:
-            self.device.set_configuration()
-        except usb.core.USBError:
-            pass
 
         config = self.device.get_active_configuration()
         selected = None
         for interface in config:
             endpoints = {int(ep.bEndpointAddress): ep for ep in interface}
-            if EP_OUT in endpoints and EP_IN in endpoints:
+            if (EP_OUT in endpoints and EP_IN in endpoints
+                    and all((int(endpoints[e].bmAttributes) & 3) == 2 for e in (EP_OUT, EP_IN))):
                 selected = (interface, endpoints[EP_OUT], endpoints[EP_IN])
                 break
         if selected is None:
@@ -132,24 +127,37 @@ class PyUsbTransport:
 
         self.interface, self.ep_out, self.ep_in = selected
         self.interface_number = int(self.interface.bInterfaceNumber)
-        try:
-            if self.device.is_kernel_driver_active(self.interface_number):
-                self.device.detach_kernel_driver(self.interface_number)
-        except (NotImplementedError, self.usb_core.USBError):
-            pass
-        self.usb_util.claim_interface(self.device, self.interface_number)
+        if claim:
+            try:
+                self.usb_util.claim_interface(self.device, self.interface_number)
+                self.claimed = True
+            except Exception:
+                self.usb_util.dispose_resources(self.device)
+                raise
 
     def transact(self, request: bytes, expect_response: bool = True) -> bytes:
+        if not self.claimed:
+            raise ProtocolError("USB writes require an explicitly claimed update session")
+        print(f"USB OUT 0x{EP_OUT:02x}: {request.hex(' ')}", file=sys.stderr)
         written = self.ep_out.write(request, timeout=self.timeout_ms)
         if written != len(request):
             raise ProtocolError(f"short USB write: wrote {written}/{len(request)} bytes")
         if not expect_response:
             return b""
-        return bytes(self.ep_in.read(64, timeout=self.timeout_ms))
+        response = bytes(self.ep_in.read(64, timeout=self.timeout_ms))
+        print(f"USB IN 0x{EP_IN:02x}: {response.hex(' ')}", file=sys.stderr)
+        if response == bytes.fromhex("ff 55 02 00 ee 10"):
+            raise ProtocolError(
+                "received Apple accessory handshake ff 55 02 00 ee 10, not an update reply; "
+                "stock session setup is unverified, stopping without retry"
+            )
+        return response
 
     def close(self) -> None:
         try:
-            self.usb_util.release_interface(self.device, self.interface_number)
+            if self.claimed:
+                self.usb_util.release_interface(self.device, self.interface_number)
+                self.claimed = False
         finally:
             self.usb_util.dispose_resources(self.device)
 
@@ -210,8 +218,8 @@ def cmd_packets(args: argparse.Namespace) -> int:
     print(json.dumps(output, indent=2))
     return 0
 
-def cmd_inspect(_: argparse.Namespace) -> int:
-    t = PyUsbTransport()
+def cmd_inspect(args: argparse.Namespace) -> int:
+    t = PyUsbTransport(claim=args.query_version)
     try:
         d = t.device
         print(f"device: {VID:04x}:{PID:04x}")
@@ -219,14 +227,18 @@ def cmd_inspect(_: argparse.Namespace) -> int:
         print(f"bulk OUT: 0x{int(t.ep_out.bEndpointAddress):02x}")
         print(f"bulk IN:  0x{int(t.ep_in.bEndpointAddress):02x}")
         print(f"bcdDevice: 0x{int(d.bcdDevice):04x}")
+        print("Descriptor read complete. Update session and recovery are not verified.")
+        if args.query_version:
+            version = parse_response(t.transact(b"\x02\x03"), 0x03)
+            print(f"version payload: 0x{version:08x}")
     finally:
         t.close()
     return 0
 
 def cmd_flash(args: argparse.Namespace) -> int:
     info, image = inspect_image(pathlib.Path(args.image))
-    if info.size > MAX_IMAGE:
-        raise SystemExit(f"refusing image larger than stock limit 0x{MAX_IMAGE:x}: 0x{info.size:x}")
+    if not 0 < info.size <= MAX_IMAGE:
+        raise SystemExit(f"image size must be 1..0x{MAX_IMAGE:x}, got 0x{info.size:x}")
     if args.confirm != "CK-5200":
         raise SystemExit("refusing write: pass --confirm CK-5200")
     if info.stock_version is None and not args.allow_unknown_image:
@@ -240,11 +252,18 @@ def cmd_flash(args: argparse.Namespace) -> int:
     print(f"sha256: {info.sha256}")
     print(f"class: {kind}")
     if info.stock_version is None:
+        from validate_image import validate_binary
+        validate_binary(image)
         print("WARNING: post-reset installer acceptance of arbitrary images is still unverified.", file=sys.stderr)
 
     t = PyUsbTransport(timeout_ms=args.timeout)
     updater = Updater(t)
     try:
+        if int(t.device.bcdDevice) != 0x9001:
+            raise ProtocolError(
+                "stock iPhone USB update session is not implemented; "
+                "refusing A1/A2/A3/A0. See docs/USB_AND_IPHONE.md"
+            )
         maximum = updater.begin(info.size)
         print(f"A1 accepted, device maximum 0x{maximum:x}")
 
@@ -273,7 +292,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Clicks CK-5200 stock USB updater protocol client")
     sub = p.add_subparsers(dest="command", required=True)
 
-    inspect = sub.add_parser("inspect", help="find the CK-5200 and print updater endpoints; no writes")
+    inspect = sub.add_parser("inspect", help="read CK-5200 descriptors without changing USB configuration")
+    inspect.add_argument("--query-version", action="store_true",
+                         help="also send the stock read-only 02 03 query; never stage or reboot")
     inspect.set_defaults(func=cmd_inspect)
 
     packets = sub.add_parser("packets", help="show the exact packet plan for an image; no USB access")

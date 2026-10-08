@@ -16,15 +16,9 @@ if [[ ! -f "$IMAGE" ]]; then
   exit 1
 fi
 
-"$PYTHON" "$ROOT/tools/validate_image.py" "$IMAGE"
+"$PYTHON" "$ROOT/tools/validate_image.py" "$IMAGE" --elf "${IMAGE%.bin}.elf"
 "$PYTHON" "$ROOT/tools/ck5200_usb.py" packets "$IMAGE"
 
-if [[ "${FLASH:-NO}" != "YES" ]]; then
-  echo
-  echo "Dry run only. Nothing was written to the keyboard."
-  echo "To install this image, run:"
-  echo "  bash scripts/install.sh"
-  exit 0
-fi
-
-"$PYTHON" "$ROOT/tools/ck5200_usb.py" flash "$IMAGE"   --confirm CK-5200   --allow-unknown-image
+echo
+echo "Dry run only. This command never opens USB, including when FLASH=YES."
+echo "Custom installation remains blocked until stock transport and recovery are verified."

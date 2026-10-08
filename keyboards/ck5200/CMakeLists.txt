@@ -72,6 +72,9 @@ set(CK5200_SOURCES
 
 add_executable(ck5200_qmk.elf ${QMK_CORE_SOURCES} ${TINYUSB_SOURCES} ${WCH_SOURCES} ${CK5200_SOURCES})
 
+set_property(TARGET ck5200_qmk.elf APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/firmware/platform/ch32v20x/linker.ld")
+
 target_include_directories(ck5200_qmk.elf PRIVATE
     firmware/keyboard
     firmware/keyboard/keymaps/diagnostic
@@ -135,6 +138,7 @@ add_custom_command(TARGET ck5200_qmk.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:ck5200_qmk.elf> ${CMAKE_CURRENT_BINARY_DIR}/ck5200_qmk.hex
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:ck5200_qmk.elf>
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/tools
-            python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_image.py ${CMAKE_CURRENT_BINARY_DIR}/ck5200_qmk.bin
+            python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_image.py
+            ${CMAKE_CURRENT_BINARY_DIR}/ck5200_qmk.bin --elf $<TARGET_FILE:ck5200_qmk.elf>
     VERBATIM
 )

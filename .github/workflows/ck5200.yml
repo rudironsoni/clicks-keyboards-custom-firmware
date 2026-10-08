@@ -58,7 +58,7 @@ jobs:
           riscv-none-elf-size build/ck5200_qmk.elf
           riscv-none-elf-objdump -h build/ck5200_qmk.elf
           riscv-none-elf-objdump -d build/ck5200_qmk.elf > build/ck5200_qmk.disassembly.txt
-          .venv/bin/python tools/validate_image.py build/ck5200_qmk.bin
+          .venv/bin/python tools/validate_image.py build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
           sha256sum build/ck5200_qmk.bin build/ck5200_qmk.elf
 
       - uses: actions/upload-artifact@v4

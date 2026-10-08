@@ -1,14 +1,16 @@
-/* CK-5200 application image. The recovered stock updater rejects images > 0x6A00. */
+/* The CK-5200 application starts at 0x2000 and is limited to 0x6A00 bytes. */
 ENTRY(_start)
 
+__flash_base = 0x2000;
 __flash_size = 0x6A00;
+__flash_limit = __flash_base + __flash_size;
 __ram_size = 20K;
 __stack_size = 2048;
 PROVIDE(_stack_size = __stack_size);
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 
 MEMORY {
-    FLASH (rx)  : ORIGIN = 0x00000000, LENGTH = __flash_size
+    FLASH (rx)  : ORIGIN = __flash_base, LENGTH = __flash_size
     RAM   (xrw) : ORIGIN = 0x20000000, LENGTH = __ram_size
 }
 
@@ -134,5 +136,5 @@ SECTIONS {
     PROVIDE(_eusrstack = ORIGIN(RAM) + LENGTH(RAM));
 
     ASSERT(LOADADDR(.data) + SIZEOF(.data) <= ORIGIN(FLASH) + LENGTH(FLASH),
-           "CK-5200 image exceeds recovered 0x6A00 updater limit")
+           "CK-5200 image exceeds application limit 0x6A00")
 }
