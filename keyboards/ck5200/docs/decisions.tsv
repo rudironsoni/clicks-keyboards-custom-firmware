@@ -1,0 +1,7 @@
+ts	phase	decision	why	evidence	result
+2026-10-08T09:00:58Z	frame	Repair offline faults; keep iOS compatibility as acceptance	User approved all eight packages, but flash still needs explicit consent	/tmp/ck5200-investigation.md	hardware acceptance open
+2026-10-08T09:03:07Z	inspect	Remove SET_CONFIGURATION and driver detach from inspect	Descriptor inspection must not change USB mode	tools/ck5200_usb.py	live descriptor read passed; stock reports 0x0122
+2026-10-08T09:11:16Z	transport	Reject stock writes and record raw handshake traffic	Official APK confirms raw Android packets; live iPhone case still fails a read-only version query	docs/USB_AND_IPHONE.md	stock transport not verified; no update commands sent
+2026-10-08T09:15:43Z	review	Shrink firmware report buffering before verification	The first patch added two queues but still dropped reports at capacity	firmware/platform/ch32v20x/protocol.c	revised implementation in progress
+2026-10-08T09:31:25Z	recovery	Use existing programmer readback, subject to physical access	Stock dispatcher has no evidenced arbitrary-memory read; vendor application omits boot and device data	docs/RECOVERY.md	full dump blocked on chip, pads, probe and protection state
+2026-10-08T09:31:25Z	verify	Retain corrected 0x2000 base and 0x6a00 size	Review caught size-versus-end confusion; final ELF and binary match	STATUS.md	build, five Python tests, C parser and focused sanitized harnesses passed; hardware unverified

@@ -1,79 +1,39 @@
 # Clicks keyboards custom firmware
 
-[![CK-5200 build](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/workflows/ck5200.yml/badge.svg)](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/workflows/ck5200.yml)
+Experimental QMK port for the Clicks Keyboard Case for **iPhone 15 Pro Max**, identified here as CK-5200. The goal is a usable iOS keyboard with custom keys and layers.
 
-I love the Clicks Keyboard Case and wanted to see how far I could take it with QMK.
+**Do not flash this build yet.** Stock USB session setup, independent recovery, the physical key map, and iPhone operation remain unverified. The current keymap is diagnostic, not a normal typing layout. A passing build does not establish compatibility.
 
-This is a hobby project. The goal is to keep the hardware that already works really well and add the things I miss from a programmable keyboard: custom layouts, layers, shortcuts, macros, and whatever else turns out to be useful on a tiny phone keyboard.
+## Safe local work
 
-The CK-5200 is the first keyboard I am working on. Other Clicks models can live next to it later.
-
-## CK-5200 quick start
-
-On macOS:
+On macOS, install the build dependencies:
 
 ```sh
 brew install cmake ninja python libusb
-
-git clone https://github.com/rudironsoni/clicks-keyboards-custom-firmware.git
-cd clicks-keyboards-custom-firmware/keyboards/ck5200
-
-bash scripts/setup.sh
-bash scripts/build.sh
 ```
 
-The firmware is written to:
-
-```text
-build/ck5200_qmk.bin
-```
-
-Check the keyboard without writing anything:
+From this repository root:
 
 ```sh
-.venv/bin/python tools/ck5200_usb.py inspect
-bash scripts/flash-qmk.sh
+bash keyboards/ck5200/scripts/setup.sh
+bash keyboards/ck5200/scripts/test.sh
+bash keyboards/ck5200/scripts/build.sh
+keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py inspect
+bash keyboards/ck5200/scripts/flash-qmk.sh
+bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 ```
 
-Install the QMK build:
+`inspect` reads descriptors without changing USB configuration. `flash-qmk.sh` is an offline image check and packet plan; it never writes, including when `FLASH=YES` is set. `revert-stock.sh --download-only` preserves the verified stock application without USB access.
 
-```sh
-bash scripts/install.sh
-```
+`install.sh` currently refuses installation. The direct Python updater also refuses stock-device transfers before any A1/A2/A3/A0 commands because that session is not implemented.
 
-Restore the official Clicks 1.2.2 firmware while the USB updater is still reachable:
+## Project state
 
-```sh
-bash scripts/revert-stock.sh
-```
+- [Current status and all eight work packages](keyboards/ck5200/STATUS.md).
+- [Build and image checks](keyboards/ck5200/docs/BUILD_AND_FLASH.md).
+- [Stock recovery requirements](keyboards/ck5200/docs/RECOVERY.md).
+- [iPhone acceptance and USB evidence](keyboards/ck5200/docs/USB_AND_IPHONE.md).
+- [Hardware evidence and open questions](keyboards/ck5200/docs/HARDWARE.md).
+- [Pre-repair investigation](keyboards/ck5200/docs/ck5200-investigation.md).
 
-The full CK-5200 notes are in [keyboards/ck5200](keyboards/ck5200/).
-
-## Current build
-
-The CK-5200 CI build is passing.
-
-The current QMK test image is 18,940 bytes, which is below the `0x6A00` limit used by the stock updater.
-
-```text
-ck5200_qmk.bin
-SHA-256 f23d782b15b3b445d540243306cd404a4bc0ebd17f5df4084998cbf6a3053c3d
-```
-
-The latest build is also available from the `ck5200-firmware` artifact on the [CK-5200 Actions page](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/workflows/ck5200.yml).
-
-This only means the source compiles, the tests pass, and the image passes the static checks. It does not mean I have proven the first custom flash and recovery path on real hardware yet.
-
-## Repo layout
-
-```text
-keyboards/
-  ck5200/
-    firmware/   QMK + CH32V20x code
-    scripts/    setup, build, install, restore
-    tools/      USB updater and image tools
-    tests/
-    docs/
-```
-
-Each keyboard gets its own folder until there is something genuinely useful to share between models.
+The source lives under `keyboards/ck5200`. It combines pinned QMK core files, a custom WCH platform, and TinyUSB through CMake. Local source dependencies, toolchains, stock downloads, and build output are ignored by Git.

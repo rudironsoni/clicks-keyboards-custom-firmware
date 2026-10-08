@@ -1,66 +1,51 @@
-# CK-5200 status
+# CK-5200 status, 2026-10-08
 
-## Builds now
+**Target: Clicks for iPhone 15 Pro Max. Custom firmware is not ready to flash.**
 
-Yes. The current source builds successfully in GitHub Actions.
+## Work package results
 
-Current test firmware:
+| Package | Result | Remaining requirement |
+| --- | --- | --- |
+| Preserve evidence | Stock V122 application, official APK, live USB descriptors and handshake inspected. Investigation saved in `docs/ck5200-investigation.md`. | Downloaded application is not a full device backup. |
+| Stock transport | APK packet format traced; live `02 03` query returned the accessory handshake. Host logs bytes and rejects stock writes before A1. | iPhone accessory/update session is not implemented. |
+| Independent recovery | Documented programmer readback route and region checklist in `docs/RECOVERY.md`. | Board/chip/pads, debug probe, protection state, full dump and restore test are missing. |
+| Image layout | Application linked at `0x2000`, maximum `0x6a00`, end `0x8a00`. ELF startup/vector/RAM checks and exact ELF-to-BIN comparison pass. | Stock installer acceptance has not been tested. |
+| HID and staging | Pending HID reports retry, GET_REPORT/idle/resume behavior implemented, vendor reply retries, staging failures latch. Unsupported remote wake advertisement removed. | Synchronous macros can coalesce reports; no real USB timing, power-loss, or firmware-log validation. |
+| Configuration and scripts | Removed duplicate QMK config and unused keymap rules. Flash wrapper is offline-only; install refuses writes; stock download-only path works. | Experimental custom-updater restore remains unverified. |
+| Verification | Existing tests, firmware build, full image checks, and focused host C harnesses pass locally. | No new CI run or physical-device firmware test. |
+| Hardware and iOS | iPhone 15 Pro Max acceptance checklist recorded. | Physical key map, usable layers, backlight, Apple accessory support and iPhone runtime checks remain open. |
+
+## Local verification
+
+Commands completed with exit code 0:
+
+```sh
+bash keyboards/ck5200/scripts/test.sh
+bash keyboards/ck5200/scripts/build.sh
+```
+
+Tests: **5 Python tests passed**, C protocol test printed `ok`.
+
+Final local build:
 
 ```text
-file     ck5200_qmk.bin
-size     18,940 bytes
-hex      0x49fc
-limit    0x6a00
-sha256   f23d782b15b3b445d540243306cd404a4bc0ebd17f5df4084998cbf6a3053c3d
+file     build/ck5200_qmk.bin
+size     19640 bytes (0x4cb8)
+maximum  27136 bytes (0x6a00)
+base     0x2000
+sha256   c8c11dd35f06f38ec88b3b1f1c6c7e0acef6fcfd14dbb991e26356beea5b065c
 ```
 
-Flash use is 69.8 percent of the limit used by the stock updater.
+The build passed full ELF/BIN validation. It still emits dependency warnings for QMK inline declarations, deprecated TinyUSB `tud_init`, and newlib syscall stubs; it is not warning-free. The prior zero-based binary was rejected by the new validator. These checks establish the offline image layout, not hardware execution.
 
-The CI job also builds the ELF, HEX, map file and a full disassembly.
+Temporary ASan/UBSan C harnesses compiled the production `protocol.c`, update parser, and staging writer. They passed ordered key transitions, failed-release retry, GET_REPORT, idle, resume, busy vendor-response retry, and rejection after a simulated page-write failure. They stub the USB and flash drivers; they do not prove the actual drivers or flash hardware. Harness sources remain in `/tmp/ck5200-fw-io-harness/`, not the repository test suite.
 
-## Tests that pass
+The offline flash wrapper also passed with `FLASH=YES`; it still produced only a packet plan. The stock download-only path verified the V122 hash without opening USB. A mocked stock-device flash attempt was rejected before any transaction. Shell syntax, Python compilation and `git diff --check` passed during this work.
 
-- Python tests for the USB update packets
-- C test for the firmware-update command parser
-- full RISC-V cross-build
-- image-size check
-- reset-instruction check
-- ELF inspection in CI
+## Device boundary
 
-## What is in the firmware
+Live checks read USB descriptors and sent the stock read-only version query `02 03`. No A1/A2/A3/A0, erase, flash, reset, boot-mode or protection-change command was sent. The current firmware has not been installed.
 
-- QMK core
-- 6x6 CK-5200 matrix scanner
-- TinyUSB keyboard HID
-- the Clicks firmware-update USB interface on `0x02` and `0x82`
-- A1, A2, A3 and A0 update commands
-- the same staging address used by the stock firmware
-- a diagnostic keymap where every matrix position types a different character
+Skipped checks: full firmware extraction, restore, boot acceptance, matrix mapping, backlight, charging, sleep/wake, phone enumeration, layers and companion-app operation. These require missing physical access, a verified recovery path, and separate flash consent. **I cannot verify iOS compatibility.**
 
-## What I have not proven on the physical keyboard yet
-
-The first custom flash is still the big test.
-
-The USB transfer format is understood and the image now builds cleanly, but I have not yet proven that the code which runs after reboot accepts this custom image and installs it correctly.
-
-I also have not proven that the iPhone will accept the QMK USB device. The original firmware has extra Apple accessory handling.
-
-## Build, install and restore
-
-From `keyboards/ck5200`:
-
-```sh
-bash scripts/setup.sh
-bash scripts/build.sh
-bash scripts/install.sh
-```
-
-To go back to official Clicks firmware:
-
-```sh
-bash scripts/revert-stock.sh
-```
-
-The USB restore only works while the keyboard can still expose its firmware-update interface. If the custom firmware prevents USB from starting, recovery needs a hardware programmer/debug connection.
-
-See [README.md](README.md) for the full commands and [docs/RECOVERY.md](docs/RECOVERY.md) for the restore details.
+Use [the recovery investigation](docs/RECOVERY.md) to establish full readback first. Use [the iPhone checklist](docs/USB_AND_IPHONE.md) for final acceptance. A successful Mac build or Android protocol trace does not satisfy that checklist.

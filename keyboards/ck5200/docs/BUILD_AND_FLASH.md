@@ -1,114 +1,52 @@
-# Build and flash the CK-5200 firmware
+# Build and inspect the CK-5200 image
 
-This is the current QMK test build for the CK-5200.
+Custom installation is blocked until the stock transport and independent recovery are verified. These instructions build and inspect files; they do not establish iOS compatibility.
 
-I am keeping the first version intentionally small so there are fewer things to debug at once.
+## Existing tools
 
-It currently uses:
-
-- QMK core pinned to a known commit
-- CH32V20x D6 startup code
-- 144 MHz internal clock
-- TinyUSB on the CH32V20x USBFS controller
-- standard USB keyboard HID
-- the same USB firmware-update endpoints used by the stock keyboard
-- a 6x6 matrix scanner on PA0..PA5 and PB0..PB5
-- a hard firmware-size limit of `0x6A00`
-
-The first keymap is only for testing the matrix.
-
-## Build it
-
-You need:
-
-- CMake
-- Ninja
-- Python 3
-- a RISC-V embedded GCC toolchain
-
-The compiler needs to be available as either:
-
-```text
-riscv-none-elf-gcc
-```
-
-or:
-
-```text
-riscv-none-embed-gcc
-```
-
-Then run:
+macOS needs CMake, Ninja, Python, and libusb. The setup script downloads a checksum-verified RISC-V toolchain and pins QMK, TinyUSB, and the WCH SDK. Run from the repository root:
 
 ```sh
-scripts/bootstrap.sh
-python3 -m pip install -r tools/requirements.txt
-scripts/build.sh
+bash keyboards/ck5200/scripts/setup.sh
+bash keyboards/ck5200/scripts/test.sh
+bash keyboards/ck5200/scripts/build.sh
 ```
 
-A successful build should produce:
+Source dependencies are in `keyboards/ck5200/external`. They are nested Git checkouts managed by `scripts/bootstrap.sh`, not tracked submodules. Do not modify or repin them as a build workaround. The build output is in `keyboards/ck5200/build`, not in the source tree.
 
-```text
-build/ck5200_qmk.elf
-build/ck5200_qmk.bin
-build/ck5200_qmk.hex
-build/ck5200_qmk.map
-```
+## Image contract
 
-The build stops if the firmware is larger than `0x6A00`.
+- Application start: `0x00002000`.
+- Maximum application size: `0x6A00` bytes.
+- Application end must not cross `0x00008A00`, the start of staging through the flash alias.
+- Configured RAM: `0x20000000..0x20005000`, including a 2048-byte reserved stack.
+- Reset and interrupt targets must be within executable application code.
 
-The validator also checks that the binary starts with the expected RISC-V jump instruction.
-
-## Check the flash plan without writing anything
-
-Run:
+The binary validator checks reset/vector information and image extent. Its `--elf` option also checks the linked artifact. Use both for custom builds:
 
 ```sh
-scripts/flash-qmk.sh
+keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/validate_image.py \
+  keyboards/ck5200/build/ck5200_qmk.bin \
+  --elf keyboards/ck5200/build/ck5200_qmk.elf
+bash keyboards/ck5200/scripts/flash-qmk.sh
 ```
 
-This validates the image and prints the USB packet plan.
+The old zero-based image must fail validation. The stock application can be checked without an ELF, but that is a narrower check and is labeled as such.
 
-It does not flash the keyboard.
-
-## Flash over the normal USB connection
-
-Run:
+## USB reads
 
 ```sh
-FLASH=YES scripts/flash-qmk.sh
+keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py inspect
 ```
 
-The script will:
+This does not send SET_CONFIGURATION, detach drivers, or claim an interface. It establishes descriptor presence only.
 
-1. find the CK-5200 USB device
-2. find the firmware-update endpoints
-3. tell the keyboard how large the image is
-4. send the image in 32-byte chunks
-5. check the keyboard's response after every chunk
-6. finish the transfer
-7. ask the keyboard to reboot
+The optional `inspect --query-version` command sends `02 03`, a read-only stock version request. It currently fails against the connected iPhone firmware with `ff 55 02 00 ee 10`. The tool records the bytes and stops. See [USB_AND_IPHONE.md](USB_AND_IPHONE.md).
 
-There is no guaranteed recovery path after the reboot.
+## Installation and restoration
 
-That is why I want the generated ELF, map file and BIN checked before using this on the keyboard.
+`install.sh` refuses installation. `flash-qmk.sh` remains offline even if `FLASH=YES` is set. The direct Python updater refuses stock-device update commands because the stock iPhone session is unsupported. Do not remove this check merely because the image builds.
 
-## Why the custom firmware keeps the update interface
+The existing Python update implementation remains available for the experimental custom updater only. Its status, command, offset, and commit-size checks remain mandatory. Neither a descriptor version nor an explicit confirmation proves that recovery works.
 
-I want custom builds to remain updateable through the normal USB connection.
-
-So the QMK firmware includes the same A1, A2, A3 and A0 command flow used by the stock firmware, along with the same staging area in flash.
-
-[INFERENCE] The official firmware also uses a normal system reset after staging an update. That suggests the final copy into the active firmware area happens outside the main application code.
-
-That is encouraging, but it is still not something I consider proven until a custom image has gone through the full process on the actual keyboard.
-
-## iPhone support
-
-A QMK build working on a Mac or PC does not automatically mean it will work through the Clicks case on an iPhone.
-
-The stock firmware contains Apple-specific accessory handling that plain QMK does not provide.
-
-The first goal is therefore much smaller: boot the chip, enumerate over USB, scan keys correctly and send normal keyboard reports.
-
-After that works, I can test what the iPhone accepts.
+Use `scripts/revert-stock.sh --download-only` to preserve the stock application. Actual transfer, power-loss behavior, boot acceptance, and stock restoration remain unverified. See [RECOVERY.md](RECOVERY.md).

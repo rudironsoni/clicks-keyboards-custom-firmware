@@ -1,140 +1,35 @@
-# CK-5200
+# CK-5200 for iPhone 15 Pro Max
 
-This is my QMK port for the Clicks CK-5200 Keyboard Case.
+This is an experimental custom QMK port. Its required end result is a working keyboard on iOS, with custom keys and layers. Desktop enumeration alone is not acceptance.
 
-The keyboard is already awesome. I am doing this because I want more control over the keys without replacing the hardware.
+**Custom flashing is blocked.** The stock USB session, independent recovery, physical key map, and iOS behavior remain unverified. See [STATUS.md](STATUS.md) for each work package.
 
-## Before you start
+## Build and inspect
 
-You need a CK-5200 connected over USB.
-
-On macOS:
+From the repository root:
 
 ```sh
-brew install cmake ninja python libusb
+bash keyboards/ck5200/scripts/setup.sh
+bash keyboards/ck5200/scripts/test.sh
+bash keyboards/ck5200/scripts/build.sh
+keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py inspect
+bash keyboards/ck5200/scripts/flash-qmk.sh
 ```
 
-On Ubuntu or Debian:
+The result is `keyboards/ck5200/build/ck5200_qmk.bin`, plus ELF, HEX, and map files. The application links at `0x00002000` to match the verified stock image. The build checks linked addresses, RAM bounds, vectors, and image size.
+
+The diagnostic keymap maps the proposed electrical matrix positions to A-Z and 1-0. No normal Clicks layout is claimed until the physical mapping is verified.
+
+`flash-qmk.sh` never opens USB. `inspect` reads descriptors without configuring or claiming the device. An optional `inspect --query-version` sends the stock read-only command `02 03`; the connected iPhone case currently returns an accessory handshake instead of a version reply.
+
+## Stock application
 
 ```sh
-sudo apt-get update
-sudo apt-get install -y cmake ninja-build python3 python3-venv python3-pip libusb-1.0-0
+bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 ```
 
-Clone the repo and enter this folder:
+This preserves and verifies the official stock application. It is not a full flash backup and does not prove recovery. Read [RECOVERY.md](docs/RECOVERY.md) before any hardware write.
 
-```sh
-git clone https://github.com/rudironsoni/clicks-keyboards-custom-firmware.git
-cd clicks-keyboards-custom-firmware/keyboards/ck5200
-```
+## Required behavior
 
-## 1. Set up the build
-
-Run:
-
-```sh
-bash scripts/setup.sh
-```
-
-That downloads the pinned RISC-V compiler, QMK, TinyUSB and the CH32V20x SDK. It also creates a Python virtual environment for the USB tools.
-
-The first run downloads a large compiler archive, so it takes a while.
-
-## 2. Build the firmware
-
-Run:
-
-```sh
-bash scripts/build.sh
-```
-
-The firmware will be here:
-
-```text
-build/ck5200_qmk.bin
-```
-
-The build also creates:
-
-```text
-build/ck5200_qmk.elf
-build/ck5200_qmk.hex
-build/ck5200_qmk.map
-```
-
-Run the tests separately with:
-
-```sh
-bash scripts/test.sh
-```
-
-## 3. Check that the keyboard is visible
-
-Before flashing anything:
-
-```sh
-.venv/bin/python tools/ck5200_usb.py inspect
-```
-
-You should see the CK-5200 device and the firmware-update USB endpoints.
-
-This command does not write to the keyboard.
-
-## 4. See exactly what would be sent
-
-Run:
-
-```sh
-bash scripts/flash-qmk.sh
-```
-
-That validates the QMK image and prints the firmware-update packet plan.
-
-It still does not write anything.
-
-## 5. Install the QMK firmware
-
-When you are ready:
-
-```sh
-bash scripts/install.sh
-```
-
-The script asks you to type `CK-5200` before it sends anything.
-
-It then uploads `build/ck5200_qmk.bin` through the normal USB connection and reboots the keyboard.
-
-## Restore the original Clicks firmware
-
-If the keyboard still exposes the firmware-update USB interface, restoring stock 1.2.2 is:
-
-```sh
-bash scripts/revert-stock.sh
-```
-
-The script downloads the official CK-5200 1.2.2 image, verifies its SHA-256, asks for confirmation, flashes it, and reboots.
-
-The stock image it expects is:
-
-```text
-iKeyboard_CK-5200_V122_120.bin
-SHA-256 8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8
-```
-
-There is one important limitation: this USB restore only works if the keyboard still boots far enough to expose the updater interface. If a custom firmware image prevents USB from coming up at all, the regular USB path cannot rescue it. That case needs a hardware programmer/debug connection.
-
-## What the first QMK build does
-
-The first keymap is deliberately boring.
-
-The CK-5200 uses a 6x6 electrical matrix. Every matrix position sends a different character. That gives me a simple way to press every physical key once and map the real keyboard layout without guessing PCB traces.
-
-Once that mapping is confirmed, the diagnostic keymap can be replaced with a normal Clicks layout and QMK features.
-
-## iPhone support
-
-The stock firmware has extra Apple accessory handling in addition to normal keyboard HID.
-
-So the first milestone is to make QMK boot, enumerate, scan the keys and type correctly over USB. iPhone behavior comes after that.
-
-See [STATUS.md](STATUS.md) for the current known state.
+See [USB_AND_IPHONE.md](docs/USB_AND_IPHONE.md) for typing, layers, modifiers, sleep/wake, backlight, charging, and restoration checks on the iPhone 15 Pro Max. These are required hardware checks, not optional later features.
