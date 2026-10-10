@@ -4,8 +4,53 @@ import Foundation
 import OSLog
 
 @MainActor
-final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
+final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, KeyboardPacketLink {
     static let supportedProtocol = "com.clickscompanion.protocol"
+
+    let customFirmware = CustomFirmwareController()
+    private var linkOnFragment: (([UInt8]) -> Void)?
+    private var linkOnClosed: ((String) -> Void)?
+    private var customOutbox: [UInt8] = []
+    private var customLinkAttached = false
+
+    var onFragment: (([UInt8]) -> Void)? {
+        get { linkOnFragment }
+        set { linkOnFragment = newValue }
+    }
+
+    var onClosed: ((String) -> Void)? {
+        get { linkOnClosed }
+        set { linkOnClosed = newValue }
+    }
+
+    func send(_ bytes: [UInt8]) {
+        customOutbox.append(contentsOf: bytes)
+        drainCustomOutbox()
+    }
+
+    func close() {
+        // The EASession lifecycle is owned by the inspector itself.
+        customLinkAttached = false
+        customOutbox.removeAll()
+    }
+
+    private func drainCustomOutbox() {
+        guard let output = session?.outputStream else { return }
+        while !customOutbox.isEmpty, output.hasSpaceAvailable {
+            let written = customOutbox.withUnsafeBufferPointer { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return output.write(base, maxLength: customOutbox.count)
+            }
+            guard written > 0 else { return }
+            customOutbox.removeFirst(written)
+        }
+    }
+
+    private func attachCustomFirmwareLink() {
+        guard !customLinkAttached else { return }
+        customLinkAttached = true
+        customFirmware.attach(self)
+    }
 
     enum SessionState {
         case closed
@@ -162,6 +207,13 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         readTimeout = nil
         if pendingRead != nil { readState = "Cancelled: \(reason)" }
         pendingRead = nil
+        if customLinkAttached {
+            customLinkAttached = false
+            customOutbox.removeAll()
+            linkOnFragment = nil
+            linkOnClosed = nil
+            customFirmware.detach()
+        }
         if let session {
             let streams: [Stream?] = [session.inputStream, session.outputStream]
             for stream in streams.compactMap({ $0 }) {
@@ -246,6 +298,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                     timeout?.invalidate()
                     timeout = nil
                     setState(.open(id))
+                    attachCustomFirmwareLink()
                 } else {
                     setState(.opening(id, openedStreams: openedStreams))
                 }
@@ -261,6 +314,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                 let received = Array(buffer.prefix(count))
                 if pendingRead != nil {
                     receiveReadFragment(received)
+                } else if customLinkAttached {
+                    linkOnFragment?(received)
                 } else {
                     log("Unsolicited input received \(count) bytes; payload discarded")
                 }
@@ -273,6 +328,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         }
         if event.contains(.hasSpaceAvailable), stream === session.outputStream {
             writePendingReadIfPossible()
+            drainCustomOutbox()
         }
     }
 
