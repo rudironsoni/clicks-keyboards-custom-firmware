@@ -35,6 +35,24 @@ No supported arbitrary memory-read command was identified in the audited applica
 
 No independent rescue path is proven for this case. `bootloader_jump()` currently resets the MCU; it does not enter a known recovery interface.
 
+## What the restore path is, and what it is not, 2026-10-10
+
+The restore ladder for a flashed keyboard, strongest channel first:
+
+1. **Phone app over the EA session** (custom firmware running): the same A1/A2/A3 stock-update dialect stages and commits the bundled stock V122 image, then A0 reboots the keyboard into the stock installer. This is the same transport the official app uses for updates.
+2. **Mac over the EP2 dispatcher fallback** (custom firmware running, phone session not needed): `tools/ck5200_usb.py` routes on `bcdDevice 0x9001`, sends `02 03` for the "QM" identify, and runs the same A1/A2/A3/A0 cycle on the vendor bulk endpoint. This channel exists precisely so a broken Apple session stack cannot lock out recovery.
+3. **Stock installer boot region** (never touched): the custom image is limited to `0x2000..0x8a00` by the linker script and the image validator. The installer below `0x2000` and the staging area at `0x08008A00` are outside the image and are written only by the staging writer through A3.
+
+What is now **execution-verified offline** (`tests/ck5200_restore_test.c`, in the repo suite):
+
+- Three complete restore cycles with the real stock image (18648 bytes) and the real custom image (23388 bytes): every A2 chunk at stock's 32-byte size, A3 commit, byte-for-byte equality of all staged pages against the image, A0 reaching the reset path.
+- Both directions (custom from stock, stock from custom) and repeat cycles.
+- Rejection paths: empty image, one byte over the region limit, offset jumps, chunk overruns, and an injected flash-page failure mid-restore (the cycle refuses to continue, and a fresh A1 restarts it cleanly to a successful restore).
+
+What this does **not** prove, and the honest reason: all of the above runs the real state machines against a mocked flash backend. It proves the protocol, the bounds, and the page logic. It cannot prove the physical flash programming, the stock installer's acceptance of a staged image, or the reboot into the installer. Those are first-flash facts. The "Update interruption remains unresolved" section below still applies in full: an interrupted A2/A3 sequence is not a rollback.
+
+The physical procedures below this section remain the last resort if USB itself dies.
+
 The following are required before the first custom flash:
 
 1. Read the actual MCU marking and board revision.

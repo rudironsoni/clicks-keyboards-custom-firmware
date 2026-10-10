@@ -32,6 +32,17 @@ cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
 
 /tmp/ck5200_keymap_test
 
+# Full restore cycle: the real update handler and the real staging
+# writer against a mocked flash backend, pushing the complete stock and
+# custom images through A1/A2/A3/A0, plus bounds and failure injection.
+cc -std=c11 -Wall -Wextra -DCK5200_STAGING_HOST_TEST -I tests/stubs \
+  tests/ck5200_restore_test.c \
+  firmware/platform/ch32v20x/ck5200_update_protocol.c \
+  firmware/platform/ch32v20x/ck5200_staging.c \
+  -o /tmp/ck5200_restore_test
+
+/tmp/ck5200_restore_test .stock/iKeyboard_CK-5200_V122_120.bin build/ck5200_qmk.bin
+
 # Apple session stack: real iap2.c against a scripted iPhone and a fake
 # auth chip; asserts every outgoing EP2 packet byte-for-byte.
 cc -std=c11 -Wall -Wextra -I tests/stubs -I firmware/platform/ch32v20x \

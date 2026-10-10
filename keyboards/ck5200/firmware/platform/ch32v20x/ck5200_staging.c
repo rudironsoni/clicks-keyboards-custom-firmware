@@ -7,14 +7,25 @@
  *   0x08008A04  staged image byte 0
  *
  * The image maximum is 0x6A00 bytes and stock code programs 256-byte pages.
+ *
+ * CK5200_STAGING_HOST_TEST swaps the flash backend for harness hooks so
+ * the real page/offset state machine can be driven end-to-end on the
+ * host, including full-image restore cycles.
  */
 #include "ck5200_staging.h"
 
 #include <string.h>
+
+#ifdef CK5200_STAGING_HOST_TEST
+/* Harness provides the flash backend. */
+#include "ck5200_staging_host.h"
+#define STAGING_BASE 0x08008A00u
+#else
 #include "ch32v20x.h"
 #include "ch32v20x_flash.h"
+#define STAGING_BASE 0x08008A00u
+#endif
 
-#define STAGING_BASE       0x08008A00u
 #define STAGING_IMAGE_BASE (STAGING_BASE + 4u)
 #define FLASH_PAGE_SIZE    256u
 
@@ -31,12 +42,22 @@ static uint16_t page_fill;
 static staging_state_t staging_state;
 static uint8_t page[FLASH_PAGE_SIZE] __attribute__((aligned(4)));
 
+#ifdef CK5200_STAGING_HOST_TEST
+unsigned staging_host_reboots;
+unsigned staging_host_page_writes;
+uint32_t staging_host_fail_at = 0xFFFFFFFFu; /* address that fails once */
+#endif
+
 static bool flash_page(uint32_t address, const uint8_t data[FLASH_PAGE_SIZE]) {
+#ifdef CK5200_STAGING_HOST_TEST
+    return staging_flash_page(address, data);
+#else
     FLASH_Unlock_Fast();
     FLASH_ErasePage_Fast(address);
     FLASH_ProgramPage_Fast(address, (uint32_t *)(uintptr_t)data);
     FLASH_Lock_Fast();
     return memcmp((const void *)(uintptr_t)address, data, FLASH_PAGE_SIZE) == 0;
+#endif
 }
 
 static void reset_page(uint32_t address) {
@@ -114,6 +135,16 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
     }
 
     /* Word was left erased (0xFFFFFFFF) when the first page was programmed. */
+#ifdef CK5200_STAGING_HOST_TEST
+    if (!staging_flash_word(STAGING_BASE, size)) {
+        staging_state = STAGING_FAILED;
+        return false;
+    }
+    if (staging_flash_read_word(STAGING_BASE) != size) {
+        staging_state = STAGING_FAILED;
+        return false;
+    }
+#else
     FLASH_Unlock();
     const FLASH_Status status = FLASH_ProgramWord(STAGING_BASE, size);
     FLASH_Lock();
@@ -121,6 +152,7 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
         staging_state = STAGING_FAILED;
         return false;
     }
+#endif
 
     *committed_size = size;
     expected_size = 0;
@@ -131,7 +163,12 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
 }
 
 static void staging_reboot(void) {
+#ifdef CK5200_STAGING_HOST_TEST
+    ++staging_host_reboots;
+    return;
+#else
     NVIC_SystemReset();
+#endif
     for (;;) {}
 }
 
