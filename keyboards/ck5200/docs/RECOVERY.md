@@ -17,7 +17,9 @@ size    18648 bytes
 sha256  8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8
 ```
 
-The ignored local copy is `.stock/iKeyboard_CK-5200_V122_120.bin`. This is an application image, not a full backup of the boot component, option bytes, or device-specific data.
+The ignored local copy is `.stock/iKeyboard_CK-5200_V122_120.bin`. The vendor publishes exactly one other CK-5200 image, `V121`, also archived in `.stock/`. Both are application images, not full backups of the boot component, option bytes, or device-specific data. The [vendor distribution check](USB_AND_IPHONE.md#vendor-firmware-distribution-2026-10-08) found no published bootloader or installer image anywhere reachable without the physical iPhone app.
+
+For Rudi's stated goal, restore after a broken flash, note the split: this project's custom image writes only the application region (base `0x2000`, limit `0x6a00`, enforced by the image validator), so a broken flash breaks only the application region. The stock installer in the boot region and the configuration pages are outside that region and cannot be damaged by it. The application region is restorable without any dump by staging the official V122 image through the update commands and rebooting, the same path the vendor's own app uses, provided the running image keeps the update protocol alive, as this project's firmware does. A full dump remains insurance for the unknowns: installer signature behavior on a non-vendor image, and the boot region's fallback when the application will not start or enumerate.
 
 ## Stock still runs
 
@@ -25,7 +27,7 @@ The official Clicks app is the vendor's documented update path. This project's r
 
 The local iOS inspector has now opened both External Accessory streams on Rudi's stock CK-5200, hardware `1.2.0`, firmware `1.2.2`. This removes the earlier uncertainty about this app's ability to open the advertised session. It does not establish memory access or restoration. The [stock command audit and backup coverage table](USB_AND_IPHONE.md#stock-ios-session-and-read-command-investigation-2026-10-08) distinguish fixed field reads from full storage readback.
 
-No supported arbitrary memory-read command was identified in the audited application dispatcher. The boot/install component has not been read, so its services and checks remain unknown. Full software-only backup is blocked on evidence of a memory-read service with known region coverage. Without that evidence, the physical procedure below remains the independent readback route to investigate. Neither route is a proven restore path yet.
+No supported arbitrary memory-read command was identified in the audited application dispatcher. A completed offline audit of the same image's transport parsers, recorded in [USB_AND_IPHONE.md](USB_AND_IPHONE.md#offline-parser-audit-2026-10-08), found length-handling defects that feed request parsing only, with no memory disclosure, so no parser-defect readback path exists either. The boot/install component has not been read, so its services and checks remain unknown. Full software-only backup is blocked on evidence of a memory-read service with known region coverage. Without that evidence, the physical procedure below remains the independent readback route to investigate. Neither route is a proven restore path yet.
 
 `revert-stock.sh` without `--download-only` retains an explicit confirmation for an experimental restore through an already-running custom updater. That path is **NOT VERIFIED** and is not a rescue method for a device that does not boot.
 
