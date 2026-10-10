@@ -3,7 +3,7 @@ file(GLOB_RECURSE QMK_KEYMAP_EXTRAS "${QMK_DIR}/quantum/keymap_extras/*.c")
 
 set(QMK_CORE_SOURCES
     "${QMK_DIR}/quantum/bootmagic/bootmagic.c"
-    "${QMK_DIR}/quantum/debounce/sym_eager_pk.c"
+    "${QMK_DIR}/quantum/debounce/sym_defer_g.c"
     ${QMK_KEYMAP_EXTRAS}
     "${QMK_DIR}/quantum/logging/debug.c"
     "${QMK_DIR}/quantum/logging/print.c"
@@ -32,5 +32,5 @@ set(QMK_CORE_SOURCES
     "${QMK_DIR}/tmk_core/protocol/report.c"
     "${QMK_DIR}/tmk_core/protocol/usb_device_state.c"
     "${QMK_DIR}/drivers/eeprom/eeprom_driver.c"
-    "${QMK_DIR}/drivers/eeprom/eeprom_transient.c"
+    "${QMK_DIR}/lib/fnv/hash_64a.c"
 )

@@ -4,8 +4,10 @@
 #include "keyboard.h"
 #include "action_util.h"
 #include "timer.h"
+#include "iap2.h"
 #include "ck5200_update_protocol.h"
 #include "ck5200_staging.h"
+#include "ck5200_keymap.h"
 
 #define UPDATE_RESPONSE_SIZE 8u
 
@@ -15,7 +17,10 @@ static report_keyboard_t pending_keyboard_report, last_keyboard_report;
 static uint32_t last_keyboard_report_sent_at;
 static bool pending_keyboard_report_valid, keyboard_report_in_flight, last_keyboard_report_valid;
 static uint8_t pending_update_response[UPDATE_RESPONSE_SIZE];
-static bool pending_update_response_valid, update_response_in_flight;
+static uint8_t pending_update_response_len;
+static uint8_t pending_update_response_itf;
+static bool update_response_in_flight;
+static uint32_t iap2_last_tick_ms;
 
 static uint8_t keyboard_leds_impl(void) { return keyboard_led_state; }
 
@@ -69,19 +74,39 @@ static host_driver_t ck5200_host_driver = {
     .send_extra = send_extra_impl,
 };
 
-void protocol_setup(void) { host_set_driver(&ck5200_host_driver); (void)tud_init(1); }
+void protocol_setup(void) { host_set_driver(&ck5200_host_driver); tud_init(1); iap2_init(); }
 
 void protocol_pre_init(void) {} void protocol_post_init(void) {}
 void protocol_pre_task(void) { tud_task(); }
 
 static void send_pending_update_response(void) {
-    if (!pending_update_response_valid || update_response_in_flight || !tud_mounted() || tud_suspended()) return;
-    if (tud_vendor_n_write(0, pending_update_response, UPDATE_RESPONSE_SIZE) != UPDATE_RESPONSE_SIZE) return;
+    if (pending_update_response_len == 0 || update_response_in_flight || !tud_mounted() || tud_suspended()) return;
+    /* Stock 0x62cc: the EP3 companion channel answers only while the
+     * Apple session is active. */
+    if (pending_update_response_itf == 1 && !iap2_session_active()) {
+        pending_update_response_len = 0;
+        return;
+    }
+    if (tud_vendor_n_write(pending_update_response_itf, pending_update_response,
+                           pending_update_response_len) != pending_update_response_len) {
+        return;
+    }
 
     update_response_in_flight = true;
 }
 
-void protocol_post_task(void) { tud_task(); send_pending_update_response(); }
+void protocol_post_task(void) {
+    tud_task();
+
+    const uint32_t now = timer_read32();
+    if (now != iap2_last_tick_ms) {
+        iap2_last_tick_ms = now;
+        iap2_tick_1ms();
+    }
+    iap2_task();
+
+    send_pending_update_response();
+}
 
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
                                hid_report_type_t report_type, uint8_t *buffer,
@@ -149,29 +174,64 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
     }
 }
 
-void tud_mount_cb(void) { retain_interrupted_keyboard_report(); }
+void tud_mount_cb(void) { retain_interrupted_keyboard_report(); iap2_set_connected(true); }
 void tud_umount_cb(void) {
     retain_interrupted_keyboard_report();
-    pending_update_response_valid = false;
+    iap2_set_connected(false);
+    pending_update_response_len = 0;
     update_response_in_flight = false;
 }
 void tud_suspend_cb(bool remote_wakeup_en) { (void)remote_wakeup_en; retain_interrupted_keyboard_report(); }
 void tud_resume_cb(void) { retain_interrupted_keyboard_report(); }
 
-void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
-    if (idx != 0 || !buffer || bufsize < 2 || bufsize > 64 ||
-        pending_update_response_valid || update_response_in_flight) return;
+/* Shared dispatcher entry for both bulk channels. itf selects the reply
+ * endpoint pair: 0 = EP2 (Mac path, outside a session), 1 = EP3 (the raw
+ * companion channel while the Apple session is active). */
+static void handle_dispatcher_packet(uint8_t itf, const uint8_t *buffer, uint32_t bufsize) {
+    if (!buffer || bufsize < 2 || bufsize > 64 ||
+        pending_update_response_len != 0 || update_response_in_flight) return;
+    if (buffer[0] != (uint8_t)bufsize) return;
 
     uint8_t response[UPDATE_RESPONSE_SIZE];
-    const size_t response_len = ck5200_update_handle(buffer, (size_t)bufsize, response, &ck5200_staging_ops);
-    if (response_len == UPDATE_RESPONSE_SIZE) {
-        memcpy(pending_update_response, response, UPDATE_RESPONSE_SIZE);
-        pending_update_response_valid = true;
+    size_t response_len = ck5200_keymap_handle(buffer, (size_t)bufsize, response);
+    if (response_len == 0) {
+        response_len = ck5200_update_handle(buffer, (size_t)bufsize, response, &ck5200_staging_ops);
+    }
+
+    if (response_len >= 4 && response_len <= UPDATE_RESPONSE_SIZE) {
+        memcpy(pending_update_response, response, response_len);
+        pending_update_response_len = (uint8_t)response_len;
+        pending_update_response_itf = itf;
+    }
+}
+
+void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
+    if (!buffer || bufsize == 0) return;
+
+    if (idx == 0) {
+        /* EP2 is the iAP2 link. Outside a session, dispatcher-framed packets
+         * keep the Mac recovery path alive; the phone only ever sends the
+         * FF 55 attach or FF 5A link framing, which never matches that shape
+         * (its length byte would exceed the 64-byte endpoint). */
+        if (!iap2_session_active() && bufsize >= 2 && bufsize <= 64 &&
+            buffer[0] == (uint8_t)bufsize) {
+            handle_dispatcher_packet(0, buffer, bufsize);
+            return;
+        }
+        iap2_ep2_rx(buffer, bufsize);
+        return;
+    }
+
+    if (idx == 1) {
+        /* EP3 carries raw companion data (stock 0x629e gate). */
+        if (!iap2_session_active()) return;
+        iap2_activity();
+        handle_dispatcher_packet(1, buffer, bufsize);
     }
 }
 
 void tud_vendor_tx_cb(uint8_t idx, uint32_t sent_bytes) {
-    if (idx != 0 || !update_response_in_flight) return;
+    if (idx != pending_update_response_itf || !update_response_in_flight) return;
     update_response_in_flight = false;
-    if (sent_bytes == UPDATE_RESPONSE_SIZE) pending_update_response_valid = false;
+    if (sent_bytes == pending_update_response_len) pending_update_response_len = 0;
 }

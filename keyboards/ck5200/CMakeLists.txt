@@ -30,6 +30,7 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/quantum/process_keycode"
     "${QMK_DIR}/quantum/send_string"
     "${QMK_DIR}/quantum/sequencer"
+    "${QMK_DIR}/quantum/wear_leveling"
     "${QMK_DIR}/tmk_core"
     "${QMK_DIR}/tmk_core/common"
     "${QMK_DIR}/tmk_core/protocol"
@@ -37,6 +38,7 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/drivers"
     "${QMK_DIR}/drivers/eeprom"
     "${QMK_DIR}/lib"
+    "${QMK_DIR}/lib/fnv"
 )
 
 set(TINYUSB_SOURCES
@@ -67,10 +69,25 @@ set(CK5200_SOURCES
     firmware/platform/ch32v20x/usb_irq.c
     firmware/platform/ch32v20x/ck5200_update_protocol.c
     firmware/platform/ch32v20x/ck5200_staging.c
+    firmware/platform/ch32v20x/ck5200_keymap.c
+    firmware/platform/ch32v20x/iap2.c
+    firmware/platform/ch32v20x/iap2_auth.c
+    firmware/platform/ch32v20x/wear_leveling_ch32v20x.c
     firmware/usb/usb_descriptors.c
+    "${QMK_DIR}/quantum/dynamic_keymap.c"
+    "${QMK_DIR}/quantum/wear_leveling/wear_leveling.c"
+    "${QMK_DIR}/drivers/eeprom/eeprom_wear_leveling.c"
 )
 
 add_executable(ck5200_qmk.elf ${QMK_CORE_SOURCES} ${TINYUSB_SOURCES} ${WCH_SOURCES} ${CK5200_SOURCES})
+
+# The session stack favors size over speed: it runs at most once per ms and
+# must share the 27 KB application region with the rest of the firmware.
+set_source_files_properties(
+    firmware/platform/ch32v20x/iap2.c
+    firmware/platform/ch32v20x/iap2_auth.c
+    PROPERTIES COMPILE_OPTIONS "-Oz"
+)
 
 set_property(TARGET ck5200_qmk.elf APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/firmware/platform/ch32v20x/linker.ld")
@@ -100,7 +117,6 @@ target_compile_definitions(ck5200_qmk.elf PRIVATE
     FAST_TIMER_T_SIZE=32
     EEPROM_ENABLE
     EEPROM_DRIVER
-    EEPROM_TRANSIENT
 )
 
 target_compile_options(ck5200_qmk.elf PRIVATE
@@ -119,6 +135,8 @@ target_compile_options(ck5200_qmk.elf PRIVATE
     -include
     ${CMAKE_CURRENT_SOURCE_DIR}/firmware/keyboard/config.h
     -Os
+    -Oz
+    -flto=auto
 )
 
 target_link_options(ck5200_qmk.elf PRIVATE

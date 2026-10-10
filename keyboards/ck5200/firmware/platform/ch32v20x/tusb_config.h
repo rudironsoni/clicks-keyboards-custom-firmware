@@ -15,10 +15,13 @@ extern "C" {
 #define CFG_TUD_HID                  1
 #define CFG_TUD_HID_EP_BUFSIZE       64
 
-#define CFG_TUD_VENDOR               1
+#define CFG_TUD_VENDOR               2
 #define CFG_TUD_VENDOR_RX_BUFSIZE    0
 #define CFG_TUD_VENDOR_TX_BUFSIZE    0
 #define CFG_TUD_VENDOR_TXRX_BUFFERED 0
+/* Stock topology: interface 1 exposes its EP3 pair only at alternate
+ * setting 1, which the phone selects when the EA session opens. */
+#define CFG_TUD_VENDOR_ALT_SETTINGS  1
 
 #define CFG_TUD_CDC                  0
 #define CFG_TUD_MSC                  0

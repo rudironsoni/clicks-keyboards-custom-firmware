@@ -15,3 +15,27 @@ fi
 cc -std=c11 -Wall -Wextra   tests/update_protocol_test.c   firmware/platform/ch32v20x/ck5200_update_protocol.c   -o /tmp/ck5200_update_protocol_test
 
 /tmp/ck5200_update_protocol_test
+
+cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
+  tests/ck5200_keymap_test.c \
+  firmware/platform/ch32v20x/ck5200_keymap.c \
+  -o /tmp/ck5200_keymap_test
+
+/tmp/ck5200_keymap_test
+
+# Apple session stack: real iap2.c against a scripted iPhone and a fake
+# auth chip; asserts every outgoing EP2 packet byte-for-byte.
+cc -std=c11 -Wall -Wextra -I tests/stubs -I firmware/platform/ch32v20x \
+  tests/iap2_session_test.c \
+  firmware/platform/ch32v20x/iap2.c \
+  -o /tmp/ck5200_iap2_session_test
+
+/tmp/ck5200_iap2_session_test
+
+# Auth I2C driver: real iap2_auth.c against a waveform-level chip model.
+cc -std=c11 -Wall -Wextra -DIAP2_AUTH_HOST_TEST -I tests/stubs -I firmware/platform/ch32v20x \
+  tests/iap2_auth_test.c \
+  firmware/platform/ch32v20x/iap2_auth.c \
+  -o /tmp/ck5200_iap2_auth_test
+
+/tmp/ck5200_iap2_auth_test

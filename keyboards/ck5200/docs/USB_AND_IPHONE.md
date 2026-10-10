@@ -41,6 +41,21 @@ JADX 1.5.6 produced readable code for the relevant classes. Whole-APK decompilat
 
 These methods support the inner update packet format. They do **not** prove raw Android USB transactions work against the iPhone firmware. No automatic handshake-skipping, alternate endpoint probing, or guessed mode command was added.
 
+### Vendor firmware distribution, 2026-10-08
+
+A no-open search for a published bootloader or full image found none. The Android app's DEX strings contain the only firmware manifest reference, `https://xinyi1.clicks.tech/firmwares-a.json`. It lists `CA-1100`, `CA-2100`, and `CA-2200` (Pixel models) with `{model, firmwareRevision, file, sha256sum}` entries; each `file` is an 18 KB-class application image. No bootloader, installer, or full image appears in it.
+
+The bucket behind `xinyi1.clicks.tech` is S3-style: unknown keys return an `AccessDenied` XML error and `?list-type=2` listing is denied, so only exact keys can be checked. For `CK-5200/` exactly two keys exist, both application images, now both archived locally in `.stock/` (ignored by Git):
+
+| File | Size | SHA-256 |
+| --- | --- | --- |
+| `iKeyboard_CK-5200_V121_120.bin` | 18572 | `1c9ae5b2a4a838a5c62db0ce38c6d1d71c91fcc4101f0f8e37b365a746dac4aa` |
+| `iKeyboard_CK-5200_V122_120.bin` | 18648 | `8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8` |
+
+`V123` and `V124` keys, an iOS-model manifest under predictable `firmwares-i.json`-style names, and boot-image names under the `iKeyboard_` convention all return `AccessDenied`. The [iPhone get-started page](https://app.clicks.tech/en/docs/iphone-get-started) links only the App Store app. The App Store record for `com.clickscompanion.app` (Clicks Keyboard, id 6466761655, iOS 3.0.2) reports compatibility with iPhone, iPad and iPod touch only: there is no Mac build, so its firmware-fetch URL cannot be discovered by running it on this Apple-silicon Mac. Web searches found no public Clicks firmware dump or bootloader. The app's release notes describe settings backup and restore through a Clicks account; that is preferences, not firmware.
+
+Remaining no-open discovery route: capture the official iOS app's update-check traffic on the physical iPhone with a locally trusted proxy certificate. That would reveal the iPhone manifest URL and settle definitively whether any boot or full image is published for `CK-*` models. Given the Android manifest pattern, the expected result is application images only. No such capture was made here.
+
 ## Current transport behavior
 
 `tools/ck5200_usb.py inspect` reads descriptors without SET_CONFIGURATION, driver detach, or interface claim. `inspect --query-version` additionally claims the vendor interface and sends only `02 03`.
@@ -124,9 +139,78 @@ The earlier disassembler labels `0x3230` and `0xb6f0` as floating-point instruct
 
 Command `0x8f` takes the default branch at `0x328a`. That branch fills an eight-byte reply with type 2, echoed command, status `ff`, and four zero bytes. The probe supplies four zero argument bytes because the dispatcher preloads those bytes even before rejecting this command. It does not call a flash writer or modify configuration. A nonmatching response is retained as unexpected evidence and closes the session; it is never automatically retried with another command.
 
-Fresh searches for the exact model, firmware filename, protocol string, and Clicks firmware reverse engineering found no usable public CK-5200 service-readback implementation in the results checked. Generic WCH tools do not establish a Clicks-app transport. In particular, [wch-web-isp](https://github.com/basilhussain/wch-web-isp#limitations) documents no user-application flash read in the factory protocol, and [wchisp's command definitions](https://raw.githubusercontent.com/ch32-rs/wchisp/main/src/protocol.rs) distinguish verification from separate configuration/data reads. These sources do not establish a way to enter or tunnel the factory protocol through EASession. No ROM, reset, update, or unprotect request was sent.
+Fresh searches for the exact model, firmware filename, protocol string, and Clicks firmware reverse engineering found no usable public CK-5200 service-readback implementation in the results checked.
+
+## Apple accessory session (MFi) port status, 2026-10-10
+
+The custom firmware now carries a faithful port of the stock Apple session stack, recovered entirely from the static analysis of the V122 image (no case opening, no dev board). Stock addresses below refer to linked addresses in `iKeyboard_CK-5200_V122_120.bin`.
+
+[CORRECTION] An earlier note in this file called the attach constant's location wrong. It was itself wrong: the six-byte attach template `ff 55 02 00 ee 10` IS in the image at file offset `0x48d0` (linked `0x68d0`); the "correction" had confused file offset `0x28d0` (code) with `0x48d0`. The 18-byte pre-session reject template lives at file `0x44ec` (linked `0x64ec`) as originally documented.
+
+### What the stock stack is (all decoded, byte-exact)
+
+- Outer transport (stock `0x6242`, `0x6150`): attach `FF 55 02 00 EE 10` on EP2 every 475 ms; the phone's echo re-inits the link machine and enters outer state 3; anything else pre-session gets the 18-byte reject from `0x64ec`.
+- iAP2 link layer on EP2 (stock `0x5bec`, `0x542a`, `0x5534`, `0x5502`): `FF 5A` header (length BE, control, seq, ack, session id, header checksum `-(sum)`), LinkSyncRequest payload `01 05 10 00 07 D0 01 F4 1E 03 0A 00 01 <ck>` advertising max_outgoing 5, max_len 4096, retransmit 2000 ms, ack 500 ms, 30 retransmissions, ack-every-3, control session id 10. Received SYNs are validated against those parameters; mismatch re-states ours as SYN|ACK (the common case, since the phone sends its own parameters).
+- Control messages (stock `0x53b0`, `0x53e4`): `40 40 <len BE = body+6> <type BE> <KVPs: entry_len BE, id BE, value> <-(sum)>`.
+- Identify (stock `0x5734`): reply `0x1D01` to the phone's `0x1D00`, sixteen parameters generated from image bytes `0x677c..0x6862` (`iap2_ident_data.h`): name, model `CK-5200`, manufacturer, serial, firmware `1.2.2`, hardware `1.2.0`, capability blobs, `100`, the EA blob carrying `com.clickscompanion.protocol`, token `79Q5CGN6JK`, language `en`, the `IAP2-X` and `HID-X` blobs, and `020c3648d17f4624`.
+- MFi authentication relay (stock `0x51cc`, `0x515c`, `0x4ff6`-`0x5350`): the authentication chip is on **bit-banged I2C, not SPI**: GPIOA PA13 = SCL, PA14 = SDA (the SWD pins, repurposed), chip address byte `0x22` write / `0x23` read, with a 20-failed-peek fallback that toggles the address to `0x20`. Selectors: `0x21` write challenge, `0x10` command/status, `0x11` read BE16 response length, `0x12` read response, `0x30` peek pending message, `0x31+cursor` read 128-byte chunk. The phone's challenge arrives as `0xAA02`; the chip's certificate streams back as `0xAA01` chunks; the signed response returns as `0xAA03`; the phone's `0xAA04` marks auth accepted.
+- Session open (stock `0x5e9e`): the phone's `0x1D02` sets the open flag and queues StartPowerUpdates `0xAE00` and the status report `0xAA03`; the phone's `0xEA00` opens the EA session; `0xEA01` closes it. The companion protocol then runs raw on EP3 (stock `0x629e`/`0x62cc` gate on outer state 3), where the existing `0x02` dispatcher serves the app unchanged.
+
+### Port files
+
+- `firmware/platform/ch32v20x/iap2.c/.h`: outer + inner state machines, link framing, control-message builders, all stock ops.
+- `firmware/platform/ch32v20x/iap2_auth.c/.h`: bit-banged I2C driver and selector protocol.
+- `firmware/platform/ch32v20x/iap2_ident_data.h`: generated Identify parameters (extracted from the image, not hand-copied).
+- `firmware/usb/usb_descriptors.c`: stock topology: interface 2 HID (EP `0x81`/`0x01`), interface 0 `FF/F0/00` (EP `0x82`/`0x02`, iAP2 link), interface 1 `FF/F0/01` (EP `0x83`/`0x03` at alternate 1, companion data). Stock strings: `iAP2 Interface`, `com.clickscompanion.protocol`, serial `190200001`.
+- `firmware/platform/ch32v20x/protocol.c`: EP2 routes to the session stack (with a dispatcher fallback outside a session that keeps the Mac recovery path alive); EP3 routes to the dispatcher while the session is active; SOF-equivalent 1 ms tick drives the retry timers.
+
+### Deliberate deviations from stock (each required or safety-motivated)
+
+1. `bcdDevice` stays `0x9001` (custom routing marker) so the Mac flash tool can tell this firmware from stock. Stock itself changes this field between releases (`0x0121`, `0x0122`), so no host can depend on it.
+2. The HID report descriptor stays the standard 6KRO boot layout our QMK host speaks, not stock's 4KRO-plus-consumer layout.
+3. Identify parameter 3 (serial) uses the constant `2311000001` from the image; stock reads a runtime buffer whose source was not decoded.
+4. The status report uses the image initializer bytes of the runtime global stock reads (`{08 34}`, `{01}`).
+5. Outside a session, dispatcher-framed packets on EP2 reach the dispatcher instead of being rejected, preserving the Mac flash/restore path. The phone never sends that framing (its length byte would exceed the 64-byte endpoint), so the Apple path is unaffected.
+6. The link machine enters the sync-resend state (stock state 3) after sending the sync, matching the resend machinery and the open iAP2 implementations; the exact stock writer of that transition was not located statically.
+7. Build-level: LTO (`-flto=auto`) and the heap-free `sym_defer_g` debounce keep the image inside the 27136-byte application region alongside the session stack.
+
+### Verification state
+
+Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, the update-protocol and keymap C tests, plus the two host harnesses below); image 22676 bytes, sha256 `8aacd6b059a586615ad6282145882318c2a8ca67a7dcfce684283f14e904b734`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly).
+
+Two host harnesses now execute the ported code directly:
+
+- `tests/iap2_session_test.c` (13 scenarios): compiles the real `iap2.c` against a scripted iPhone and a fake auth chip, asserting every outgoing EP2 packet byte-for-byte. Covers the attach cadence (475 ms retry, 50 ms on send failure), the pre-session reject, the sync request with its 1000 ms resends and 30-send budget, the SYN/SYN|ACK/ACK handshake sequencing, the Identify reply (full parameter walk plus string offsets), link-layer ACKs owed, the certificate stream (128-byte chunk math, 0xAA01 framing), the auth challenge relay including stock's shifted challenge copy, the session open sequence (0xAE00, status 0xAA03), RST restart, the 20-failed-peek address toggle to 0x20, the request ring's drop-when-full (7 usable slots), and a canary test proving the parser cannot read past a received packet.
+- `tests/iap2_auth_test.c` (4 scenarios): compiles the real `iap2_auth.c` with host register hooks against a waveform-level I2C slave that decodes the PA13/PA14 bit stream. Verifies START/STOP, MSB-first sampling, address and selector bytes, slave ACKs, master ACK/NACK discipline on reads, and the 3-attempt address-NACK bail.
+
+Building these harnesses caught five real defects in the port, all fixed: empty-body control messages were dropped (stock dispatches them, which matters for `0xAA04`), the sync resend cap was 798 instead of stock's 30, a failed pending op was consumed instead of retried (stock keeps the op slot on failure), the Identify serial parameter was never emitted, and the auth read transaction fell through to the read phase after a failed address phase (stock bails after the retry loop).
+
+NOT VERIFIED on hardware: the first flash remains the first live test. The known open runtime risks: the auth-chip address variant (`0x22` vs `0x20`), I2C bit timing, the EA-open parameter the phone sends in `0xEA00`, and multi-USB-packet received link frames (stock has the same single-packet limitation).
 
 The diagnostic build and extended existing tests passed locally. Wireless installation and launch eventually succeeded after an initial CoreDevice error 4016 and a 30-second timeout. CoreDevice reported a connected local-network tunnel, but a later screenshot request again failed with error 4016. The subsequent on-phone screenshots verify both diagnostic outcomes. Neither probe returns firmware bytes or establishes a full-backup method. These results close these two specific leads; they do not prove the absence of every undocumented interface or packet-parser defect.
+
+### Offline parser audit, 2026-10-08
+
+Rudi directed the focus to extracting the stock firmware. This completes the offline audit of the stock V122 packet parsers that an earlier turn left as "a possible length-check bug in the raw USB parser, no proven leak". No command was sent to the keyboard. The tool is Homebrew LLVM 23.1.2:
+
+```sh
+llvm-objdump -d --no-show-raw-insn --triple=riscv32 --mattr=+m,+a,+c,+xwchc stock.elf
+```
+
+`llvm-objdump` needs an ELF wrapper around `.stock/iKeyboard_CK-5200_V122_120.bin` (one `.text` section, base `0x2000`, flags alloc+exec); it then decodes the WCH compressed encodings correctly, unlike the xpack `riscv-none-elf-objdump` output reproduced above.
+
+Results, with linked addresses in the verified stock image:
+
+| Check | Location | Result |
+| --- | --- | --- |
+| Dispatcher length check | `0x3226` | Present. `bltu a2, s3` sends actual count < declared length to `0x358c`, which returns 0 with no reply. The callback at `0x2208` sends nothing when the dispatcher returns 0. |
+| Reply lengths | all handlers | Every reply-length store is a `li` immediate 4, 5, 6, or 8 into reply byte 0 at context offset `0x10c`. No handler stores a request-derived reply length. The reply buffer is 8 bytes, `0x10c..0x113`, directly after the 256-byte A2 staging RAM buffer at `0xc..0x10b`. |
+| Request echo in replies | all handlers | None. Reply payloads are constants, fixed configuration fields (context offsets `0x11d..0x126`), or runtime flags. The A1/A2/A3 replies carry staging state (`0x4`, `0x8`, `0x2` fields), not memory contents. The `0x08` CRC path writes reply offsets 4..7 but declares length 4, so those bytes are never sent. |
+| EP2 pre-session parser | `0x6178..0x6194` | Defect, non-disclosing. It matches request bytes 2..5 against `02 00 ee 10` before checking the received count is at least 6. A short packet compares stale bytes of the 64-byte EP2 stack buffer (`0x46d2`). This can confuse the transport state machine into session mode, but no reply path transmits that buffer. |
+| iAP2 link parser | `0x5bec` | Defect, non-disclosing. It requires count > 8 and sync `FF 5A`, then trusts the declared link length (bytes 2..3) and declared session lengths. The packet walkers at `0x5e8a..0x5e92` and `0x5e2c..0x5e88` advance by declared lengths bounded only by a 16-bit value, so a packet whose declared lengths exceed the actual count parses stale stack bytes or walks past the buffer. The only delivery loop copies at most 32 bytes into the fixed EA buffer (link object at transport context + `0x30`, pointer field + `0x4`) and records the real copied count at buffer offset 8, so the dispatcher's declared-versus-actual check still operates on true data. |
+| Transport topology | `0x46d2`, `0x4724`, `0x629e` | EP2 (interface 0, endpoints `0x02/0x82`) carries the link and control layer: handshake matching, `FF 5A` link packets, session control, and EA control (`0xea400`). The application callback `0x2208` is invoked only by the EP3 path `0x629e`; EP3 (interface 1 alternate 1, endpoints `0x03/0x83`) delivers raw session-data packets to the dispatcher when transport state is 3. Link replies (`0x5cd6..0x5e26` through `0x4f68`) carry state bits and flash constants at `0x542a`, `0x5b62`, `0x5aea`, and `0x5bc0`. |
+
+Conclusion: the audited V122 application exposes no software-only memory-read path. There is no arbitrary-address getter, no request echo, and no request-derived reply length; the parser over-reads feed request parsing only, and no read data is transmitted back. This closes the application-level extraction lead. The boot/install component below `0x2000` remains unread and unaudited, and no audited command reaches it. Full extraction still requires the physical debug route in [RECOVERY.md](RECOVERY.md) or a vendor service/readback mode from Clicks.
 
 ### Custom firmware acceptance
 
