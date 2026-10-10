@@ -1,7 +1,10 @@
 **/build/
 **/external/
 **/.toolchains/
-**/.stock/
+**/.stock/*
+!**/.stock/audit/
+**/.stock/audit/*.elf
+**/.stock/audit/*.dis
 **/.venv/
 **/__pycache__/
 **/.pytest_cache/
