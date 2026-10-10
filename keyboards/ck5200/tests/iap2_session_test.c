@@ -2,7 +2,7 @@
  *
  * Executes the REAL firmware state machine against a scripted iPhone and a
  * fake MFi auth chip, asserting every outgoing EP2 packet byte-for-byte
- * against the stock V122 decode (see .stock/audit/NOTES.md). The fake
+ * against the stock V122 decode (see docs/STOCK_DECODE.md). The fake
  * auth chip replaces iap2_auth.c at link time; the waveform-level driver
  * itself is covered by iap2_auth_test.c.
  */

@@ -5,7 +5,7 @@
  *
  * The stock maps each electrical crossing inline in its HID builder
  * (stock 0x2b1c..0x3010); the full decode is recorded in
- * .stock/audit/NOTES.md. Our matrix scan (PB row high, read PA0..PA5)
+ * docs/STOCK_DECODE.md. Our matrix scan (PB row high, read PA0..PA5)
  * uses the same crossing indexing as stock, so K<row><col> below matches
  * the stock crossings exactly. One crossing, (2, bit 3), carries no key.
  *

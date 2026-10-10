@@ -176,7 +176,7 @@ The custom firmware now carries a faithful port of the stock Apple session stack
 
 ### Physical keyboard, 2026-10-10
 
-The stock keymap is now fully decoded (the stock maps every electrical crossing inline in its HID builder; the complete 36-crossing table is in `.stock/audit/NOTES.md`), and the custom firmware carries it:
+The stock keymap is now fully decoded (the stock maps every electrical crossing inline in its HID builder; the complete 36-crossing table is in `docs/STOCK_DECODE.md`), and the custom firmware carries it:
 
 - Layer 0 is the stock base layout, crossing-identical to our matrix scan: QWERTY letters, Backspace, Enter, Space, Command (`Left GUI`) and Ctrl on the stock crossings, three consumer keys, the Clicks key, and the sticky SYM key. Crossing (2, bit 3) is the stock spare and stays empty.
 - Layer 1 holds the stock SYM values: the letter keys map to their row numbers (`q..p` to `1..0`) and the remaining crossings carry the stock punctuation.
@@ -190,7 +190,7 @@ The stock backlight is now decoded and ported (it is TIM1 PWM on PA8/PA9/PA10, n
 
 ### Verification state
 
-Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, the update-protocol and keymap C tests, plus the two host harnesses below); image 23388 bytes, sha256 `dad34db61f2978836b0f6c8a29e72f29d491fda0401bb1d0b45928b47906b12c`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly).
+Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, 2 keymap-layout tests, the update-protocol, keymap, and backlight C tests, plus the two host harnesses below); image 23388 bytes, sha256 `dad34db61f2978836b0f6c8a29e72f29d491fda0401bb1d0b45928b47906b12c`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly). The full decode record with every stock address and byte table is tracked at [STOCK_DECODE.md](STOCK_DECODE.md), and every generated artifact is re-derivable from the repo alone via [tools/stock_audit/](../tools/stock_audit/).
 
 Two host harnesses now execute the ported code directly:
 

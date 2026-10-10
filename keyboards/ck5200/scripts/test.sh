@@ -11,10 +11,19 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 "$PYTHON" -m pytest -q tests/test_usb_protocol.py
+"$PYTHON" -m pytest -q tests/test_keymap_layout.py
 
 cc -std=c11 -Wall -Wextra   tests/update_protocol_test.c   firmware/platform/ch32v20x/ck5200_update_protocol.c   -o /tmp/ck5200_update_protocol_test
 
 /tmp/ck5200_update_protocol_test
+
+# Backlight driver: real TIM1 register writes against the stock decode.
+cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmware/platform/ch32v20x \
+  tests/ck5200_backlight_test.c \
+  firmware/platform/ch32v20x/ck5200_backlight.c \
+  -o /tmp/ck5200_backlight_test
+
+/tmp/ck5200_backlight_test
 
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \

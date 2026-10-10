@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Preserve evidence | Stock V121 and V122 applications archived, official APK, live USB descriptors and handshake inspected. No bootloader image is published by the vendor. Investigation saved in `docs/ck5200-investigation.md`. | Downloaded applications are not a full device backup. |
 | Stock transport | Exact V122 handlers traced. Rudi's physical iPhone screenshots confirm all seven fixed reads completed through the local iOS inspector. Raw Mac USB query still returns the handshake. Offline parser audit found no memory-disclosure defect. | No memory-read service or update session is established; software-only readback is closed. |
-| Apple session stack | Fully decoded from the V122 image and ported byte-faithfully: attach/link framing, sync exchange, Identify, the MFi auth relay (bit-banged I2C to the auth chip, not SPI), session open, and the raw EP3 companion channel. Recorded in `docs/USB_AND_IPHONE.md` and `.stock/audit/NOTES.md`. | Hardware run: the first flash is the first live test of the stack and the auth-chip bus. |
+| Apple session stack | Fully decoded from the V122 image and ported byte-faithfully: attach/link framing, sync exchange, Identify, the MFi auth relay (bit-banged I2C to the auth chip, not SPI), session open, and the raw EP3 companion channel. Decode record tracked in `docs/STOCK_DECODE.md`; extraction tooling committed under `tools/stock_audit/`. | Hardware run: the first flash is the first live test of the stack and the auth-chip bus. |
 | Independent recovery | Documented programmer readback route and region checklist in `docs/RECOVERY.md`. | Board/chip/pads, debug probe, protection state, full dump and restore test are missing. |
 | Image layout | Application linked at `0x2000`, maximum `0x6a00`, end `0x8a00`. ELF startup/vector/RAM checks and exact ELF-to-BIN comparison pass. | Stock installer acceptance has not been tested. |
 | HID and staging | Pending HID reports retry, GET_REPORT/idle/resume behavior implemented, vendor reply retries, staging failures latch. Unsupported remote wake advertisement removed. | Synchronous macros can coalesce reports; no real USB timing, power-loss, or firmware-log validation. |
@@ -26,7 +26,7 @@ bash keyboards/ck5200/scripts/test.sh
 bash keyboards/ck5200/scripts/build.sh
 ```
 
-Tests: **5 Python tests passed**; the C update-protocol, keymap (including the brightness commands), session replay (`ok 13`), and auth I2C waveform (`ok 4`) harnesses all pass.
+Tests: **5 Python tests + 2 keymap-layout tests passed**; the C update-protocol, keymap (including the brightness commands), backlight (TIM1 registers against the decode), session replay (`ok 13`), and auth I2C waveform (`ok 4`) harnesses all pass. The keymap test asserts every crossing of every layer against the decoded stock table, and the backlight test asserts every TIM1 register value.
 
 Final local build (Apple session stack included):
 

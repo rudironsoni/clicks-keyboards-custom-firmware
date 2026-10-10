@@ -2,7 +2,7 @@
  *
  * Faithful port of the stock V122 session layer recovered from
  * iKeyboard_CK-5200_V122_120.bin; stock addresses and byte layouts are
- * recorded in .stock/audit/NOTES.md. Layers:
+ * recorded in docs/STOCK_DECODE.md. Layers:
  *
  * 1. Outer transport (stock 0x6242/0x6150): attach handshake
  *    FF 55 02 00 EE 10 on EP2 (retried every 475 ms), then link-active

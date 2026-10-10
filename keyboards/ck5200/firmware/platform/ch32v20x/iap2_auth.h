@@ -1,7 +1,7 @@
 /* MFi authentication chip driver, bit-banged I2C.
  *
  * Faithful port of the stock V122 driver (stock 0x4ff6..0x5350, see
- * .stock/audit/NOTES.md): GPIOA PA13 = SCL, PA14 = SDA, chip address byte
+ * docs/STOCK_DECODE.md): GPIOA PA13 = SCL, PA14 = SDA, chip address byte
  * 0x22 (write) / 0x23 (read). PA13/PA14 are the SWD pins; the board
  * repurposes them, so this driver must run before any debug attach.
  */

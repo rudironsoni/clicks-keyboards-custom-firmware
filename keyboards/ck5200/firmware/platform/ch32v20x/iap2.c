@@ -1,5 +1,5 @@
 /* CK-5200 Apple accessory session (iAP2/MFi) stack.
- * Faithful port of the stock V122 session layer; see .stock/audit/NOTES.md
+ * Faithful port of the stock V122 session layer; see docs/STOCK_DECODE.md
  * for the per-function stock addresses. Timing constants, packet bytes,
  * retry rules, and the auth-chip protocol all match the stock image.
  */
