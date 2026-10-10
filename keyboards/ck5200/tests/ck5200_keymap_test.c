@@ -5,6 +5,15 @@
 
 #include "dynamic_keymap.h"
 #include "eeconfig.h"
+
+/* Host-test stubs for the settings/brightness surface. */
+static uint32_t stub_kb_setting;
+bool eeconfig_is_enabled(void) { return true; }
+uint32_t eeconfig_read_kb(void) { return stub_kb_setting; }
+void eeconfig_update_kb(uint32_t setting) { stub_kb_setting = setting; }
+static uint8_t stub_brightness;
+void ck5200_backlight_set(uint8_t raw) { stub_brightness = raw; }
+uint8_t ck5200_backlight_get(void) { return stub_brightness; }
 #include "../firmware/platform/ch32v20x/ck5200_keymap.h"
 
 #define MATRIX_ROWS 6
@@ -81,6 +90,23 @@ int main(void) {
     /* eeconfig_init_kb must seed the map from the factory layout. */
     eeconfig_init_kb();
     assert(dynamic_keymap_stub.reset_calls == 2);
+
+    /* Brightness set: applies the raw byte and persists it. */
+    const uint8_t set_br[] = {0x03, 0x82, 0x40};
+    assert(ck5200_keymap_handle(set_br, sizeof(set_br), response) == 4);
+    assert(memcmp(response, (uint8_t[]){0x04, 0x02, 0x82, 0x00}, 4) == 0);
+    assert(stub_brightness == 0x40);
+    assert(stub_kb_setting == 0x40);
+
+    /* Brightness get: 05 02 84 00 raw, the stock reply shape. */
+    const uint8_t get_br[] = {0x02, 0x84};
+    assert(ck5200_keymap_handle(get_br, sizeof(get_br), response) == 5);
+    assert(memcmp(response, (uint8_t[]){0x05, 0x02, 0x84, 0x00, 0x40}, 5) == 0);
+
+    /* Wrong lengths are rejected without touching state. */
+    const uint8_t set_br_bad[] = {0x02, 0x82};
+    assert(ck5200_keymap_handle(set_br_bad, sizeof(set_br_bad), response) == 0);
+    assert(stub_brightness == 0x40);
 
     puts("ok");
     return 0;

@@ -10,8 +10,11 @@
 
 #include "dynamic_keymap.h"
 #include "eeconfig.h"
+#include "ck5200_backlight.h"
 
 #define CMD_VERSION 0x03u
+#define CMD_SET_BRIGHTNESS 0x82u
+#define CMD_GET_BRIGHTNESS 0x84u
 #define CMD_GET_INFO 0x90u
 #define CMD_GET_KEY 0x91u
 #define CMD_SET_KEY 0x92u
@@ -57,6 +60,23 @@ size_t ck5200_keymap_handle(const uint8_t *request, size_t request_len, uint8_t 
             response[6] = 0x00;
             response[7] = 0x01;
             return 8;
+
+        case CMD_SET_BRIGHTNESS:
+            /* 03 82 raw: apply the stock formula and persist. */
+            if (request_len != 3) return 0;
+            ck5200_backlight_set(request[2]);
+            eeconfig_update_kb(request[2]);
+            return reply_status(command, 0x00, response);
+
+        case CMD_GET_BRIGHTNESS:
+            /* 02 84 -> 05 02 84 00 raw, matching the stock reply shape. */
+            if (request_len != 2) return 0;
+            response[0] = 5;
+            response[1] = 0x02;
+            response[2] = command;
+            response[3] = 0x00;
+            response[4] = ck5200_backlight_get();
+            return 5;
 
         case CMD_GET_INFO:
             if (request_len != 2) return 0;

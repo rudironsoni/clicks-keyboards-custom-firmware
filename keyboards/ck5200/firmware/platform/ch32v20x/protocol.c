@@ -5,11 +5,14 @@
 #include "action_util.h"
 #include "timer.h"
 #include "iap2.h"
+#include "ck5200_backlight.h"
 #include "ck5200_update_protocol.h"
 #include "ck5200_staging.h"
 #include "ck5200_keymap.h"
+#include "eeconfig.h"
 
 #define UPDATE_RESPONSE_SIZE 8u
+#define HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
 
 uint8_t keyboard_protocol = 1, keyboard_idle = 0;
 static uint8_t keyboard_led_state;
@@ -22,16 +25,38 @@ static uint8_t pending_update_response_itf;
 static bool update_response_in_flight;
 static uint32_t iap2_last_tick_ms;
 
+/* Consumer usage appended to every report (0 = none pressed). Driven by
+ * the custom keycodes in the keymap through ck5200_consumer_key(). */
+static uint16_t consumer_usage;
+static bool consumer_dirty;
+
 static uint8_t keyboard_leds_impl(void) { return keyboard_led_state; }
 
-static bool submit_keyboard_report(const report_keyboard_t *report) {
+void ck5200_consumer_key(uint16_t usage, bool pressed) {
+    if (pressed) {
+        consumer_usage = usage;
+    } else if (consumer_usage == usage) {
+        consumer_usage = 0;
+    }
+    consumer_dirty = true;
+}
+
+/* Sends the 8-byte keyboard part plus the 16-bit consumer tail. */
+static bool submit_hid_report(const report_keyboard_t *report) {
     if (!tud_mounted() || tud_suspended() || keyboard_report_in_flight || !tud_hid_ready()) return false;
 
-    pending_keyboard_report = *report;
-    pending_keyboard_report_valid = true;
-    if (!tud_hid_report(0, report, sizeof(*report))) return false;
+    uint8_t buf[HID_REPORT_SIZE];
+    memcpy(buf, report, sizeof(*report));
+    buf[8] = (uint8_t)(consumer_usage >> 8);
+    buf[9] = (uint8_t)consumer_usage;
+    if (!tud_hid_report(0, buf, sizeof(buf))) return false;
+
     keyboard_report_in_flight = true;
     return true;
+}
+
+static bool submit_keyboard_report(const report_keyboard_t *report) {
+    return submit_hid_report(report);
 }
 
 static void send_keyboard_impl(report_keyboard_t *report) {
@@ -49,6 +74,13 @@ void protocol_keyboard_task(void) {
     if (!tud_mounted() || tud_suspended()) { keyboard_task(); return; }
     if (keyboard_report_in_flight || !tud_hid_ready()) return;
     if (pending_keyboard_report_valid) { (void)submit_keyboard_report(&pending_keyboard_report); return; }
+
+    /* A consumer-only change still needs a fresh report on the wire. */
+    if (consumer_dirty) {
+        consumer_dirty = false;
+        if (keyboard_report && submit_hid_report(keyboard_report)) return;
+        if (last_keyboard_report_valid && submit_hid_report(&last_keyboard_report)) return;
+    }
 
     if (keyboard_idle != 0 && last_keyboard_report_valid &&
         timer_elapsed32(last_keyboard_report_sent_at) >= (uint32_t)keyboard_idle * 4u) {
@@ -74,7 +106,19 @@ static host_driver_t ck5200_host_driver = {
     .send_extra = send_extra_impl,
 };
 
-void protocol_setup(void) { host_set_driver(&ck5200_host_driver); tud_init(1); iap2_init(); }
+void protocol_setup(void) {
+    host_set_driver(&ck5200_host_driver);
+    tud_init(1);
+    iap2_init();
+    ck5200_backlight_init();
+}
+
+static void apply_persisted_brightness_once(void) {
+    static bool done;
+    if (done || !eeconfig_is_enabled()) return;
+    done = true;
+    ck5200_backlight_set((uint8_t)(eeconfig_read_kb() & 0xffu));
+}
 
 void protocol_pre_init(void) {} void protocol_post_init(void) {}
 void protocol_pre_task(void) { tud_task(); }
@@ -98,6 +142,8 @@ static void send_pending_update_response(void) {
 void protocol_post_task(void) {
     tud_task();
 
+    apply_persisted_brightness_once();
+
     const uint32_t now = timer_read32();
     if (now != iap2_last_tick_ms) {
         iap2_last_tick_ms = now;
@@ -114,8 +160,12 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     if (instance != 0 || report_id != 0 || !buffer || reqlen == 0) return 0;
 
     if (report_type == HID_REPORT_TYPE_INPUT && keyboard_report) {
-        const uint16_t length = (uint16_t)(sizeof(*keyboard_report) < reqlen ? sizeof(*keyboard_report) : reqlen);
-        memcpy(buffer, keyboard_report, length);
+        uint8_t buf[HID_REPORT_SIZE];
+        memcpy(buf, keyboard_report, sizeof(*keyboard_report));
+        buf[8] = (uint8_t)(consumer_usage >> 8);
+        buf[9] = (uint8_t)consumer_usage;
+        const uint16_t length = (uint16_t)((HID_REPORT_SIZE < reqlen) ? HID_REPORT_SIZE : reqlen);
+        memcpy(buffer, buf, length);
         return length;
     }
 

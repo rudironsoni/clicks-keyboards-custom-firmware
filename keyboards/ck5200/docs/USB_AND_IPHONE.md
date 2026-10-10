@@ -174,9 +174,23 @@ The custom firmware now carries a faithful port of the stock Apple session stack
 6. The link machine enters the sync-resend state (stock state 3) after sending the sync, matching the resend machinery and the open iAP2 implementations; the exact stock writer of that transition was not located statically.
 7. Build-level: LTO (`-flto=auto`) and the heap-free `sym_defer_g` debounce keep the image inside the 27136-byte application region alongside the session stack.
 
+### Physical keyboard, 2026-10-10
+
+The stock keymap is now fully decoded (the stock maps every electrical crossing inline in its HID builder; the complete 36-crossing table is in `.stock/audit/NOTES.md`), and the custom firmware carries it:
+
+- Layer 0 is the stock base layout, crossing-identical to our matrix scan: QWERTY letters, Backspace, Enter, Space, Command (`Left GUI`) and Ctrl on the stock crossings, three consumer keys, the Clicks key, and the sticky SYM key. Crossing (2, bit 3) is the stock spare and stays empty.
+- Layer 1 holds the stock SYM values: the letter keys map to their row numbers (`q..p` to `1..0`) and the remaining crossings carry the stock punctuation.
+- Layer 2 carries the stock cursor-mode arrows, reached by holding the Clicks key (`LT(2, KC_J)`: tap is `j`, hold is the arrow layer, matching the 9981-style hold-a-key pattern).
+- The sticky SYM key is QMK one-shot layer 1 (`OSL(1)`): tap, type one symbol, back to layer 0.
+- The report descriptor now appends a 16-bit consumer field to the 6KRO boot report (10 bytes total), keeping six-key rollover unlike stock's 4KRO plus three consumer bits. One crossing is mapped to consumer Eject (`0x00B8`), which toggles the iOS on-screen keyboard; the other two carry the stock's consumer usages (`0x01AE`, `0x029D`, semantics unverified).
+
+### Backlight, 2026-10-10
+
+The stock backlight is now decoded and ported (it is TIM1 PWM on PA8/PA9/PA10, not SPI as the earlier note guessed): prescaler 0, auto-reload 6000, duty `(0x100 - raw) * 6000 >> 8` on all three channels, MOE/ARPE/CEN per stock. The dispatcher answers the stock-shaped brightness commands: `03 82 raw` sets and persists the byte through the wear-leveled EEPROM, `02 84` reads it back (`05 02 84 00 raw`). The persisted value applies at boot. Deliberate deviation: the channels stay enabled at boot; the stock's activity-based on/off state machine (its auto-off after the configured delay) is future work, so commands `0x86`/`0x88`/`0x8a` remain unimplemented rather than lying with canned replies.
+
 ### Verification state
 
-Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, the update-protocol and keymap C tests, plus the two host harnesses below); image 22676 bytes, sha256 `8aacd6b059a586615ad6282145882318c2a8ca67a7dcfce684283f14e904b734`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly).
+Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, the update-protocol and keymap C tests, plus the two host harnesses below); image 23388 bytes, sha256 `dad34db61f2978836b0f6c8a29e72f29d491fda0401bb1d0b45928b47906b12c`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly).
 
 Two host harnesses now execute the ported code directly:
 

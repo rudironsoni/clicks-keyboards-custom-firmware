@@ -59,9 +59,39 @@ static tusb_desc_device_t const device_descriptor = {
     .bNumConfigurations = 1,
 };
 
+/* Report descriptor: 6KRO boot keyboard plus a 16-bit consumer usage,
+ * matching the stock concept (keys + consumer bits in one report) while
+ * keeping six-key rollover. Total report size is 10 bytes. */
 static uint8_t const hid_report_descriptor[] = {
-    TUD_HID_REPORT_DESC_KEYBOARD()
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x06,       /* Usage (Keyboard) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x05, 0x07,       /*   Usage Page (Key Codes) */
+    0x19, 0xE0,       /*   Usage Min (224) */
+    0x29, 0xE7,       /*   Usage Max (231) */
+    0x15, 0x00,       /*   Logical Min (0) */
+    0x25, 0x01,       /*   Logical Max (1) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x08,       /*   Report Count (8) */
+    0x81, 0x02,       /*   Input (Data, Var, Abs): modifiers */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x03,       /*   Input (Const): reserved byte */
+    0x15, 0x00,       /*   Logical Min (0) */
+    0x26, 0xFF, 0x00, /*   Logical Max (255) */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x95, 0x06,       /*   Report Count (6) */
+    0x81, 0x00,       /*   Input (Data, Array): keys */
+    0x05, 0x0C,       /*   Usage Page (Consumer) */
+    0x15, 0x00,       /*   Logical Min (0) */
+    0x26, 0xFF, 0x01, /*   Logical Max (511) */
+    0x75, 0x10,       /*   Report Size (16) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x02,       /*   Input (Data, Var, Abs): consumer usage */
+    0xC0              /* End Collection */
 };
+
+#define HID_REPORT_LEN ((uint8_t)sizeof(hid_report_descriptor)) /* 45 */
 
 /* 96 bytes, byte-exact with stock image 0x6500..0x6560. */
 static uint8_t const configuration_descriptor[] = {
@@ -71,9 +101,8 @@ static uint8_t const configuration_descriptor[] = {
     /* Interface 2: HID boot keyboard. */
     0x09, TUSB_DESC_INTERFACE, ITF_NUM_HID, 0x00, 0x02,
     0x03, 0x01, 0x01, 0x00,
-    0x09, 0x21 /* TUSB_DESC_HID */, 0x11, 0x01, 0x00, 0x01, 0x22 /* report */,
-    (uint8_t)(sizeof(hid_report_descriptor) & 0xff),
-    (uint8_t)(sizeof(hid_report_descriptor) >> 8),
+    0x09, 0x21 /* HID */, 0x11, 0x01, 0x00, 0x01, 0x22 /* report */,
+    U16_TO_U8S_LE(HID_REPORT_LEN), 0x00,
     0x07, TUSB_DESC_ENDPOINT, EPNUM_HID_IN, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(64), 0x01,
     0x07, TUSB_DESC_ENDPOINT, EPNUM_HID_OUT, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(64), 0x01,
 
