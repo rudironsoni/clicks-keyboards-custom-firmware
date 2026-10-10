@@ -25,6 +25,15 @@ cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmwar
 
 /tmp/ck5200_backlight_test
 
+# Consumer-key state machine: press/release semantics and 10-byte
+# report packing against the descriptor contract.
+cc -std=c11 -Wall -Wextra -I firmware/platform/ch32v20x \
+  tests/ck5200_consumer_test.c \
+  firmware/platform/ch32v20x/ck5200_consumer.c \
+  -o /tmp/ck5200_consumer_test
+
+/tmp/ck5200_consumer_test
+
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \
   firmware/platform/ch32v20x/ck5200_keymap.c \

@@ -29,7 +29,7 @@ enum custom_keycodes {
     CK_IOS_KB,              /* consumer Eject 0x00B8: iOS on-screen keyboard */
 };
 
-void ck5200_consumer_key(uint16_t usage, bool pressed);
+#include "ck5200_consumer.h"
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     switch (keycode) {

@@ -71,6 +71,7 @@ set(CK5200_SOURCES
     firmware/platform/ch32v20x/ck5200_staging.c
     firmware/platform/ch32v20x/ck5200_keymap.c
     firmware/platform/ch32v20x/ck5200_backlight.c
+    firmware/platform/ch32v20x/ck5200_consumer.c
     firmware/platform/ch32v20x/iap2.c
     firmware/platform/ch32v20x/iap2_auth.c
     firmware/platform/ch32v20x/wear_leveling_ch32v20x.c
