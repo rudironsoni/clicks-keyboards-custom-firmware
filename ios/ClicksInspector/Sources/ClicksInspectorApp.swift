@@ -18,6 +18,11 @@ struct ClicksInspectorApp: App {
                         Button("Close session") { inspector.closeSession() }
                     }
                     CustomFirmwareSection(inspector: inspector)
+                    if inspector.customFirmware.phaseIsCustomFirmware {
+                        KeyTestSection()
+                        SelfTestSection(inspector: inspector)
+                        LayoutPreviewSection(inspector: inspector)
+                    }
                     KeymapSection(inspector: inspector)
                     Section("Read-only stock query") {
                         Picker("Command", selection: $inspector.selectedReadCommand) {
@@ -132,17 +137,22 @@ private struct CustomFirmwareSection: View {
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware
             if sessionReady, !custom.phaseIsBusy {
-                Button("Flash custom firmware (.bin)...") { importingFirmware = true }
-                if custom.phaseIsCustomFirmware {
-                    Button("Restore stock firmware (V122)") {
-                        if let image = Self.stockImage() {
-                            confirmation = .restoreStock(image)
-                        } else {
-                            assertionFailure("bundled stock image missing")
-                        }
+                if let bundledCustom = Self.bundledCustomImage() {
+                    Button("Flash bundled custom firmware (\(bundledCustom.count) bytes)") {
+                        confirmation = .flashCustom(bundledCustom)
                     }
                 }
-                Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs.")
+                Button("Flash custom firmware (.bin)...") { importingFirmware = true }
+                // Restore works from both states: the update dialect is
+                // identical, so stock-on-stock is a valid re-flash.
+                if let image = Self.stockImage() {
+                    Button(custom.phaseIsCustomFirmware ? "Restore stock firmware (V122)" : "Re-flash stock firmware (V122)") {
+                        confirmation = .restoreStock(image)
+                    }
+                } else {
+                    assertionFailure("bundled stock image missing")
+                }
+                Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs. After the reboot, re-open the session and run the self-test to verify.")
                     .font(.caption)
             }
         }
@@ -181,6 +191,12 @@ private struct CustomFirmwareSection: View {
 
     private static func stockImage() -> [UInt8]? {
         guard let url = Bundle.main.url(forResource: "iKeyboard_CK-5200_V122_120", withExtension: "bin"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return Array(data)
+    }
+
+    private static func bundledCustomImage() -> [UInt8]? {
+        guard let url = Bundle.main.url(forResource: "ck5200_qmk", withExtension: "bin"),
               let data = try? Data(contentsOf: url) else { return nil }
         return Array(data)
     }
@@ -243,9 +259,14 @@ private struct KeymapSection: View {
                             Button {
                                 editingCell = Cell(row: row, column: column)
                             } label: {
-                                Text(keycode.map { String(format: "%04x", $0) } ?? "----")
-                                    .font(.caption.monospaced())
-                                    .frame(maxWidth: .infinity)
+                                VStack(spacing: 1) {
+                                    Text(keycode.map { KeycodeNames.shortName(for: $0) } ?? "----")
+                                        .font(.system(size: 9, design: .monospaced))
+                                    Text(keycode.map { String(format: "%04x", $0) } ?? "0000")
+                                        .font(.system(size: 7, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
                         }
@@ -276,7 +297,12 @@ private struct KeymapCellEditor: View {
 
     private static let presets: [(String, UInt16)] = [
         ("A", 0x04), ("0", 0x1e), ("Space", 0x2c), ("Enter", 0x28),
+        ("Bksp", 0x2a), ("Tab", 0x2b),
+        ("Left Shift", 0xe1), ("Left Ctrl", 0xe0), ("Left Cmd", 0xe3),
+        ("Up", 0x52), ("Down", 0x51), ("Left", 0x50), ("Right", 0x4f),
         ("MO(1)", 0x5121), ("MO(2)", 0x5122), ("MO(3)", 0x5123),
+        ("OSL(1)", 0x5281),
+        ("iOS-KB (Eject)", 0x5da3),
         ("Trans/none", 0x0000),
     ]
 

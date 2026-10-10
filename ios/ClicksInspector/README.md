@@ -64,6 +64,56 @@ Apple's [External Accessory framework](https://developer.apple.com/documentation
 
 A simulator can validate the interface and empty state. It cannot validate this physical USB-C accessory, iAP session acceptance, flash readback, or recovery. A successful stock query proves only the selected field is readable through this session. No full firmware dump is available from the implemented commands.
 
+## New capabilities, 2026-10-10
+
+The app now bundles both images and supports the full lifecycle:
+
+- **Flash custom firmware**: one tap on "Flash bundled custom firmware" (23,392 bytes, the current build), or import any `.bin` through the file picker. Works against stock firmware (first flash) and against custom firmware (re-flash/update).
+- **Restore stock firmware**: one tap on "Restore stock firmware (V122)". Works from custom firmware (restore) and from stock firmware (re-flash).
+- **Self-test**: "Run self-test" executes identify, info, reads all four layers' keymaps, verifies every position against the decoded factory layout (from `FactoryLayout.swift`), then round-trips a write on the spare crossing. Publishes a per-check pass/fail report.
+- **Key test**: a focused text field where you type on the physical keyboard; every character that appears proves the HID report path works end to end.
+- **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
+- **Keymap editor**: now shows both the readable name and the hex value per cell, with an expanded preset list including arrows and the iOS keyboard toggle.
+- **Post-flash recovery**: after flashing, the keyboard reboots and re-enumerates. Re-open the session and run the self-test to verify the flash worked. The restore-stock button is always available.
+
+## Run the focused host checks
+
+Three host-runnable checks cover the protocol, stock reads, and the new layout/keycode modules. Run from the repository root with the appropriate `DEVELOPER_DIR` if needed:
+
+```sh
+# Protocol layer (requests, accumulator, chunker).
+xcrun swiftc -module-cache-path /tmp/ck5200-swift-cache \
+  ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift \
+  ios/ClicksInspector/Tests/ck5200_protocol_check.swift \
+  -o /tmp/ck5200_protocol_check && /tmp/ck5200_protocol_check
+
+# Layout, keycodes, factory layout, self-test logic.
+xcrun swiftc -module-cache-path /tmp/ck5200-swift-cache \
+  ios/ClicksInspector/Sources/KeycodeNames.swift \
+  ios/ClicksInspector/Sources/FactoryLayout.swift \
+  ios/ClicksInspector/Sources/KeyboardSelfTest.swift \
+  ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift \
+  ios/ClicksInspector/Tests/ck5200_layout_check.swift \
+  -o /tmp/ck5200_layout_check && /tmp/ck5200_layout_check
+
+# Stock read commands.
+xcrun swiftc -module-cache-path /tmp/ck5200-swift-cache \
+  ios/ClicksInspector/Sources/StockReadCommand.swift \
+  ios/ClicksInspector/Tests/StockReadCommandTests.swift \
+  -o /tmp/ck5200-stock-read-tests && /tmp/ck5200-stock-read-tests
+```
+
+## Updating the bundled custom firmware
+
+The bundled `Resources/ck5200_qmk.bin` is the current build output from `keyboards/ck5200/build/ck5200_qmk.bin`. After rebuilding the firmware, refresh the app's copy:
+
+```sh
+cp keyboards/ck5200/build/ck5200_qmk.bin ios/ClicksInspector/Resources/ck5200_qmk.bin
+shasum -a 256 keyboards/ck5200/build/ck5200_qmk.bin ios/ClicksInspector/Resources/ck5200_qmk.bin
+```
+
+Then regenerate the Xcode project (`xcodegen generate`) and rebuild the app.
+
 ## Run the focused read-parser checks
 
 These use the production parser without an accessory or an Xcode test target. Run from the repository root with the appropriate `DEVELOPER_DIR` if needed:

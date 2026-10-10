@@ -21,6 +21,8 @@ final class CustomFirmwareController: ObservableObject {
     @Published private(set) var info: KeyboardInfo?
     @Published private(set) var selectedLayer = 0
     @Published private(set) var flashingProgress: Double = 0
+    @Published private(set) var selfTestReport: SelfTestReport?
+    @Published private(set) var selfTestRunning = false
 
     private let logger = Logger(subsystem: "com.rudironsoni.clicks-inspector", category: "custom")
     private var link: KeyboardPacketLink?
@@ -67,6 +69,85 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     // MARK: Entry points
+
+    /// Full self-test: identify, read info, read and verify every key
+    /// against the decoded factory layout, then round-trip a write on the
+    /// spare crossing. Publishes a report.
+    func runSelfTest() {
+        guard link != nil, !selfTestRunning else { return }
+        selfTestRunning = true
+        selfTestReport = nil
+        Task {
+            defer { selfTestRunning = false }
+            do {
+                var report = SelfTestReport()
+
+                // 1. Identify.
+                let versionPayload = try await perform(.version())
+                report.checks.append(KeyboardSelfTest.verifyIdentify(versionPayload))
+                guard CustomKeyboardIdentity.isCustomFirmware(versionPayload) else {
+                    report.checks.append(SelfTestCheck(name: "Aborted", passed: false,
+                                                       detail: "Firmware is not custom; keymap checks require the custom QMK firmware"))
+                    selfTestReport = report
+                    return
+                }
+
+                // 2. Info.
+                let infoPayload = try await perform(.info())
+                guard let parsed = CustomKeyboardIdentity.info(fromInfoPayload: infoPayload) else {
+                    report.checks.append(SelfTestCheck(name: "Info", passed: false, detail: "Unparseable info reply"))
+                    selfTestReport = report
+                    return
+                }
+                report.checks.append(KeyboardSelfTest.verifyInfo(parsed))
+                info = parsed
+
+                // 3. Read every key of every layer.
+                keymap = Array(repeating: Array(repeating: Array(repeating: 0, count: parsed.columns), count: parsed.rows),
+                               count: parsed.layers)
+                for layer in 0..<parsed.layers {
+                    for row in 0..<parsed.rows {
+                        for column in 0..<parsed.columns {
+                            let payload = try await perform(.getKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column)))
+                            guard payload.count == 2 else {
+                                throw CustomKeyboardError.rejected(status: 0xff)
+                            }
+                            keymap[layer][row][column] = UInt16(payload[0]) << 8 | UInt16(payload[1])
+                        }
+                    }
+                }
+                let keymapReport = KeyboardSelfTest.verifyKeymap(keymap)
+                report.checks.append(contentsOf: keymapReport.checks)
+
+                // 4. Round-trip on the spare crossing (2,3), layer 0.
+                let original = keymap[0][2][3]
+                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: 0x0014))
+                let readBackPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
+                let readBack = readBackPayload.count == 2 ? UInt16(readBackPayload[0]) << 8 | UInt16(readBackPayload[1]) : 0
+                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: original))
+                let restoredPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
+                let restored = restoredPayload.count == 2 ? UInt16(restoredPayload[0]) << 8 | UInt16(restoredPayload[1]) : 0
+                report.checks.append(KeyboardSelfTest.verifyRoundTrip(
+                    written: 0x0014, readBack: readBack, restored: restored, original: original))
+                keymap[0][2][3] = restored
+
+                selfTestReport = report
+                logger.info("Self-test: \(report.passCount)/\(report.totalCount) checks passed")
+            } catch {
+                var report = SelfTestReport()
+                report.checks.append(SelfTestCheck(name: "Transport", passed: false,
+                                                  detail: "Self-test aborted: \(error)"))
+                selfTestReport = report
+            }
+        }
+    }
+
+    /// Post-flash verification: after A0 reboot the keyboard re-enumerates.
+    /// Call this from the UI when the user re-opens the session; it
+    /// re-identifies and reports whether the expected firmware is running.
+    func verifyAfterReboot() {
+        identify()
+    }
 
     func identify() {
         guard link != nil, exchange == nil else { return }
