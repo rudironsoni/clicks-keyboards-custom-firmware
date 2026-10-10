@@ -190,12 +190,20 @@ The stock backlight is now decoded and ported (it is TIM1 PWM on PA8/PA9/PA10, n
 
 ### Verification state
 
-Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, 2 keymap-layout tests, the update-protocol, keymap, and backlight C tests, plus the two host harnesses below); image 23388 bytes, sha256 `dad34db61f2978836b0f6c8a29e72f29d491fda0401bb1d0b45928b47906b12c`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly). The full decode record with every stock address and byte table is tracked at [STOCK_DECODE.md](STOCK_DECODE.md), and every generated artifact is re-derivable from the repo alone via [tools/stock_audit/](../tools/stock_audit/).
+Offline: build passes full ELF/BIN validation; the test suite passes (5 Python tests, 2 keymap-layout tests, the update-protocol, keymap, backlight, and consumer C tests, plus the two host harnesses below and the restore-cycle harness); image 23392 bytes, sha256 `7aeb06d2478853fdd46216cea3ea81a70145ab742cf6ae6988782e6ccff3b98a`. The session bytes were derived instruction-by-instruction from the stock image and cross-checked against the public iAP2 link layer (`wiomoc/iap2`, header/flags/checksums match exactly). The full decode record with every stock address and byte table is tracked at [STOCK_DECODE.md](STOCK_DECODE.md), and every generated artifact is re-derivable from the repo alone via [tools/stock_audit/](../tools/stock_audit/). `tools/verify_history.sh` builds every commit on main standalone.
 
 Two host harnesses now execute the ported code directly:
 
 - `tests/iap2_session_test.c` (13 scenarios): compiles the real `iap2.c` against a scripted iPhone and a fake auth chip, asserting every outgoing EP2 packet byte-for-byte. Covers the attach cadence (475 ms retry, 50 ms on send failure), the pre-session reject, the sync request with its 1000 ms resends and 30-send budget, the SYN/SYN|ACK/ACK handshake sequencing, the Identify reply (full parameter walk plus string offsets), link-layer ACKs owed, the certificate stream (128-byte chunk math, 0xAA01 framing), the auth challenge relay including stock's shifted challenge copy, the session open sequence (0xAE00, status 0xAA03), RST restart, the 20-failed-peek address toggle to 0x20, the request ring's drop-when-full (7 usable slots), and a canary test proving the parser cannot read past a received packet.
 - `tests/iap2_auth_test.c` (4 scenarios): compiles the real `iap2_auth.c` with host register hooks against a waveform-level I2C slave that decodes the PA13/PA14 bit stream. Verifies START/STOP, MSB-first sampling, address and selector bytes, slave ACKs, master ACK/NACK discipline on reads, and the 3-attempt address-NACK bail.
+
+Beyond the session stack:
+
+- `tests/test_keymap_layout.py` asserts every electrical crossing of every layer against the decoded stock table and pins the LAYOUT macro to a plain row-major pass-through.
+- `tests/ck5200_backlight_test.c` runs the real backlight driver behind a host register seam and asserts every TIM1 value against the decode.
+- `tests/ck5200_consumer_test.c` pins the consumer-key state machine: press/release/replace/repeat semantics for the 16-bit usage field and the 10-byte report packing.
+- `tests/ck5200_restore_test.c` runs the complete restore path: the real update handler plus the real staging writer, the full stock and custom images through A1/A2/A3/A0 at stock's 32-byte chunk size, byte-for-byte staged-page equality, both flashing directions, repeat cycles, rejection of empty/oversized images, offset jumps, chunk overruns, and injected flash-page failures with clean recovery.
+- `tools/verify_history.sh` builds every commit on main standalone (worktree per commit), so bisect never lands on a non-building midpoint.
 
 Building these harnesses caught five real defects in the port, all fixed: empty-body control messages were dropped (stock dispatches them, which matters for `0xAA04`), the sync resend cap was 798 instead of stock's 30, a failed pending op was consumed instead of retried (stock keeps the op slot on failure), the Identify serial parameter was never emitted, and the auth read transaction fell through to the read phase after a failed address phase (stock bails after the retry loop).
 
