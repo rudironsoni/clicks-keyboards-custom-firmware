@@ -1,8 +1,8 @@
 # Build and inspect the CK-5200 image
 
-Custom installation is blocked until the stock transport and independent recovery are verified. These instructions build and inspect files; they do not establish iOS compatibility.
+Build instructions, image contract, and protocol reference. For the full flashing procedure, risk analysis, and recovery steps, see [FLASHING.md](FLASHING.md).
 
-## Existing tools
+## Build and test
 
 macOS needs CMake, Ninja, Python, and libusb. The setup script downloads a checksum-verified RISC-V toolchain and pins QMK, TinyUSB, and the WCH SDK. Run from the repository root:
 
@@ -31,43 +31,50 @@ keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/validate_image.py \
 bash keyboards/ck5200/scripts/flash-qmk.sh
 ```
 
-The old zero-based image must fail validation. The stock application can be checked without an ELF, but that is a narrower check and is labeled as such.
+## Pre-flash validation
 
-## USB reads
+Before flashing, run the preflight check:
+
+```sh
+bash keyboards/ck5200/tools/preflight_check.sh
+```
+
+This validates image integrity, both restore images, the full restore-cycle harness with real images, all host harnesses, per-commit buildability, and the Swift protocol checks. If any check fails, do not flash.
+
+## USB inspection
 
 ```sh
 keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py inspect
 ```
 
-This does not send SET_CONFIGURATION, detach drivers, or claim an interface. It establishes descriptor presence only.
+This does not send SET_CONFIGURATION, detach drivers, or claim an interface. It establishes descriptor presence only. The custom firmware reports `bcdDevice 0x9001` (the custom-firmware routing marker; stock reports `0x0122`), so the tool can distinguish the two and refuse to flash a stock keyboard by mistake.
 
-The optional `inspect --query-version` command sends `02 03`, a read-only stock version request. It currently fails against the connected iPhone firmware with `ff 55 02 00 ee 10`. The tool records the bytes and stops. See [USB_AND_IPHONE.md](USB_AND_IPHONE.md).
+The optional `inspect --query-version` command sends `02 03`, the version request. Custom firmware replies `08 02 03 00 51 4d 00 01` ("QM"); stock replies `08 02 03 00 01 20 01 22`.
 
-## Installation and restoration
-
-`install.sh` refuses installation. `flash-qmk.sh` remains offline even if `FLASH=YES` is set. The direct Python updater refuses stock-device update commands because the stock iPhone session is unsupported. Do not remove this check merely because the image builds.
-
-The existing Python update implementation remains available for the experimental custom updater only. Its status, command, offset, and commit-size checks remain mandatory. Neither a descriptor version nor an explicit confirmation proves that recovery works.
-
-Use `scripts/revert-stock.sh --download-only` to preserve the stock application. Actual transfer, power-loss behavior, boot acceptance, and stock restoration remain unverified. See [RECOVERY.md](RECOVERY.md).
-
-## Custom firmware protocol, 2026-10-09
+## Custom firmware protocol
 
 The custom image answers the stock framing `[len, cmd, ...]` on its vendor bulk endpoint, with replies `[len, 0x02, cmd, status, payload...]` (big-endian values, matching the stock protocol and QMK's dynamic keymap layout):
 
 | Command | Request | Reply | Meaning |
 | --- | --- | --- | --- |
-| `0x03` | `02 03` | 8 bytes, payload `51 4d 00 01` ("QM") | Identifies the custom firmware. Stock answers `01 20 01 22`, so the app gates all writes on this reply. |
-| `0x90` | `02 90` | 8 bytes, payload `layers rows cols flags` | Keymap dimensions. |
-| `0x91` | `05 91 layer row col` | 6 bytes, payload keycode | Read one key. |
-| `0x92` | `07 92 layer row col kc_hi kc_lo` | 4 bytes | Set one key. Durable immediately: QMK dynamic keymap over wear-leveled EEPROM (four flash pages at `0x0800F800`). |
-| `0x93` | `02 93` | 4 bytes | Reset keymap to the factory layout. |
+| `0x03` | `02 03` | 8 B, payload `51 4d 00 01` ("QM") | Identifies the custom firmware. Stock answers `01 20 01 22`, so the app gates all writes on this reply. |
+| `0x82` | `03 82 raw` | 4 B | Set backlight brightness (stock formula, persists). |
+| `0x84` | `02 84` | 5 B, payload `raw` | Read backlight brightness. |
+| `0x90` | `02 90` | 8 B, payload `layers rows cols flags` | Keymap dimensions. |
+| `0x91` | `05 91 layer row col` | 6 B, payload keycode | Read one key. |
+| `0x92` | `07 92 layer row col kc_hi kc_lo` | 4 B | Set one key. Durable immediately: QMK dynamic keymap over wear-leveled EEPROM (four flash pages at `0x0800F800`). |
+| `0x93` | `02 93` | 4 B | Reset keymap to the factory layout. |
 | `0xA1/0xA2/0xA3/0xA0` | stock update dialect | as stock | Stage an image and reboot to install. Identical to stock, so the same flow flashes the custom image onto stock firmware and restores stock onto the custom firmware. |
 
-The iOS app (see `ios/ClicksInspector/README.md`) implements all of this over the EASession:
+Commands `0x86`/`0x88`/`0x8a`/`0x8c`/`0x8d` (backlight delay, idle, other settings) are not implemented and return the unsupported-command status. They are future work, not a regression.
 
-- Against stock firmware: identify shows "stock"; Flash custom firmware (.bin)... stages the built `keyboards/ck5200/build/ck5200_qmk.bin` through A1/A2/A3 and reboots the keyboard to install. This is the same transport the official app uses for updates.
-- Against the custom firmware: the same update flow (reflash or restore the bundled stock V122 image), plus the keymap editor (layers, per-key hex keycodes, presets including MO(n), factory reset).
-- The custom firmware does not implement the Apple accessory session (MFi link and authentication), so after the first flash the phone app can no longer open a session to it: keymap editing and phone-side restore require that session, and until it exists the Mac vendor-interface path remains the working channel for restore and configuration. Flashing from the phone while stock runs, and every protocol piece in the app, are implemented and testable now.
+The dispatcher is reachable through two independent channels:
 
-Verification: `scripts/test.sh` covers the update and keymap command handlers (C), and `ios/ClicksInspector/Tests/ck5200_protocol_check.swift` covers the app's protocol layer (run with `swiftc`, prints `ok`).
+1. **The Apple session (EP3)**: once the MFi handshake completes, the phone app opens an EA session and the dispatcher runs on the raw data channel.
+2. **The Mac fallback (EP2)**: any non-iPhone host that sends dispatcher-framed packets on EP2 reaches the same dispatcher without a session. This is the recovery path that survives a broken session stack.
+
+See [FLASHING.md](FLASHING.md) for the full procedure and risk analysis.
+
+## iOS app
+
+The Clicks Inspector app (see [ios/ClicksInspector/README.md](../../ios/ClicksInspector/README.md)) implements all commands over the EASession, plus a self-test, key test, layout preview, and one-tap flash/restore with both images bundled.

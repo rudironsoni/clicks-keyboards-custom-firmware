@@ -2,7 +2,7 @@
 
 Experimental QMK port for the Clicks Keyboard Case for **iPhone 15 Pro Max**, identified here as CK-5200. The goal is a usable iOS keyboard with custom keys and layers.
 
-**Do not flash this build yet.** Stock USB session setup, independent recovery, the physical key map, and iPhone operation remain unverified. The current keymap is diagnostic, not a normal typing layout. A passing build does not establish compatibility.
+**Status: ready for first flash.** The firmware builds, validates, passes all host harnesses, and carries the full Apple session (MFi) stack, the decoded physical keymap, the backlight driver, and the update/restore dialect. The first flash is the first live hardware test. Read [FLASHING.md](keyboards/ck5200/docs/FLASHING.md) before proceeding.
 
 ## Safe local work
 
@@ -31,7 +31,9 @@ bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 
 - [Read-only iPhone accessory inspector](ios/ClicksInspector/README.md).
 - [Current status and all eight work packages](keyboards/ck5200/STATUS.md).
+- [**Flashing: procedure, risks, and recovery**](keyboards/ck5200/docs/FLASHING.md).
 - [Build and image checks](keyboards/ck5200/docs/BUILD_AND_FLASH.md).
+- [Stock decode record](keyboards/ck5200/docs/STOCK_DECODE.md).
 - [Stock recovery requirements](keyboards/ck5200/docs/RECOVERY.md).
 - [iPhone acceptance and USB evidence](keyboards/ck5200/docs/USB_AND_IPHONE.md).
 - [Hardware evidence and open questions](keyboards/ck5200/docs/HARDWARE.md).

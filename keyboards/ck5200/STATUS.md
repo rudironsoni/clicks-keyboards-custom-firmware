@@ -1,6 +1,6 @@
-# CK-5200 status, 2026-10-08
+# CK-5200 status, 2026-10-10
 
-**Target: Clicks for iPhone 15 Pro Max. Custom firmware is not ready to flash.**
+**Target: Clicks for iPhone 15 Pro Max. Custom firmware is ready for its first flash.** See [FLASHING.md](docs/FLASHING.md) for the procedure, risk analysis, and validation checklist.
 
 ## Work package results
 
