@@ -55,7 +55,7 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
         case .updateRejected(let at, let status):
             "Update failed at \(at); status 0x\(String(status, radix: 16))"
         case .timedOut:
-            "The keyboard did not answer in time; nothing was committed and the update can be retried safely"
+            "The keyboard did not answer in time"
         case .invalidImage(let reason):
             "Firmware image rejected: \(reason)"
         }
@@ -66,6 +66,22 @@ struct KeyboardInfo: Equatable {
     let layers: Int
     let rows: Int
     let columns: Int
+}
+
+/// Which images this build is allowed to flash (review 2026-10-12).
+///
+/// The ONLY authorized artifact is the official stock V122 application image,
+/// identified by its recorded SHA-256 (the same hash pinned by
+/// keyboards/ck5200/tools/preflight_check.sh). Custom QMK flashing is closed
+/// until a separately reviewed CH32X035 image is authorized: the bundled QMK
+/// image is CH32V203-built and would not boot on the keyboard. The
+/// controller refuses every image that is not the authorized stock artifact
+/// while customFirmwareFlashingEnabled is false, independent of the UI.
+enum CustomKeyboardImageAuthorization {
+    static let authorizedStockSHA256 = "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
+
+    /// Closed until a separately reviewed CH32X035 image exists.
+    static let customFirmwareFlashingEnabled = false
 }
 
 /// Structural validation of a CK-5200 application image, the same checks
@@ -125,6 +141,11 @@ enum CustomKeyboardCommand {
 
     // Requests.
     static let versionRequest: [UInt8] = [0x02, 0x03]
+
+    /// The stock firmware identity the connected keyboard must report
+    /// before the stock-reflash path may run (live iPhone read, recorded in
+    /// keyboards/ck5200/docs/USB_AND_IPHONE.md).
+    static let stockVersionPayload: [UInt8] = [0x01, 0x20, 0x01, 0x22]
     static let infoRequest: [UInt8] = [0x02, 0x90]
     static let resetRequest: [UInt8] = [0x02, 0x93]
 
@@ -260,11 +281,15 @@ enum CustomKeyboardIdentity {
     }
 }
 
-/// Splits an image into the A2 chunk sequence, driving offsets from the
-/// device reply as the stock updater does.
+/// Splits an image into the A2 chunk sequence. The stock handler
+/// acknowledges a complete chunk by returning the new cumulative offset
+/// (stock 0x3810..0x3812); any other acknowledgement value aborts the
+/// transaction: zero progress, partial acknowledgement, backward movement,
+/// and forward jumps are all rejections (review 2026-10-12).
 struct UpdateChunker {
     let image: [UInt8]
     private(set) var offset: Int = 0
+    private var lastChunkCount = 0
 
     init(image: [UInt8]) throws {
         guard !image.isEmpty else { throw CustomKeyboardError.imageTooLarge(size: 0) }
@@ -276,18 +301,23 @@ struct UpdateChunker {
 
     var finished: Bool { offset >= image.count }
 
-    var nextExchange: CustomKeyboardExchange? {
+    mutating func nextExchange() -> CustomKeyboardExchange? {
         guard !finished else { return nil }
         let end = min(offset + CustomKeyboardCommand.chunkSize, image.count)
+        lastChunkCount = end - offset
         return CustomKeyboardExchange.writeUpdate(offset: offset, chunk: image[offset..<end])
     }
 
-    /// Applies the accepted offset from the A2 reply.
+    /// Applies the accepted offset from the A2 reply: it must equal exactly
+    /// the end of the chunk that was just sent.
     mutating func applyAcceptedOffset(_ value: UInt32) throws {
         let accepted = Int(value)
-        guard accepted >= offset, accepted <= image.count else {
-            throw CustomKeyboardError.updateRejected(at: "chunk offset \(accepted)", status: 0x01)
+        guard lastChunkCount > 0, accepted == offset + lastChunkCount else {
+            throw CustomKeyboardError.updateRejected(
+                at: "chunk acknowledgement \(accepted), expected \(offset + lastChunkCount)",
+                status: 0x01)
         }
         offset = accepted
+        lastChunkCount = 0
     }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 
@@ -14,7 +15,39 @@ final class CustomFirmwareController: ObservableObject {
         case customFirmware(String)
         case busy(String)
         case failed(String)
+        /// An update was sent but its installation was never verified.
+        /// Retained across reconnects and relaunches until the user
+        /// explicitly reconciles it (review 2026-10-12).
+        case updateUnverified(String)
     }
+
+    /// Identity of the connected keyboard, set by the session owner before
+    /// any flash may run (review 2026-10-12: flashing requires the target's
+    /// model and hardware revision, not just a working link).
+    struct ConnectedTarget: Equatable {
+        let model: String
+        let firmwareRevision: String
+        let hardwareRevision: String
+    }
+
+    /// An update whose outcome has not been verified yet. Persisted in
+    /// UserDefaults so relaunching the app cannot silently turn an
+    /// unresolved transaction into an ordinary idle state (review
+    /// 2026-10-12).
+    struct PendingUpdate: Codable, Equatable {
+        enum Outcome: String, Codable {
+            /// A3's reply was lost: the image may already be committed.
+            case commitUnknown
+            /// A3 committed and A0 was sent; installation not yet verified.
+            case sentRebootPending
+        }
+        let imageSHA256: String
+        let imageSize: Int
+        let date: Date
+        let outcome: Outcome
+    }
+
+    private static let pendingUpdateKey = "ck5200.pendingUpdate"
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var keymap: [[[UInt16]]] = [] // [layer][row][col]
@@ -32,11 +65,63 @@ final class CustomFirmwareController: ObservableObject {
     private var rebootTask: Task<Void, Never>?
     private var awaitingReboot = false
 
+    /// Synchronous single-operation guard, set and cleared on the main
+    /// actor before any Task runs, so two rapid submissions cannot both
+    /// pass (review 2026-10-12).
+    private var flashInFlight = false
+
+    /// The connected keyboard's reported identity, and the version payload
+    /// from the last successful identify. Flashing requires both (review
+    /// 2026-10-12: an unrecognized version reply must not authorize it).
+    /// Set by the session owner when the accessory connects.
+    var connectedTarget: ConnectedTarget?
+    private(set) var lastVersionPayload: [UInt8]?
+    private(set) var pendingUpdate: PendingUpdate?
+
     /// Per-exchange timeout, and the window after A0 in which the keyboard
     /// must reboot (its session dies). Injectable so the host check can
     /// exercise the timeout paths quickly (review 2026-10-11, F-7).
     var exchangeTimeoutNanos: UInt64 = 5_000_000_000
     var rebootConfirmTimeoutNanos: UInt64 = 10_000_000_000
+
+    init() {
+        pendingUpdate = Self.loadPendingUpdate()
+    }
+
+    /// Host-test hook: clear the persisted unresolved-update record.
+    static func resetPendingUpdateForTesting() {
+        UserDefaults.standard.removeObject(forKey: pendingUpdateKey)
+    }
+
+    private static func loadPendingUpdate() -> PendingUpdate? {
+        guard let data = UserDefaults.standard.data(forKey: pendingUpdateKey) else { return nil }
+        return try? JSONDecoder().decode(PendingUpdate.self, from: data)
+    }
+
+    private func recordPendingUpdate(imageSHA256: String, imageSize: Int, outcome: PendingUpdate.Outcome) {
+        let record = PendingUpdate(imageSHA256: imageSHA256, imageSize: imageSize, date: Date(), outcome: outcome)
+        pendingUpdate = record
+        if let data = try? JSONEncoder().encode(record) {
+            UserDefaults.standard.set(data, forKey: Self.pendingUpdateKey)
+        }
+    }
+
+    /// Explicit reconciliation only (review 2026-10-12): reconnecting or
+    /// relaunching must never silently clear an unresolved update.
+    func markPendingUpdateVerified() {
+        guard pendingUpdate != nil else { return }
+        pendingUpdate = nil
+        UserDefaults.standard.removeObject(forKey: Self.pendingUpdateKey)
+        if link != nil {
+            identify()
+        } else {
+            phase = .idle
+        }
+    }
+
+    private static func sha256Hex(_ bytes: [UInt8]) -> String {
+        SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
+    }
 
     var layers: Int { info?.layers ?? 0 }
     var rows: Int { info?.rows ?? 0 }
@@ -55,10 +140,12 @@ final class CustomFirmwareController: ObservableObject {
             self.rebootTask = nil
             if self.awaitingReboot {
                 /* Expected: the keyboard reboots to install after A0, which
-                 * kills the session. Not an error. */
+                 * kills the session. A lost session proves the reboot, not
+                 * the installation: retain the unverified state until the
+                 * user reconnects and verifies (review 2026-10-12). */
                 self.awaitingReboot = false
                 self.resumePending(with: CustomKeyboardError.transportUnavailable)
-                self.phase = .idle
+                self.phase = .updateUnverified("Update sent; the keyboard is rebooting to install. Reconnect and verify before relying on it.")
                 return
             }
             /* Resume whatever exchange was in flight so the UI fails
@@ -178,6 +265,9 @@ final class CustomFirmwareController: ObservableObject {
     /// Post-flash verification: after A0 reboot the keyboard re-enumerates.
     /// Call this from the UI when the user re-opens the session; it
     /// re-identifies and reports whether the expected firmware is running.
+    /// Post-flash verification (review 2026-10-12): re-identify after a
+    /// reboot; the unresolved-update state persists until the user
+    /// explicitly marks it verified.
     func verifyAfterReboot() {
         identify()
     }
@@ -188,11 +278,27 @@ final class CustomFirmwareController: ObservableObject {
         Task {
             do {
                 let payload = try await perform(.version())
+                lastVersionPayload = payload
+                let identified: Phase
                 if CustomKeyboardIdentity.isCustomFirmware(payload) {
-                    phase = .customFirmware("Custom QMK firmware detected")
-                    try await loadKeymap()
+                    identified = .customFirmware("Custom QMK firmware detected")
+                } else if payload == CustomKeyboardCommand.stockVersionPayload {
+                    identified = .stockFirmware("Stock firmware detected; flashing and stock reads available, keymap editing is not")
                 } else {
-                    phase = .stockFirmware("Stock firmware detected; flashing and stock reads available, keymap editing is not")
+                    identified = .stockFirmware("Unrecognized firmware identity \(payload.map { String(format: "%02x", $0) }.joined()); flashing is refused")
+                }
+                if pendingUpdate != nil {
+                    /* An unresolved update is never silently resolved by a
+                     * reconnect (review 2026-10-12). */
+                    phase = .updateUnverified("Connected and identified, but a previous update (sha256 \(pendingUpdate!.imageSHA256.prefix(12))…) is not verified. Mark it verified only after the keyboard works.")
+                    if case .customFirmware = identified {
+                        try await loadKeymap()
+                    }
+                } else {
+                    phase = identified
+                    if case .customFirmware = identified {
+                        try await loadKeymap()
+                    }
                 }
             } catch {
                 fail("Identify failed; \(error)")
@@ -260,25 +366,80 @@ final class CustomFirmwareController: ObservableObject {
     /// Stages an image with A1/A2/A3, then optionally reboots (A0) to install.
     /// Works against stock firmware (first flash) and custom firmware
     /// (updates and restore-to-stock): the update dialect is identical.
+    ///
+    /// Authorization (review 2026-10-12): while the custom-flashing gate is
+    /// closed, the ONLY image this build may stage is the exact authorized
+    /// stock V122 artifact (SHA-256 pinned), and only onto a target that
+    /// identifies as the expected CK-5200 stock unit.
     func flash(image: [UInt8], rebootToInstall: Bool) {
         guard link != nil else {
             fail("No connection; cannot flash")
             return
         }
-        if case .busy = phase { return } /* reentrancy guard */
+        if pendingUpdate != nil {
+            phase = .updateUnverified("A previous update (sha256 \(pendingUpdate!.imageSHA256.prefix(12))…) is unresolved. Verify it before flashing anything else.")
+            return
+        }
+        /* Synchronous single-operation guard, before any Task is created:
+         * two rapid submissions cannot both pass (review 2026-10-12). */
+        guard !flashInFlight else { return }
+        flashInFlight = true
+
+        /* Target identity: flashing requires the connected keyboard to be
+         * the expected CK-5200 (review 2026-10-12). */
+        guard let target = connectedTarget else {
+            flashInFlight = false
+            fail("The connected keyboard's identity is unknown; refusing to flash.")
+            return
+        }
+        guard target.model == "CK-5200", target.hardwareRevision == "1.2.0" else {
+            flashInFlight = false
+            fail("Connected keyboard is \(target.model), hardware \(target.hardwareRevision); expected CK-5200 hardware 1.2.0. Refusing to flash.")
+            return
+        }
+        let imageSHA256 = Self.sha256Hex(image)
+        let isAuthorizedStock = imageSHA256 == CustomKeyboardImageAuthorization.authorizedStockSHA256
+        if isAuthorizedStock {
+            guard target.firmwareRevision == "1.2.2",
+                  lastVersionPayload == CustomKeyboardCommand.stockVersionPayload else {
+                flashInFlight = false
+                fail("Unrecognized firmware identity; refusing to flash. Expected CK-5200 stock 1.2.2 (version payload 01 20 01 22).")
+                return
+            }
+        } else if !CustomKeyboardImageAuthorization.customFirmwareFlashingEnabled {
+            flashInFlight = false
+            fail("Image refused: only the bundled stock V122 artifact is authorized in this build (sha256 \(imageSHA256.prefix(12))…). Custom firmware flashing is disabled until a separately reviewed CH32X035 image is authorized.")
+            return
+        } else {
+            guard let version = lastVersionPayload,
+                  CustomKeyboardIdentity.isCustomFirmware(version) || version == CustomKeyboardCommand.stockVersionPayload else {
+                flashInFlight = false
+                fail("Unrecognized firmware identity; refusing to flash.")
+                return
+            }
+        }
         do {
             try CustomKeyboardImageValidation.validate(image: image)
         } catch {
+            flashInFlight = false
             fail("Rejected image; \(error)")
             return
         }
+        phase = .busy("Starting update session")
         Task {
+            defer { flashInFlight = false }
             do {
-                phase = .busy("Starting update session")
                 flashingProgress = 0
-                _ = try await performWithRetry(.beginUpdate(size: image.count))
+                let beginReply = try await performWithRetry(.beginUpdate(size: image.count))
+                /* A1 payload: the advertised maximum image size (review
+                 * 2026-10-12: the app previously ignored it). */
+                guard beginReply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
+                let advertisedMaximum = Int(beginReply.reduce(0) { ($0 << 8) | UInt32($1) })
+                guard image.count <= advertisedMaximum else {
+                    throw CustomKeyboardError.updateRejected(at: "advertised maximum \(advertisedMaximum)", status: 0x01)
+                }
                 var chunker = try UpdateChunker(image: image)
-                while let next = chunker.nextExchange {
+                while let next = chunker.nextExchange() {
                     phase = .busy("Writing \(chunker.offset)/\(image.count) bytes")
                     let reply = try await performWithRetry(next)
                     guard reply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
@@ -286,7 +447,26 @@ final class CustomFirmwareController: ObservableObject {
                     flashingProgress = Double(chunker.offset) / Double(image.count)
                 }
                 phase = .busy("Finalizing update")
-                _ = try await performWithRetry(.finishUpdate(size: image.count))
+                /* A3 is never retried (review 2026-10-12): a lost reply after
+                 * a successful commit is indistinguishable from a failed
+                 * commit, so a blind resend is not safe. Surface the
+                 * ambiguity and keep it recorded until it is reconciled. */
+                let finishReply: [UInt8]
+                do {
+                    finishReply = try await perform(.finishUpdate(size: image.count))
+                } catch CustomKeyboardError.timedOut {
+                    recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .commitUnknown)
+                    fail("The final step's outcome is UNKNOWN: the update may already be committed and its reply was lost. Do not assume nothing was written. The image installs on the next keyboard reboot; reconnect and verify before doing anything else.")
+                    return
+                }
+                /* A3 payload: the committed size must equal the intended
+                 * image size exactly (review 2026-10-12). */
+                guard finishReply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
+                let committed = finishReply.reduce(0) { ($0 << 8) | UInt32($1) }
+                guard committed == image.count else {
+                    throw CustomKeyboardError.updateRejected(at: "committed size \(committed), expected \(image.count)", status: 0x01)
+                }
+                recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .sentRebootPending)
                 if rebootToInstall {
                     /* A0 asks the keyboard to reboot into the installer; the
                      * reboot kills the session. Keep the case attached. */
@@ -301,7 +481,7 @@ final class CustomFirmwareController: ObservableObject {
                         self.rebootNotConfirmed()
                     }
                 } else {
-                    phase = .customFirmware("Update staged; it installs on the next keyboard reboot.")
+                    phase = .updateUnverified("Update staged; it installs on the next keyboard reboot. Verify after it restarts.")
                 }
             } catch {
                 /* onClosed already reported the real cause (link closed);
@@ -314,20 +494,24 @@ final class CustomFirmwareController: ObservableObject {
 
     /// The session did not die within the confirmation window after A0:
     /// the image is staged (A3 committed), so it installs on the next
-    /// power cycle, but the reboot may not have been delivered.
+    /// power cycle, but the reboot may not have been delivered. The
+    /// installation stays unverified either way (review 2026-10-12).
     private func rebootNotConfirmed() {
         guard awaitingReboot else { return }
         awaitingReboot = false
-        phase = .failed("The keyboard did not reboot after the update command. The image is staged and installs on the next power cycle; it is safe to retry the update.")
+        phase = .updateUnverified("The keyboard did not reboot after the update command. The image is staged and installs on the next power cycle. Verify before relying on the keyboard.")
     }
 
     // MARK: Exchange plumbing
 
-    /// One bounded retry on a timeout. A1 and A3 are idempotent (A1 re-inits
-    /// staging, which is what a fresh cycle does anyway). For A2 the retry
-    /// covers a lost request; a lost reply after the device accepted the
-    /// chunk surfaces as an offset rejection, which fails the update
-    /// cleanly, and the next full attempt resyncs via A1.
+    /// One bounded retry on a timeout, for A1 and A2 only (review
+    /// 2026-10-12). A1 re-inits staging, which is what a fresh cycle does
+    /// anyway. For A2 the retry covers a lost request; a lost reply after
+    /// the device accepted the chunk surfaces as an offset rejection, which
+    /// fails the update cleanly, and the next full attempt resyncs via A1.
+    /// A3 is NEVER retried: a lost reply after a successful commit is
+    /// indistinguishable from a failed commit, so the finish path handles
+    /// its timeout separately as a commit-unknown outcome.
     private func performWithRetry(_ exchange: CustomKeyboardExchange) async throws -> [UInt8] {
         do {
             return try await perform(exchange)

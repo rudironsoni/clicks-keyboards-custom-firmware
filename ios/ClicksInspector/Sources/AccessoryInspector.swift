@@ -4,52 +4,28 @@ import Foundation
 import OSLog
 
 @MainActor
-final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, KeyboardPacketLink {
+final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     static let supportedProtocol = "com.clickscompanion.protocol"
 
     let customFirmware = CustomFirmwareController()
-    private var linkOnFragment: (([UInt8]) -> Void)?
-    private var linkOnClosed: ((String) -> Void)?
-    private var customOutbox: [UInt8] = []
+    private var customStreamLink: StreamLink?
     private var customLinkAttached = false
-
-    var onFragment: (([UInt8]) -> Void)? {
-        get { linkOnFragment }
-        set { linkOnFragment = newValue }
-    }
-
-    var onClosed: ((String) -> Void)? {
-        get { linkOnClosed }
-        set { linkOnClosed = newValue }
-    }
-
-    func send(_ bytes: [UInt8]) {
-        customOutbox.append(contentsOf: bytes)
-        drainCustomOutbox()
-    }
-
-    func close() {
-        // The EASession lifecycle is owned by the inspector itself.
-        customLinkAttached = false
-        customOutbox.removeAll()
-    }
-
-    private func drainCustomOutbox() {
-        guard let output = session?.outputStream else { return }
-        while !customOutbox.isEmpty, output.hasSpaceAvailable {
-            let written = customOutbox.withUnsafeBufferPointer { buffer -> Int in
-                guard let base = buffer.baseAddress else { return 0 }
-                return output.write(base, maxLength: customOutbox.count)
-            }
-            guard written > 0 else { return }
-            customOutbox.removeFirst(written)
-        }
-    }
 
     private func attachCustomFirmwareLink() {
         guard !customLinkAttached else { return }
         customLinkAttached = true
-        customFirmware.attach(self)
+        /* The custom protocol now flows through the host-testable stream
+         * adapter; the inspector keeps servicing the dual-use session
+         * streams and the read-only stock query path (review 2026-10-12). */
+        let link = StreamLink(output: session?.outputStream)
+        customStreamLink = link
+        if let accessory = session?.accessory {
+            customFirmware.connectedTarget = CustomFirmwareController.ConnectedTarget(
+                model: accessory.modelNumber,
+                firmwareRevision: accessory.firmwareRevision,
+                hardwareRevision: accessory.hardwareRevision)
+        }
+        customFirmware.attach(link)
     }
 
     enum SessionState {
@@ -209,15 +185,13 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, Keyb
         pendingRead = nil
         if customLinkAttached {
             customLinkAttached = false
-            customOutbox.removeAll()
-            let onClosed = linkOnClosed
-            linkOnFragment = nil
-            linkOnClosed = nil
-            /* Notify the controller so it drops the link, resumes any
-             * in-flight exchange, and sets its phase; without this a
-             * session death mid-flash hung the app in .busy forever
-             * (review 2026-10-11, F-7). */
-            onClosed?(reason)
+            /* Notify the controller exactly once: it drops the link, resumes
+             * any in-flight exchange, and retains its unresolved-update
+             * state; without this a session death mid-flash hung the app in
+             * .busy forever (review 2026-10-11, F-7). */
+            customStreamLink?.handleLoss(reason)
+            customStreamLink = nil
+            customFirmware.connectedTarget = nil
         }
         if let session {
             let streams: [Stream?] = [session.inputStream, session.outputStream]
@@ -320,7 +294,10 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, Keyb
                 if pendingRead != nil {
                     receiveReadFragment(received)
                 } else if customLinkAttached {
-                    linkOnFragment?(received)
+                    /* Fragments forward exactly as delivered, in order;
+                     * reassembly is the controller's job (review
+                     * 2026-10-12). */
+                    customStreamLink?.handleBytes(received)
                 } else {
                     log("Unsolicited input received \(count) bytes; payload discarded")
                 }
@@ -333,7 +310,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, Keyb
         }
         if event.contains(.hasSpaceAvailable), stream === session.outputStream {
             writePendingReadIfPossible()
-            drainCustomOutbox()
+            customStreamLink?.drain()
         }
     }
 

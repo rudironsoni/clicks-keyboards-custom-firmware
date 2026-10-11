@@ -108,25 +108,20 @@ struct ClicksInspectorApp: App {
     }
 }
 
-/// Firmware actions: flash the QMK image (works against stock, which shares
-/// the A1/A2/A3/A0 update dialect, and against the custom firmware), restore
-/// the bundled stock image, and reset the keymap on custom firmware.
+/// Firmware actions (review 2026-10-12): while the custom-flashing gate is
+/// closed, the ONLY available operation is restoring/reflashing the bundled
+/// official stock V122 artifact. The controller independently refuses any
+/// other image, so the UI removal is defense in depth, not the gate itself.
+/// An update whose installation was never verified stays visible until the
+/// user explicitly reconciles it.
 private struct CustomFirmwareSection: View {
     @ObservedObject var inspector: AccessoryInspector
     @ObservedObject var custom: CustomFirmwareController
-    @State private var importingFirmware = false
     @State private var confirmation: Confirmation?
-    @State private var importError: String?
 
     private enum Confirmation: Identifiable {
-        case flashCustom([UInt8])
         case restoreStock([UInt8])
-        var id: String {
-            switch self {
-            case .flashCustom: "flash-custom"
-            case .restoreStock: "restore-stock"
-            }
-        }
+        var id: String { "restore-stock" }
     }
 
     init(inspector: AccessoryInspector) {
@@ -145,16 +140,19 @@ private struct CustomFirmwareSection: View {
                 Text(message)
                 ProgressView(value: custom.flashingProgress)
             case .failed(let message): Text(message)
+            case .updateUnverified(let message):
+                Text(message)
+                .font(.callout)
+                Button("Mark update verified") {
+                    custom.markPendingUpdateVerified()
+                }
+                .disabled(custom.pendingUpdate == nil)
+                Text("The update is only verified when the keyboard works: type on it, run the self-test, then mark it verified.")
+                    .font(.caption)
             }
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware
             if sessionReady, !custom.phaseIsBusy {
-                if let bundledCustom = Self.bundledCustomImage() {
-                    Button("Flash bundled custom firmware (\(bundledCustom.count) bytes)") {
-                        confirmation = .flashCustom(bundledCustom)
-                    }
-                }
-                Button("Flash custom firmware (.bin)...") { importingFirmware = true }
                 // Restore works from both states: the update dialect is
                 // identical, so stock-on-stock is a valid re-flash.
                 if let image = Self.stockImage() {
@@ -162,39 +160,19 @@ private struct CustomFirmwareSection: View {
                         confirmation = .restoreStock(image)
                     }
                 } else {
-                    assertionFailure("bundled stock image missing")
+                    Text("Bundled stock image missing from the app bundle.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
-                Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs. After the reboot, re-open the session and run the self-test to verify.")
+                Text("Custom firmware flashing is disabled in this build: no CH32X035 image has been authorized (the bundled QMK image is built for the wrong MCU and the controller refuses it). Only the bundled stock V122 artifact can be staged.")
                     .font(.caption)
-            }
-        }
-        .fileImporter(isPresented: $importingFirmware, allowedContentTypes: [.data]) { result in
-            switch result {
-            case .success(let url):
-                guard url.startAccessingSecurityScopedResource(),
-                      let image = try? Data(contentsOf: url) else { return }
-                defer { url.stopAccessingSecurityScopedResource() }
-                let bytes = Array(image)
-                /* Reject anything that is not a structurally valid CK-5200
-                 * image before it can reach the flash button (review
-                 * 2026-10-11, F-2). */
-                do {
-                    try CustomKeyboardImageValidation.validate(image: bytes)
-                    importError = nil
-                    confirmation = .flashCustom(bytes)
-                } catch {
-                    importError = "\(error)"
-                }
-            case .failure:
-                break
+                Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs. After the reboot, re-open the session and verify before relying on the keyboard.")
+                    .font(.caption)
             }
         }
         .sheet(item: $confirmation) { confirmation in
             let (title, detail): (String, String) = {
                 switch confirmation {
-                case .flashCustom(let image):
-                    ("Flash custom firmware",
-                     "Stages \(image.count) bytes (sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install. Keep the case attached until it restarts.")
                 case .restoreStock(let image):
                     ("Restore stock firmware",
                      "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.")
@@ -202,15 +180,10 @@ private struct CustomFirmwareSection: View {
             }()
             ConfirmationView(title: title, detail: detail) {
                 switch confirmation {
-                case .flashCustom(let image), .restoreStock(let image):
+                case .restoreStock(let image):
                     custom.flash(image: image, rebootToInstall: true)
                 }
             }
-        }
-        if let importError {
-            Text("Import rejected: \(importError)")
-                .font(.caption)
-                .foregroundStyle(.red)
         }
     }
 
@@ -220,12 +193,6 @@ private struct CustomFirmwareSection: View {
 
     private static func stockImage() -> [UInt8]? {
         guard let url = Bundle.main.url(forResource: "iKeyboard_CK-5200_V122_120", withExtension: "bin"),
-              let data = try? Data(contentsOf: url) else { return nil }
-        return Array(data)
-    }
-
-    private static func bundledCustomImage() -> [UInt8]? {
-        guard let url = Bundle.main.url(forResource: "ck5200_qmk", withExtension: "bin"),
               let data = try? Data(contentsOf: url) else { return nil }
         return Array(data)
     }
@@ -304,7 +271,7 @@ private struct KeymapSection: View {
                 Button("Reset keymap to factory") { custom.resetKeymap() }
                 Text("Each applied key persists in the keyboard's flash immediately.")
                     .font(.caption)
-            case .idle, .identifying, .stockFirmware, .busy, .failed:
+            case .idle, .identifying, .stockFirmware, .busy, .failed, .updateUnverified:
                 Text("Keymap editing is available when the custom QMK firmware is connected.")
                     .font(.caption)
             }
@@ -364,7 +331,7 @@ private struct KeymapCellEditor: View {
     }
 }
 
-private extension CustomFirmwareController {
+extension CustomFirmwareController {
     var phaseIsStockFirmware: Bool {
         if case .stockFirmware = phase { return true }
         return false
