@@ -60,11 +60,24 @@ void iap2_auth_init(void) {
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
     iap2_io_cfghr_write((iap2_io_cfghr_read() & CFGHR_SDA_MASK) | CFGHR_SCL_OUTPUT | CFGHR_SDA_OUTPUT);
     iap2_io_bsr_write(SCL_SET | SDA_SET);
-    /* Stock reads its clock-derived delay global (gp-0x7e0) and scales it;
-     * SystemCoreClock gives the same result without the hidden global. */
-    auth_bit_delay = SystemCoreClock / 4000000u; /* ~2 half-bit delays per 100 kHz bit */
+    /* Stock drives a ~1.5 us half-bit at 48 MHz: 0x5350 computes
+     * 60000000 / (16 * 50000) = 75 into gp-0x7e0, and 0x501a uses
+     * 75 >> 2 = 18 iterations of a ~4-cycle loop = 72 cycles. This
+     * loop body is ~3 cycles per iteration, so scale the iteration
+     * count with the core clock to hold the same wall-clock half-bit:
+     * at 144 MHz, 72 iterations give 216-288 cycles (1.5-2.0 us,
+     * ~330-250 kHz SCL). Never faster than stock. The old
+     * SystemCoreClock/4000000 constant (36 iterations) ran the bus
+     * ~2x faster than stock on the least-documented chip in the
+     * system, and its "100 kHz" comment was false (review 2026-10-11,
+     * F-4). */
+    auth_bit_delay = SystemCoreClock / 2000000u;
     if (auth_bit_delay == 0) auth_bit_delay = 1;
 }
+
+#ifdef IAP2_AUTH_HOST_TEST
+uint32_t iap2_auth_host_bit_delay(void) { return auth_bit_delay; }
+#endif
 
 static void i2c_start(void) {
     /* Stock 0x4ff6: SDA high, SCL high, SDA falls while SCL high, SCL low. */

@@ -318,6 +318,12 @@ int main(void) {
     RUN(address_nack_retries);
     RUN(peek_and_cmd_selectors);
 
+    /* Timing constant: stock wall-clock equivalence at 144 MHz
+     * (review 2026-10-11, F-4). */
+    iap2_auth_init();
+    assert(SystemCoreClock == 144000000u);
+    assert(iap2_auth_host_bit_delay() == 72);
+
     printf("ok %d\n", passed);
     return 0;
 }

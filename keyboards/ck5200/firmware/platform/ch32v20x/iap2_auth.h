@@ -29,3 +29,9 @@ bool iap2_auth_read(uint8_t addr, uint8_t selector, uint8_t *buf, size_t len);
 #define IAP2_AUTH_SEL_CHALLENGE 0x21u /* write challenge bytes */
 #define IAP2_AUTH_SEL_PEEK     0x30u /* read BE16 pending message length */
 #define IAP2_AUTH_SEL_CHUNK_BASE 0x31u /* + chunk cursor: read message chunk */
+
+#ifdef IAP2_AUTH_HOST_TEST
+/* Host-test hook: the computed half-bit delay (timing regression, review
+ * 2026-10-11 F-4). */
+uint32_t iap2_auth_host_bit_delay(void);
+#endif
