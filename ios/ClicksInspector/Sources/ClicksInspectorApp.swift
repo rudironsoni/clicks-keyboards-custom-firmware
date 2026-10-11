@@ -153,18 +153,26 @@ private struct CustomFirmwareSection: View {
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware
             if sessionReady, !custom.phaseIsBusy {
-                // Restore works from both states: the update dialect is
-                // identical, so stock-on-stock is a valid re-flash.
-                if let image = Self.stockImage() {
-                    Button(custom.phaseIsCustomFirmware ? "Restore stock firmware (V122)" : "Re-flash stock firmware (V122)") {
-                        confirmation = .restoreStock(image)
+                // The stock re-flash is authorized ONLY for a connected
+                // keyboard that identifies as the expected STOCK unit
+                // (review 2026-10-13, P1): the controller's gate requires
+                // stock 1.2.2, so offering the button while custom QMK runs
+                // would promise an operation the controller rejects.
+                if custom.phaseIsStockFirmware {
+                    if let image = Self.stockImage() {
+                        Button("Re-flash stock firmware (V122)") {
+                            confirmation = .restoreStock(image)
+                        }
+                    } else {
+                        Text("Bundled stock image missing from the app bundle.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 } else {
-                    Text("Bundled stock image missing from the app bundle.")
+                    Text("Restoring stock from custom firmware is not available in this build: it needs its own authorization and verification path. The controller refuses the operation.")
                         .font(.caption)
-                        .foregroundStyle(.red)
                 }
-                Text("Custom firmware flashing is disabled in this build: no CH32X035 image has been authorized (the bundled QMK image is built for the wrong MCU and the controller refuses it). Only the bundled stock V122 artifact can be staged.")
+                Text("Custom firmware flashing is disabled in this build: no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized until a separately reviewed image is approved; the controller refuses it. Only the bundled stock V122 artifact can be staged, and only onto a stock CK-5200.")
                     .font(.caption)
                 Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs. After the reboot, re-open the session and verify before relying on the keyboard.")
                     .font(.caption)
@@ -174,7 +182,7 @@ private struct CustomFirmwareSection: View {
             let (title, detail): (String, String) = {
                 switch confirmation {
                 case .restoreStock(let image):
-                    ("Restore stock firmware",
+                    ("Re-flash stock firmware",
                      "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.")
                 }
             }()

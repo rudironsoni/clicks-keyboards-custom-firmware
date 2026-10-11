@@ -68,8 +68,8 @@ A simulator can validate the interface and empty state. It cannot validate this 
 
 The app now bundles both images and supports the full lifecycle:
 
-- **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized, and the bundled QMK image is built for the wrong MCU family. The controller refuses any image that is not the authorized stock artifact; the buttons and the import path are removed until a separately reviewed image exists.
-- **Restore stock firmware**: one tap on "Restore stock firmware (V122)" (or "Re-flash stock firmware" while stock runs). The only operation the controller authorizes: the exact bundled V122 artifact after the keyboard identifies as the expected CK-5200 stock unit (model CK-5200, hardware 1.2.0, firmware 1.2.2, version payload 01 20 01 22).
+- **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized; the controller refuses any image that is not the authorized stock artifact, and the buttons and the import path are removed until a separately reviewed image exists.
+- **Restore stock firmware**: one tap on "Re-flash stock firmware (V122)", offered ONLY while the keyboard identifies as the expected stock unit (model CK-5200, hardware 1.2.0, firmware 1.2.2, version payload 01 20 01 22). Restoring stock from custom firmware is not offered: that path needs its own authorization and verification first (2026-10-13).
 - **Self-test**: "Run self-test" executes identify, info, reads all four layers' keymaps, verifies every position against the decoded factory layout (from `FactoryLayout.swift`), then round-trips a write on the spare crossing. Publishes a per-check pass/fail report.
 - **Key test**: a focused text field where you type on the physical keyboard; every character that appears proves the HID report path works end to end.
 - **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).

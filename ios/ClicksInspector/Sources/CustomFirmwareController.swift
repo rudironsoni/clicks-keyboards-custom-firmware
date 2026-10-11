@@ -34,9 +34,19 @@ final class CustomFirmwareController: ObservableObject {
     /// UserDefaults so relaunching the app cannot silently turn an
     /// unresolved transaction into an ordinary idle state (review
     /// 2026-10-12).
+    ///
+    /// Review 2026-10-13 (P0): the uncertain record is written BEFORE A3
+    /// is dispatched. From that moment until a validated acknowledgment
+    /// arrives, every outcome -- timeout, disconnection, malformed reply,
+    /// app termination -- leaves a `.commitUnknown` record behind, because
+    /// the keyboard may already have committed the image. Only a validated
+    /// acknowledgment advances the record to `.sentRebootPending`; nothing
+    /// ever marks installation as successful (reboot evidence is not
+    /// installation evidence).
     struct PendingUpdate: Codable, Equatable {
         enum Outcome: String, Codable {
-            /// A3's reply was lost: the image may already be committed.
+            /// A3 was dispatched or its reply was lost/rejected: the image
+            /// may already be committed.
             case commitUnknown
             /// A3 committed and A0 was sent; installation not yet verified.
             case sentRebootPending
@@ -100,6 +110,19 @@ final class CustomFirmwareController: ObservableObject {
 
     private func recordPendingUpdate(imageSHA256: String, imageSize: Int, outcome: PendingUpdate.Outcome) {
         let record = PendingUpdate(imageSHA256: imageSHA256, imageSize: imageSize, date: Date(), outcome: outcome)
+        pendingUpdate = record
+        if let data = try? JSONEncoder().encode(record) {
+            UserDefaults.standard.set(data, forKey: Self.pendingUpdateKey)
+        }
+    }
+
+    /// Advance the persisted record to a later outcome (review 2026-10-13):
+    /// only a validated A3 acknowledgment may do this, moving the record
+    /// from the pre-dispatch unknown to the sent/reboot-pending state.
+    private func advancePendingUpdate(to outcome: PendingUpdate.Outcome) {
+        guard let current = pendingUpdate else { return }
+        let record = PendingUpdate(imageSHA256: current.imageSHA256, imageSize: current.imageSize,
+                                    date: current.date, outcome: outcome)
         pendingUpdate = record
         if let data = try? JSONEncoder().encode(record) {
             UserDefaults.standard.set(data, forKey: Self.pendingUpdateKey)
@@ -447,26 +470,33 @@ final class CustomFirmwareController: ObservableObject {
                     flashingProgress = Double(chunker.offset) / Double(image.count)
                 }
                 phase = .busy("Finalizing update")
-                /* A3 is never retried (review 2026-10-12): a lost reply after
-                 * a successful commit is indistinguishable from a failed
-                 * commit, so a blind resend is not safe. Surface the
-                 * ambiguity and keep it recorded until it is reconciled. */
+                /* Record the uncertain state BEFORE dispatching A3 (review
+                 * 2026-10-13, P0): from the moment A3 leaves, the keyboard
+                 * may commit at any time, and any interruption -- timeout,
+                 * disconnection, malformed reply, app termination -- must
+                 * leave this record behind. A3 is never retried; a validated
+                 * acknowledgment is the only thing that advances the record. */
+                recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .commitUnknown)
                 let finishReply: [UInt8]
                 do {
                     finishReply = try await perform(.finishUpdate(size: image.count))
                 } catch CustomKeyboardError.timedOut {
-                    recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .commitUnknown)
                     fail("The final step's outcome is UNKNOWN: the update may already be committed and its reply was lost. Do not assume nothing was written. The image installs on the next keyboard reboot; reconnect and verify before doing anything else.")
                     return
                 }
                 /* A3 payload: the committed size must equal the intended
-                 * image size exactly (review 2026-10-12). */
+                 * image size exactly (review 2026-10-12). A malformed or
+                 * short acknowledgment leaves the pre-dispatch commit-unknown
+                 * record in place: the commit may have happened. */
                 guard finishReply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
                 let committed = finishReply.reduce(0) { ($0 << 8) | UInt32($1) }
                 guard committed == image.count else {
                     throw CustomKeyboardError.updateRejected(at: "committed size \(committed), expected \(image.count)", status: 0x01)
                 }
-                recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .sentRebootPending)
+                /* Validated acknowledgment: advance the record. The record
+                 * itself stays until explicitly reconciled: a successful
+                 * commit still proves nothing about installation. */
+                advancePendingUpdate(to: .sentRebootPending)
                 if rebootToInstall {
                     /* A0 asks the keyboard to reboot into the installer; the
                      * reboot kills the session. Keep the case attached. */

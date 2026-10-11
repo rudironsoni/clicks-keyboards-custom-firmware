@@ -56,6 +56,11 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
     var versionPayload: [UInt8] = [0x01, 0x20, 0x01, 0x22]
     var dropA3ReplyOnce = false
     private var a3Dropped = false
+    /* P0 disconnection-during-A3 (review 2026-10-13): the keyboard commits
+     * and the session dies before the acknowledgment is delivered. */
+    var dieOnA3Commit = false
+    /* Malformed A3 acknowledgment: a frame the accumulator must reject. */
+    var malformedA3Reply = false
 
     /* Observed by the checks. */
     private(set) var a1Count = 0
@@ -147,6 +152,18 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
                 corruptedStagingAccepted = staged != image
             }
             let committed = a3CommittedOverride ?? stagedOffset
+            if dieOnA3Commit {
+                /* The commit happened; the session dies before the
+                 * acknowledgment reaches the host (review 2026-10-13). */
+                closed = true
+                onClosed?("Accessory disconnected after committing")
+                return
+            }
+            if malformedA3Reply {
+                /* A malformed acknowledgment: the accumulator must throw. */
+                reply([0x08, 0x02, 0xa3, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0xFF])
+                return
+            }
             reply([0x08, 0x02, 0xa3, ok ? 0x00 : 0x01] + be32bytes(committed))
 
         case 0xa0:
@@ -582,6 +599,89 @@ struct FlashCheck {
                 expect(message.contains("staged"), "the state explains the staged-not-installed outcome")
             }
             controller.markPendingUpdateVerified()
+        }
+
+        /* S15 (P0, review 2026-10-13): the keyboard commits A3 and the
+         * session disconnects before the acknowledgment reaches the host.
+         * The uncertain outcome must be recorded even though the exchange
+         * fails with a transport error, not a timeout; it must survive
+         * relaunch and refuse further updates until reconciled. */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.dieOnA3Commit = true
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (disconnect-at-A3 run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a mid-A3 disconnection fails the update", timeout: 10) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a3Count == 1, "A3 was sent exactly once, no blind retry (got \(link.a3Count))")
+            expect(controller.pendingUpdate != nil,
+                   "the uncertain A3 outcome is recorded after a disconnection")
+            expect(controller.pendingUpdate?.outcome == .commitUnknown,
+                   "the record says commit-unknown, not sent (got \(String(describing: controller.pendingUpdate?.outcome)))")
+
+            /* Relaunch: a fresh controller must surface the unresolved
+             * transaction, and a second flash must be refused. */
+            let link2 = ScriptedDeviceLink(image: stockImage)
+            let relaunched = CustomFirmwareController()
+            relaunched.exchangeTimeoutNanos = 200_000_000
+            relaunched.rebootConfirmTimeoutNanos = 300_000_000
+            relaunched.connectedTarget = CustomFirmwareController.ConnectedTarget(
+                model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            relaunched.attach(link2)
+            await waitUntil("a relaunched controller surfaces the disconnected-A3 record", timeout: 5) {
+                if case .updateUnverified = relaunched.phase { return true }
+                return false
+            }
+            expect(relaunched.pendingUpdate?.outcome == .commitUnknown,
+                   "the record survives the relaunch")
+            relaunched.flash(image: stockImage, rebootToInstall: true)
+            if case .updateUnverified = relaunched.phase {
+                expect(true, "a second update is refused until the disconnected-A3 record is reconciled")
+            } else {
+                expect(false, "a second update is refused until the disconnected-A3 record is reconciled")
+            }
+            relaunched.markPendingUpdateVerified()
+            expect(relaunched.pendingUpdate == nil, "explicit reconciliation clears the disconnected-A3 record")
+        }
+
+        /* S16 (P0, review 2026-10-13): the A3 acknowledgment is malformed.
+         * The accumulator rejects it; the uncertain record must exist
+         * anyway, survive relaunch, and block further updates. */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.malformedA3Reply = true
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (malformed-A3 run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a malformed A3 acknowledgment fails the update", timeout: 10) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a3Count == 1, "the malformed A3 was not blindly retried (got \(link.a3Count))")
+            expect(controller.pendingUpdate?.outcome == .commitUnknown,
+                   "the uncertain record exists after a malformed acknowledgment")
+
+            let link2 = ScriptedDeviceLink(image: stockImage)
+            let relaunched = CustomFirmwareController()
+            relaunched.exchangeTimeoutNanos = 200_000_000
+            relaunched.rebootConfirmTimeoutNanos = 300_000_000
+            relaunched.connectedTarget = CustomFirmwareController.ConnectedTarget(
+                model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            relaunched.attach(link2)
+            await waitUntil("a relaunched controller surfaces the malformed-A3 record", timeout: 5) {
+                if case .updateUnverified = relaunched.phase { return true }
+                return false
+            }
+            relaunched.markPendingUpdateVerified()
         }
 
         print(checkFailures == 0 ? "ok" : "==== \(checkFailures) failure(s) ====")
