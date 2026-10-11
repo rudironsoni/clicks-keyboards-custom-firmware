@@ -198,6 +198,31 @@ int main(int argc, char **argv) {
     assert(staging_host_reboots == reboots_after_failure + 1 && "retry cycle lost an A0");
     puts("failure injection ok");
 
+    /* An interrupted re-flash must never leave a valid length over a
+     * partially rewritten staging area: A1 invalidates the committed
+     * length before any data is accepted (review 2026-10-11, F-3). */
+    assert(staging_flash_read_word(STAGING_BASE) == (uint32_t)stock_len &&
+           "the last full cycle did not commit its length");
+    const uint8_t again1[6] = {0x06, 0xA1, 0x00, 0x00, 0x00, 0x40};
+    assert(ck5200_update_handle(again1, sizeof(again1), response, &ck5200_staging_ops) == 8);
+    assert(response[3] == 0x00);
+    assert(staging_flash_read_word(STAGING_BASE) == 0 && "A1 did not invalidate the old length");
+    /* Partial A2, then power loss: no A3, no A0. The marker must stay
+     * invalid even though the first page may already have been flushed
+     * (the flush rewrites bytes 0..3 as erased, never as a length). */
+    uint8_t part[6 + 16];
+    part[0] = sizeof(part);
+    part[1] = 0xA2;
+    part[2] = part[3] = part[4] = 0;
+    part[5] = 0;
+    memset(part + 6, 0x55, 16);
+    assert(ck5200_update_handle(part, sizeof(part), response, &ck5200_staging_ops) == 8);
+    assert(response[3] == 0x00);
+    assert(staging_flash_read_word(STAGING_BASE) == 0 && "partial A2 revived the length marker");
+    /* A fresh cycle still works after the interruption. */
+    full_cycle(custom, custom_len, true);
+    puts("marker invalidation ok");
+
     free(stock);
     free(custom);
     puts("ok 3");

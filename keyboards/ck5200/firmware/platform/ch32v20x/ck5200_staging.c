@@ -66,8 +66,29 @@ static void reset_page(uint32_t address) {
     memset(page, 0xFF, sizeof(page));
 }
 
+static bool invalidate_length_marker(void) {
+    /* The committed length word is the installer's "install pending"
+     * flag. Zero it before any A2 data is accepted: an interrupted cycle
+     * must never leave a previously committed length pointing at a
+     * partially rewritten staging area (review 2026-10-11, F-3). A3
+     * re-commits the real size once the final page lands. Programming
+     * zero over any previous value only clears bits, so no erase is
+     * needed, and the first page write of every successful cycle erases
+     * the word back to 0xFFFFFFFF before that commit. */
+#ifdef CK5200_STAGING_HOST_TEST
+    if (!staging_flash_word(STAGING_BASE, 0)) return false;
+    return staging_flash_read_word(STAGING_BASE) == 0;
+#else
+    FLASH_Unlock();
+    const FLASH_Status status = FLASH_ProgramWord(STAGING_BASE, 0);
+    FLASH_Lock();
+    return status == FLASH_COMPLETE && *(volatile const uint32_t *)STAGING_BASE == 0;
+#endif
+}
+
 static bool staging_begin(uint32_t size, uint32_t *maximum) {
     if (!maximum || size == 0 || size > CK5200_UPDATE_MAX_IMAGE) return false;
+    if (!invalidate_length_marker()) return false;
     expected_size = size;
     next_offset = 0;
     staging_state = STAGING_WRITING;
