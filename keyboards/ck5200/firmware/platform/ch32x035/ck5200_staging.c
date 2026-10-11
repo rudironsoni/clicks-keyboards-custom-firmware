@@ -73,13 +73,29 @@ static uint8_t page[FLASH_PAGE_SIZE] __attribute__((aligned(4)));
 unsigned staging_host_reboots;
 unsigned staging_host_page_writes;
 uint32_t staging_host_fail_at = 0xFFFFFFFFu; /* address that fails once */
+
+static void reset_page(uint32_t address);
+
+/* Simulated MCU power cycle for the harness: volatile state cleared, the
+ * physical flash array untouched (review 2026-10-12, finding 3). */
+void ck5200_staging_test_power_cycle(void) {
+    expected_size = 0;
+    next_offset = 0;
+    page_fill = 0;
+    staging_state = STAGING_IDLE;
+    reset_page(STAGING_BASE);
+}
 #endif
 
 /* ---- runtime region guard ------------------------------------------ */
 
 bool ck5200_staging_page_in_range(uint32_t address) {
+    /* Upper bound by subtraction only: an addition-based check wraps for
+     * addresses near UINT32_MAX (0xFFFFFF00 + 256 == 0x100 wraps to 0 and
+     * would pass an add-based check; review 2026-10-12, finding 6). Both
+     * bounds are small constants, so this subtraction cannot wrap. */
     return address >= STAGING_BASE &&
-           address + FLASH_PAGE_SIZE <= STAGING_WRITE_LIMIT &&
+           address <= STAGING_WRITE_LIMIT - FLASH_PAGE_SIZE &&
            (address & (FLASH_PAGE_SIZE - 1u)) == 0u;
 }
 

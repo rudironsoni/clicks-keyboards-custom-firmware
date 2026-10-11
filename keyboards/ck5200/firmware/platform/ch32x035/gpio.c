@@ -23,11 +23,16 @@ void gpio_set_pin_input_high(pin_t pin) { configure(pin, GPIO_Mode_IPU); }
 void gpio_set_pin_input_low(pin_t pin) { configure(pin, GPIO_Mode_IPD); }
 void gpio_set_pin_output(pin_t pin) { configure(pin, GPIO_Mode_Out_PP); }
 void gpio_set_pin_output_push_pull(pin_t pin) { configure(pin, GPIO_Mode_Out_PP); }
-/* The X035 GPIO block has no open-drain output mode (ch32x035_gpio.h: the
- * mode enum offers AIN, floating, pull-down, pull-up, push-pull, and
- * alternate push-pull only). The iAP2 bit-bang releases SDA by switching
- * to pull-up input, which is the single-master open-drain equivalent the
- * stock driver itself uses (stock 0x5090 uses drive/release, not OD). */
+/* X035 GPIO has NO open-drain output mode (ch32x035_gpio.h offers AIN,
+ * floating, pull-down, pull-up, push-pull, and alternate push-pull only).
+ * This wrapper is NOT an open-drain equivalent: it is push-pull, documented
+ * as such. Audit of callers (review 2026-10-12, finding 8): no in-repo
+ * caller relies on open-drain semantics -- the matrix uses push-pull, and
+ * the iAP2 auth driver releases SDA through its OWN register sequence
+ * (floating input, stock 0x5090's drive/release approach), never through
+ * this wrapper. If a future caller needs true open-drain (wired-AND line
+ * sharing), it must be rejected on this family, not silently given
+ * push-pull. */
 void gpio_set_pin_output_open_drain(pin_t pin) { gpio_set_pin_output(pin); }
 void gpio_write_pin_high(pin_t pin) { GPIO_SetBits(ck_gpio_port(pin), ck_gpio_mask(pin)); }
 void gpio_write_pin_low(pin_t pin) { GPIO_ResetBits(ck_gpio_port(pin), ck_gpio_mask(pin)); }

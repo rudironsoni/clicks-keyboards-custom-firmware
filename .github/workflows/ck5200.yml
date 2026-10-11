@@ -45,11 +45,23 @@ jobs:
       - name: Set up toolchain and dependencies
         run: bash scripts/setup.sh
 
-      - name: Run tests
-        run: bash scripts/test.sh
+      - name: Establish hash-verified stock test fixture
+        run: |
+          bash scripts/revert-stock.sh --download-only
+          sha256sum .stock/iKeyboard_CK-5200_V122_120.bin
+          echo "expected 8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
+          echo "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8  .stock/iKeyboard_CK-5200_V122_120.bin" | sha256sum -c -
 
+      # Order matters (review 2026-10-12, finding 5): the restore harness
+      # consumes build/ck5200_qmk.bin and the stock fixture, so the
+      # firmware must be built before the image-dependent integration
+      # tests run. The fast unit tests are executed by the same script and
+      # do not depend on the build artifacts.
       - name: Build firmware
         run: bash scripts/build.sh
+
+      - name: Run tests
+        run: bash scripts/test.sh
 
       - name: Inspect firmware
         run: |

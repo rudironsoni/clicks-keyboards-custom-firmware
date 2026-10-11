@@ -28,13 +28,21 @@ static inline void     iap2_io_cfghr_write(uint32_t v) { GPIOA_CFGHR_REG = v; }
 #define SDA_SET           0x00004000u /* PA14 high */
 #define SDA_RESET         0x40000000u /* PA14 low */
 
-/* CFGHR bits 24..27 configure PA14: push-pull output 10 MHz, or
- * floating input for release (stock uses drive/release instead of
- * true open-drain on this single-master bus). */
+/* CFGHR bits 24..27 configure PA14. The X035 has no open-drain GPIO mode,
+ * so the auth driver releases SDA by switching PA14 to a FLOATING input
+ * (mode nibble 4 = GPIO_Mode_IN_FLOATING, ch32x035_gpio.h:32), exactly as
+ * the stock driver does at 0x5090 -- NOT to an internal pull-up. This is
+ * safe only if the board has an external pull-up on SDA; the stock
+ * firmware's identical sequence is the evidence that it does, but the
+ * electrical fact is hardware-unverified (review 2026-10-12, finding 8).
+ * If the board lacked the pull-up, SDA would float and the auth chip
+ * could see clock glitches: a session-level failure, not a brick risk.
+ * The host waveform harness (tests/iap2_auth_test.c) verifies the
+ * drive/release sequence's bit structure, not the pull-up's existence. */
 #define CFGHR_SDA_MASK     0xF0FFFFFFu
 #define CFGHR_SDA_OUTPUT   0x01000000u
-#define CFGHR_SDA_INPUT    0x04000000u
-#define CFGHR_SCL_OUTPUT   0x00100000u /* PA13 push-pull output 10 MHz */
+#define CFGHR_SDA_INPUT   0x04000000u
+#define CFGHR_SCL_OUTPUT   0x00100000u /* PA13 push-pull output */
 
 #define AUTH_RETRIES        3u
 #define AUTH_RETRY_DELAY    10000u

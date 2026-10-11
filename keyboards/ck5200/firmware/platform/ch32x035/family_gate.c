@@ -13,20 +13,18 @@
 #include "ch32x035.h"
 
 /* The X035 USBFS block lives at 0x40023400 (stock 0x3f3e region), not at
- * the CH32V203's 0x50000000. */
-#if defined(USBFS_BASE)
+ * the CH32V203's 0x50000000. USBFS_BASE is a macro and USBFS_IRQn is an
+ * enum constant: neither is `defined()`-testable, so the assertions are
+ * unconditional. The previous #if defined(USBFS_IRQn) form never fired
+ * because the SDK declares the IRQ number as an enum (review 2026-10-12,
+ * finding 6). */
 _Static_assert(USBFS_BASE == 0x40023400u, "wrong-family SDK: USBFS_BASE must be 0x40023400 (CH32X035)");
-#endif
-
-/* The X035's USB interrupt is IRQ 45 (vector slot 45, confirmed in the
- * pinned startup_ch32x035.S); the V203's slot 59 does not exist here. */
-#if defined(USBFS_IRQn)
 _Static_assert(USBFS_IRQn == 45, "wrong-family SDK: USBFS_IRQn must be 45 (CH32X035)");
-#endif
 
 /* The core clock is the 48 MHz HSI handed over directly (stock 0x3bfc
  * computes SystemCoreClock from the 48 MHz constant): the X035 has no
- * main PLL, so any PLL-selection define is a wrong-family signal. */
+ * main PLL, so any PLL-selection define is a wrong-family signal.
+ * HSI_VALUE is an SDK macro, so this assertion is unconditional too. */
 _Static_assert(HSI_VALUE == 48000000u, "wrong-family SDK: HSI_VALUE must be 48 MHz (CH32X035)");
 #ifdef SYSCLK_FREQ_144MHz_HSI
 #error "wrong-family build: CH32X035 has no PLL (SYSCLK_FREQ_144MHz_HSI is a CH32V203 define)"

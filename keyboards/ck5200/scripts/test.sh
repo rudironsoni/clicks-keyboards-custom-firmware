@@ -116,3 +116,14 @@ cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_protocol_task_test \
   firmware/platform/ch32x035/protocol.c $QCORE $QCK
 
 /tmp/ck5200_protocol_task_test
+
+# Family-gate negative test (review 2026-10-12, finding 6): compiling the
+# real family_gate.c against a deliberately wrong-family stub MUST fail.
+# The positive side is proven by the firmware build itself (family_gate.c
+# compiles against the real SDK header).
+if cc -std=c11 -I tests/family_gate_negative -fsyntax-only \
+  firmware/platform/ch32x035/family_gate.c >/dev/null 2>&1; then
+  echo "FAMILY GATE NEGATIVE TEST FAILED: wrong-family constants compiled cleanly" >&2
+  exit 1
+fi
+echo "family gate rejects wrong-family constants"

@@ -35,12 +35,13 @@ void protocol_post_task(void);
 bool stub_mounted, stub_suspended, stub_hid_ready;
 uint8_t stub_epin_buf[64];
 long stub_submit_count;
+int stub_init_ports[4] = {0};
 
 bool tud_mounted(void) { return stub_mounted; }
 bool tud_suspended(void) { return stub_suspended; }
 bool tud_hid_ready(void) { return stub_hid_ready; }
 void tud_task(void) {}
-void tud_init(uint8_t rhport) { (void)rhport; }
+void tud_init(uint8_t rhport) { ++stub_init_ports[rhport & 3u]; }
 uint32_t tud_vendor_n_write(uint8_t itf, const void *buf, uint32_t len) {
     (void)itf; (void)buf; (void)len;
     return len; /* pretend the endpoint accepted */
@@ -243,6 +244,19 @@ static void p4_get_report(void) {
     settle_ticks(12);
 }
 
+static void p6_root_port_init(void) {
+    printf("== P6 protocol_setup initializes root port 0 exactly once ==\n");
+    int before[4];
+    for (int i = 0; i < 4; ++i) before[i] = stub_init_ports[i];
+    keyboard_setup();
+    keyboard_init();
+    protocol_setup();
+    stub_mounted = true;
+    CHECK(stub_init_ports[0] - before[0] == 1, "protocol_setup called tud_init(0) exactly once (delta %d)", stub_init_ports[0] - before[0]);
+    CHECK(stub_init_ports[1] == before[1], "no tud_init(1) ever (the V203 root-port call, review finding 1)");
+    settle_ticks(5);
+}
+
 static void p5_plain_tap(void) {
     printf("== P5 ordinary tap (press+release flushed in one pass) ==\n");
     settle_ticks(12);
@@ -282,6 +296,7 @@ int main(int argc, char **argv) {
     if (strcmp(which, "p3") == 0 || strcmp(which, "all") == 0) p3_suspend_key_held();
     if (strcmp(which, "p4") == 0 || strcmp(which, "all") == 0) p4_get_report();
     if (strcmp(which, "p5") == 0 || strcmp(which, "all") == 0) p5_plain_tap();
+    if (strcmp(which, "p6") == 0 || strcmp(which, "all") == 0) p6_root_port_init();
     printf("==== %d failure(s) ====\n", failures);
     if (!failures) printf("ok\n");
     return failures ? 1 : 0;

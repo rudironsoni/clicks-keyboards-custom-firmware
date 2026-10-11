@@ -96,7 +96,10 @@ static host_driver_t ck5200_host_driver = {
 
 void protocol_setup(void) {
     host_set_driver(&ck5200_host_driver);
-    tud_init(1);
+    /* CH32X035: TinyUSB's port drives root port 0 (the V203 build used
+     * port 1, which does not exist on this family; review 2026-10-12,
+     * finding 1). */
+    tud_init(0);
     iap2_init();
     ck5200_backlight_init();
 }
