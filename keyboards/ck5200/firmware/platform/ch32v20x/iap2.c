@@ -400,7 +400,11 @@ static void link_rx(iap2_ctx_t *c, const uint8_t *buf, uint32_t len) {
 
     if (control & 0x80u) { /* SYN: validate their echo of our parameters */
         const uint8_t *pl = buf + 9;
-        bool match = pkt_len >= 21;
+        /* Trust only received bytes: pl[4..10] reads buf[13..19], so a
+         * declared length must never authorize reads past the actual
+         * receive count (stock 0x5bec reads stale buffer bytes here;
+         * review 2026-10-11, F8). */
+        bool match = pkt_len >= 21 && len >= 20;
         if (match) {
             match = ((pl[4] << 8) | pl[5]) == L_RETRANSMIT_MS &&
                     ((pl[6] << 8) | pl[7]) == L_ACK_TIMEOUT_MS &&
@@ -647,7 +651,15 @@ void iap2_ep2_rx(const uint8_t *buf, uint32_t len) {
 
 bool iap2_session_active(void) {
     const iap2_ctx_t *c = &iap2_ctx;
-    return c->connected && c->state == 3;
+    /* Stock 0x61f4 gates the companion channel on the open flag, outer
+     * state 3, AND a live link watchdog. Without the watchdog term, 2.5 s
+     * of phone silence left the session "active" forever: EP3 kept its
+     * gate and every EP2 packet routed into the session parser, blocking
+     * the dispatcher fallback (the Mac recovery path) until a replug
+     * (review 2026-10-11, F-5/F5). The link machine itself keeps running
+     * (stock resends sync for its full budget regardless); any received
+     * packet or EP3 exchange re-arms the watchdog and reopens the gate. */
+    return c->connected && c->state == 3 && c->watchdog != 0;
 }
 
 void iap2_activity(void) { iap2_ctx.watchdog = WATCHDOG_TICKS; }

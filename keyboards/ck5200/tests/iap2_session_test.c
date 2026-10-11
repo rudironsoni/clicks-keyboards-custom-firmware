@@ -593,6 +593,60 @@ static void test_ring_overflow_drops(void) {
     assert(identifies == 7);
 }
 
+static void test_watchdog_closes_session_gate(void) {
+    start_session();
+    assert(iap2_session_active());
+
+    /* 2.5 s of link silence must close the session gate (stock 0x61f4
+     * consumes the watchdog there), while leaving the link machine
+     * itself untouched (review 2026-10-11, F-5/F5). */
+    settle(2500);
+    assert(!iap2_session_active() && "silence must close the session gate");
+    assert(iap2_ctx.state == 3 && "expiry must not restart the link machine");
+
+    /* Any received packet re-arms the watchdog and reopens the gate. */
+    phone(0x40, 0x39, 0x00, 0, NULL, 0);
+    assert(iap2_session_active() && "traffic must reopen the session gate");
+}
+
+static void test_syn_short_packet(void) {
+    start_session();
+    settle(2);
+    sent_reset();
+
+    /* A SYN that declares parameters it does not carry: bytes 13..19
+     * hold a complete valid parameter echo, but only 12 bytes arrived.
+     * The parser must trust the received length, not the declared one;
+     * the old code read the stale bytes and queued an accept (review
+     * 2026-10-11, F8). */
+    uint8_t pkt[23];
+    memset(pkt, 0xcc, sizeof(pkt));
+    pkt[0] = 0xff; pkt[1] = 0x5a;
+    pkt[2] = 0x00; pkt[3] = 21; /* declared length says parameters exist */
+    pkt[4] = 0x80;               /* SYN */
+    pkt[5] = 0x37; pkt[6] = 0x00;
+    pkt[7] = 0; pkt[8] = cksum8(pkt, 8);
+    pkt[13] = 0x07; pkt[14] = 0xd0; /* retransmit 2000 ms */
+    pkt[15] = 0x01; pkt[16] = 0xf4; /* ack 500 ms */
+    pkt[17] = 0x1e;                  /* 30 retries */
+    pkt[18] = 0x03;                  /* ack every 3 */
+    pkt[19] = 0x0a;                  /* session id 10 */
+    iap2_ep2_rx(pkt, 12);            /* only 12 bytes actually received */
+
+    settle(3);
+    assert(sent_total() == 0 && "the queued op waits for their ACK");
+    phone(0x40, 0x39, 0x00, 0, NULL, 0); /* their ACK hands the ring over */
+    settle(3);
+
+    /* The stack must restate its own sync (23-byte SYN|ACK with our
+     * parameters), never accept via a 9-byte bare ACK. */
+    uint16_t len = 0;
+    const uint8_t *p = sent_next(&len);
+    assert(len == 23 && "short SYN must restate the sync, not accept it");
+    assert(p[4] == 0xc0);
+    assert(memcmp(p + 9, sync_payload, 14) == 0);
+}
+
 static void test_challenge_overread_clamped(void) {
     start_session();
     settle(2);
@@ -649,6 +703,8 @@ int main(void) {
     RUN(peek_failure_toggles_address);
     RUN(ring_overflow_drops);
     RUN(challenge_overread_clamped);
+    RUN(watchdog_closes_session_gate);
+    RUN(syn_short_packet);
 
     printf("ok %d\n", passed);
     return 0;
