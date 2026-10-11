@@ -45,7 +45,7 @@ The restore ladder for a flashed keyboard, strongest channel first:
 
 What is now **execution-verified offline** (`tests/ck5200_restore_test.c`, in the repo suite):
 
-- Three complete restore cycles with the real stock image (18648 bytes) and the real custom image (23388 bytes): every A2 chunk at stock's 32-byte size, A3 commit, byte-for-byte equality of all staged pages against the image, A0 reaching the reset path.
+- Three complete restore cycles with the real stock image (18648 bytes) and the real custom image (24292 bytes): every A2 chunk at stock's 32-byte size, A3 commit, byte-for-byte equality of all staged pages against the image, A0 reaching the reset path, plus A1 marker invalidation before the first A2 byte.
 - Both directions (custom from stock, stock from custom) and repeat cycles.
 - Rejection paths: empty image, one byte over the region limit, offset jumps, chunk overruns, and an injected flash-page failure mid-restore (the cycle refuses to continue, and a fresh A1 restarts it cleanly to a successful restore).
 

@@ -5,12 +5,22 @@ firmware onto a Clicks CK-5200 keyboard case. It covers what is in the
 image, what the Apple session stack does, the risks, the procedure,
 and how to get back to stock. Read it fully before flashing.
 
+**STATUS 2026-10-11: FLASHING IS BLOCKED.** The independent safety review
+(`docs/reviews/2026-10-11-flash-safety-review.md`) found the custom image
+is built for a CH32V203-class MCU while the stock firmware proves a
+CH32X035-class part (USB base `0x40023400`, IRQ 45, 48 MHz HSI, no PLL);
+the image would hang before USB enumerates. Do not flash anything until
+the chip marking is read, the firmware is re-targeted, and recovery is
+demonstrated. This document describes the procedure for when that block
+lifts.
+
 **The one-sentence risk statement**: if the flash succeeds, you have a
 typing, backlit, MFi-capable keyboard with four editable layers. If it
 fails, you likely have a keyboard that still types over USB but cannot
 talk to the phone app; the Mac path restores stock in about two minutes.
-The only unrecoverable case is USB itself dying, which the offline
-evidence makes unlikely.
+USB death is the only unrecoverable case, and its likelihood is NOT
+settled: the review above shows the current image would reach it on
+first boot.
 
 ---
 
@@ -136,6 +146,7 @@ identical: connect to a Mac, run the restore, reboot.
 | Auth chip address is `0x20`, not `0x22` | Low (the driver tries both after 20 failed peeks) | Auth challenge fails; session never opens | The driver auto-toggles; if the chip needs a third address, the session fails but recovery is unchanged |
 | I2C timing too fast or too slow | Low (derived from the same clock as stock) | Auth chip does not respond; session fails | Recovery unchanged |
 | HID report descriptor rejected by iPhone | Low (standard 6KRO boot layout plus 16-bit consumer; the iPhone's HID parser is broad) | Keyboard does not type on the phone | Mac restore; the descriptor can be adjusted |
+| One chattering key freezes all keys | Low-medium while typing normally; a stuck or bouncing crossing affects everything | The global 5 ms defer debounce (`sym_defer_g`) starves all keys while any crossing bounces faster than 5 ms; taps shorter than 5 ms vanish | Known limitation (review 2026-10-11, reviewer 3 F6); asserted by the core harness; the fix is upstream `sym_eager_pk` with a static counter table |
 | USB enumeration fails | Very low (TinyUSB core, stock descriptors) | Keyboard invisible to all hosts | Only recoverable by physical flash programming (see [RECOVERY.md](RECOVERY.md)) |
 | Backlight does not light | Low (TIM1 register writes decoded from stock) | Keyboard dark but functional | Cosmetic; fixable in a re-flash |
 | Flash write corrupted the image | Very low (the staging writer verifies every page) | Keyboard does not boot; USB dead | The staging area is outside the application region; the boot region's installer can retry from a fresh A1/A2/A3 cycle if USB still enumerates |
@@ -235,8 +246,10 @@ If the keyboard reports `bcdDevice 0x9001`, the Mac tool can flash:
 keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py flash \
   keyboards/ck5200/build/ck5200_qmk.bin
 
-# Or restore stock.
-keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py restore-stock
+# Or restore stock (typed confirmation, then the same flash command on
+# the bundled stock image; the bcdDevice 0x9001 gate means this only
+# works while custom firmware is running).
+bash keyboards/ck5200/scripts/revert-stock.sh
 ```
 
 ---
@@ -290,10 +303,10 @@ they are the same protocol, not a custom recovery mode.
 ### From a Mac (if the phone session is broken but USB works)
 
 ```sh
-# The Mac tool sends the same A1/A2/A3/A0 dialect on the EP2 bulk
-# endpoint. It routes on bcdDevice 0x9001, so it cannot accidentally
-# flash a stock keyboard that is not expecting an update.
-keyboards/ck5200/.venv/bin/python keyboards/ck5200/tools/ck5200_usb.py restore-stock
+# Restore stock via the wrapper script: typed confirmation, then the same
+# A1/A2/A3/A0 dialect on the bundled stock image. The bcdDevice 0x9001
+# gate means the Mac path only works while custom firmware is running.
+bash keyboards/ck5200/scripts/revert-stock.sh
 ```
 
 ### From a second phone (if the first phone is unavailable)
@@ -306,8 +319,15 @@ of which host drives it.
 
 - A failed flash (the staging area is outside the application region).
 - A corrupted image (the staging writer verifies every page).
-- A power loss during A2 (the staging area holds the partial image;
-  the boot region is untouched; a fresh A1/A2/A3 cycle rewrites it).
+- A power loss during A2 (the staging area holds the partial image; the
+  boot region is untouched; a fresh A1/A2/A3 cycle rewrites it. On the
+  custom firmware's writer, A1 additionally invalidates the committed
+  length first, so an interrupted cycle can never present a valid
+  length over a partially rewritten staging area; the first flash goes
+  through the stock writer, which has the same window stock itself has).
+- A power loss during A3 commit (the length word is programmed last,
+  atomically from the installer's point of view; the boot region is
+  untouched).
 - A session stack bug (the Mac path is completely independent).
 - A keymap corruption (the `0x93` reset restores the factory layout).
 
@@ -363,6 +383,9 @@ toggle).
 5. Commands `0x86`/`0x88`/`0x8a`/`0x8c`/`0x8d` (backlight delay, idle,
    settings) are not implemented; they return the unsupported-command
    status rather than lying with canned replies.
+6. The custom staging writer invalidates the committed length at A1
+   (stock does not), so an interrupted update cycle can never present a
+   valid length over a hybrid staging area (review 2026-10-11, F-3).
 
 ---
 
