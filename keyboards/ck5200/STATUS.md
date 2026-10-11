@@ -1,6 +1,6 @@
-# CK-5200 status, 2026-10-11
+# CK-5200 status, 2026-10-12
 
-**Target: Clicks for iPhone 15 Pro Max. FLASHING IS BLOCKED.** The 2026-10-11 independent safety review ([docs/reviews/2026-10-11-flash-safety-review.md](docs/reviews/2026-10-11-flash-safety-review.md)) found the custom image is built for a CH32V203-class MCU while the stock firmware running on the keyboard proves a CH32X035-class part (USB base `0x40023400`, IRQ 45, 48 MHz HSI, no PLL). The image would hang in `SystemInit` before USB enumerates. The block lifts only after the physical chip marking is read, the firmware is re-targeted, and a physical recovery path is demonstrated. Every family-independent software defect the three reviewers found is fixed and covered by committed regression tests (see below).
+**Target: Clicks for iPhone 15 Pro Max. FLASHING IS BLOCKED.** The firmware is now built for the CH32X035 family the stock firmware proves (USB `0x40023400`, IRQ 45, 48 MHz HSI): see [docs/X035-PORT.md](docs/X035-PORT.md) for the port evidence and [docs/reviews/2026-10-11-flash-safety-review.md](docs/reviews/2026-10-11-flash-safety-review.md) for the standing veto. The block lifts only after an independent recovery path is demonstrated on this specific keyboard ([docs/recovery-research.md](docs/recovery-research.md): the PC17 BOOT investigation is the live lead). Every family-independent software defect the three reviewers found is fixed and covered by committed regression tests; the iOS app authorizes only the exact stock V122 artifact.
 
 ## Work package results
 
@@ -28,17 +28,17 @@ bash keyboards/ck5200/scripts/build.sh
 
 Tests: **5 Python tests + 2 keymap-layout tests passed**; the C update-protocol, keymap (including the brightness commands), backlight (TIM1 registers against the decode), session replay (`ok 15`, including watchdog-gate and short-SYN scenarios), auth I2C waveform + timing (`ok 4`), consumer (little-endian wire order), restore (including A1 marker invalidation) harnesses all pass, plus the two review harnesses: the real pinned QMK core on a host flash model (typing, modifiers, `LT(2,KC_J)`, sticky SYM, consumer encoding, reboot persistence with zero page erases, chatter starvation, 6KRO, 200k-packet fuzz) and the real `protocol.c` against a TinyUSB-0.21-faithful completion stub (chord/pending lifecycle, idle resend, suspend/resume, GET_REPORT, plain tap). The keymap test asserts every crossing of every layer against the decoded stock table, and the backlight test asserts every TIM1 register value.
 
-Final local build (Apple session stack included, all review fixes applied):
+Final local build (CH32X035 re-target, X035 SDK pinned at `c6253942`):
 
 ```text
 file     build/ck5200_qmk.bin
-size     24292 bytes (0x5efc)
+size     24136 bytes (0x5e48)
 maximum  27136 bytes (0x6a00)
 base     0x2000
-sha256   679f98465db841b4bbd8ae58ec43c696861bbe1cea222ed9252f1e8e140de30d
+sha256   249eb262a9d743a282227ea2e48d178299a02f239bf8a93fd3c9049313964ea6
 ```
 
-The build passed full ELF/BIN validation. Flash use is 89.48 percent of the application region with LTO, the heap-free `sym_defer_g` debounce, and upstream one-shot layers enabled (the `NO_ACTION_ONESHOT` removal added ~0.9 KB; the review had found it silently disabled the SYM key). These checks establish the offline image layout, not hardware execution.
+Flash use is 88.94 percent of the application region on the X035 build. RAM use is 29.38 percent. Persistence is runtime-only (transient RAM EEPROM): no writable flash region exists on this part for this firmware, and flash-backed keymaps stay disabled until a storage partition is demonstrated. These checks establish the offline image layout, not hardware execution.
 
 The temporary `/tmp` ASan harnesses an earlier session used to claim protocol coverage are superseded: the 2026-10-11 review proved their completion-callback model was idealized (it passed while the production path froze the scan after one tap) and their sources no longer exist. The committed `tests/ck5200_protocol_task_test.c` replaces them with a TinyUSB-0.21-faithful stub.
 
