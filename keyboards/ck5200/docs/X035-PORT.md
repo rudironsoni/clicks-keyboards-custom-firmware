@@ -231,9 +231,16 @@ image-dependent tests before the build (finding 5). The workflow is
 corrected to: setup -> hash-verified stock fixture download -> build ->
 tests -> ELF inspection -> artifact upload.
 
-**Green clean run for this revision**:
-https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38165492867
-(run 38165492867, head `13dd2c7`, job `build`: success, 54 s, Linux).
+**Green clean runs** (review 2026-10-13 verification noted two, not one):
+- `13dd2c7`: run 38165492867 (job `build`: success, 54 s, Linux)
+- `b5d801b`: run 38166230033 (job `build`: success, 54 s, Linux) — the run whose
+  artifact was independently decoded and hash-verified
+
+Both completed dependency setup, hash-verified stock-fixture download,
+firmware build, tests, ELF inspection, and artifact upload. The later
+iOS-only commit `2da8057` correctly does not trigger this workflow (its
+path filter is `keyboards/ck5200/**`); the firmware artifact at HEAD
+remains the `b5d801b` build.
 
 **Source-of-truth checksum comparison** between the CI-built BIN and the
 iOS-bundled BIN:
