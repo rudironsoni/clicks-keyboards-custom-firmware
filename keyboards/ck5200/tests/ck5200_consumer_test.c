@@ -2,8 +2,10 @@
  *
  * The wire report carries one 16-bit consumer usage; this harness pins
  * the press/release semantics and the 10-byte packing against the
- * descriptor contract: out[8] = usage >> 8, out[9] = usage & 0xff, the
- * keyboard report passes through untouched.
+ * descriptor contract: HID fields are little-endian, so out[8] = usage
+ * & 0xff and out[9] = usage >> 8; the keyboard report passes through
+ * untouched. (The old expected order was big-endian and locked in the
+ * swapped packing; review 2026-10-11, F2.)
  */
 #include <assert.h>
 #include <stdbool.h>
@@ -23,8 +25,8 @@ static void check_pack(uint16_t usage) {
     uint8_t out[10];
     ck5200_consumer_pack(out, kb);
     assert(memcmp(out, kb, 8) == 0 && "keyboard report changed");
-    assert(out[8] == (uint8_t)(usage >> 8));
-    assert(out[9] == (uint8_t)(usage & 0xff));
+    assert(out[8] == (uint8_t)(usage & 0xff));
+    assert(out[9] == (uint8_t)(usage >> 8));
 }
 
 int main(void) {
