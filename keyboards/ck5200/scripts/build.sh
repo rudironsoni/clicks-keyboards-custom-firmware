@@ -30,6 +30,22 @@ if [[ ! -d external/qmk_firmware/.git || ! -d external/tinyusb/.git || ! -d exte
   exit 1
 fi
 
+# Verify the vendored trees sit exactly at the pinned commits: a drifted
+# checkout would otherwise build silently (review 2026-10-11, F-10).
+. "$ROOT/scripts/pins.env"
+verify_pin() {
+  local dir="$1" pin="$2" actual
+  actual="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "$actual" != "$pin" ]]; then
+    echo "external/${dir#external/} is at ${actual:-nothing}; expected $pin." >&2
+    echo "Run: bash scripts/bootstrap.sh" >&2
+    exit 1
+  fi
+}
+verify_pin external/qmk_firmware "$QMK_COMMIT"
+verify_pin external/tinyusb "$TINYUSB_COMMIT"
+verify_pin external/ch32v20x "$OPENWCH_COMMIT"
+
 cmake -S . -B build -G Ninja   -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-gcc-toolchain.cmake   -DCMAKE_BUILD_TYPE=MinSizeRel
 
 cmake --build build --target ck5200_qmk.elf

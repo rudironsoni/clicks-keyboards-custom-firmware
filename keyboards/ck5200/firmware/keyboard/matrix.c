@@ -1,5 +1,8 @@
 /*
- * CK-5200 electrical matrix recovered from stock 1.2.2 static analysis.
+ * CK-5200 electrical matrix, inferred from stock 1.2.2 static analysis.
+ * UNVERIFIED on hardware: no captured derivation of the pin map or scan
+ * polarity exists (docs/HARDWARE.md records this explicitly). If typing
+ * misbehaves on first hardware contact, suspect this file first.
  *
  * PA0..PA5: inputs with pull-down
  * PB0..PB5: push-pull outputs

@@ -5,11 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 QMK_REPO=https://github.com/qmk/qmk_firmware.git
-QMK_COMMIT=3d4da6de29c8635c9cd232ce456d8fec8d31921b
 TINYUSB_REPO=https://github.com/hathach/tinyusb.git
-TINYUSB_COMMIT=efa3e132235aefa4ef49d31c746c0c5f0c0e0bc9
 OPENWCH_REPO=https://github.com/openwch/ch32v20x.git
-OPENWCH_COMMIT=baef0054588f4826548429ff4e7a9257d752ef2f
+. "$ROOT/scripts/pins.env"
 
 mkdir -p external
 
