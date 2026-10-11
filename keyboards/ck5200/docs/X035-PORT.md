@@ -229,9 +229,23 @@ The first delivery's clean-run claim was false: run 38147753811 failed on
 the duplicate-symbol link error (finding 2), and its order ran the
 image-dependent tests before the build (finding 5). The workflow is
 corrected to: setup -> hash-verified stock fixture download -> build ->
-tests -> ELF inspection -> artifact upload. The green-run reference for
-THIS revision is recorded below, after the push; if the run is red, this
-section is the first thing to correct.
+tests -> ELF inspection -> artifact upload.
+
+**Green clean run for this revision**:
+https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38165492867
+(run 38165492867, head `13dd2c7`, job `build`: success, 54 s, Linux).
+
+**Source-of-truth checksum comparison** between the CI-built BIN and the
+iOS-bundled BIN:
+
+```text
+CI artifact  ck5200_qmk.bin  sha256 7799f866ee18ea4c3ba93852b5c6cb7b32864a29efc88fc79301af7f84d09623  24124 bytes
+Local build  ck5200_qmk.bin  sha256 7799f866ee18ea4c3ba93852b5c6cb7b32864a29efc88fc79301af7f84d09623  24124 bytes
+iOS bundle   ck5200_qmk.bin  sha256 7799f866ee18ea4c3ba93852b5c6cb7b32864a29efc88fc79301af7f84d09623  24124 bytes
+```
+
+Byte-identical across all three. The CI disassembly confirms the family
+footprint: 19 `0x40023xxx` references, zero `0x50000xxx`.
 
 ## GO/NO-GO
 
