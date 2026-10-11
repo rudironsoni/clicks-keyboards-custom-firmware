@@ -68,3 +68,51 @@ cc -std=c11 -Wall -Wextra -DIAP2_AUTH_HOST_TEST -I tests/stubs -I firmware/platf
   -o /tmp/ck5200_iap2_auth_test
 
 /tmp/ck5200_iap2_auth_test
+
+# QMK core + protocol behavior harnesses: the REAL pinned QMK core, the
+# REAL CK-5200 modules, and (protocol) the REAL protocol.c against a
+# TinyUSB-0.21-faithful completion stub, on a host CH32-flash model with
+# manual time. Ported from the 2026-10-11 adversarial review, whose
+# harnesses caught the HID completion freeze, the consumer byte order,
+# the dead one-shot layer, and the wear-leveling contract violation.
+Q="$ROOT/external/qmk_firmware"
+QSHIM="$ROOT/tests/qmk_shim"
+QFLAGS="-std=c11 -g -O1 -Wall -Wno-unused-parameter -fsanitize=address,undefined -fno-omit-frame-pointer"
+QINC="-I $QSHIM -I $ROOT/firmware/keyboard -I $ROOT/firmware/keyboard/keymaps/diagnostic \
+ -I $ROOT/firmware/platform/ch32v20x \
+ -I $Q -I $Q/quantum -I $Q/quantum/debounce -I $Q/quantum/wear_leveling \
+ -I $Q/quantum/process_keycode -I $Q/quantum/logging -I $Q/quantum/keymap_extras \
+ -I $Q/quantum/sequencer -I $Q/quantum/send_string \
+ -I $Q/tmk_core -I $Q/tmk_core/protocol -I $Q/platforms -I $Q/platforms/test \
+ -I $Q/drivers -I $Q/drivers/eeprom -I $Q/lib -I $Q/lib/fnv"
+QDEFS="-DNO_PRINT -DNO_DEBUG -DFAST_TIMER_T_SIZE=32 \
+ -DQMK_KEYBOARD_H=\"ck5200.h\" -DKEYMAP_C=\"keymap.c\" \
+ -DEEPROM_DRIVER -DCK5200_WL_HOST_TEST \
+ -include $ROOT/firmware/keyboard/config.h"
+QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c \
+ $Q/quantum/action_util.c $Q/quantum/keycode_config.c $Q/quantum/keymap_common.c \
+ $Q/quantum/keymap_introspection.c $Q/quantum/led.c $Q/quantum/quantum.c \
+ $Q/quantum/keyboard.c $Q/quantum/matrix_common.c $Q/quantum/dynamic_keymap.c \
+ $Q/quantum/eeconfig.c $Q/quantum/sync_timer.c $Q/quantum/bitwise.c \
+ $Q/quantum/deferred_exec.c $Q/quantum/caps_word.c $Q/quantum/bootmagic/bootmagic.c \
+ $Q/quantum/process_keycode/process_magic.c $Q/quantum/logging/debug.c \
+ $Q/quantum/logging/print.c $Q/quantum/logging/sendchar.c \
+ $Q/quantum/debounce/sym_defer_g.c $Q/quantum/wear_leveling/wear_leveling.c \
+ $Q/quantum/send_string/send_string.c \
+ $Q/drivers/eeprom/eeprom_driver.c $Q/drivers/eeprom/eeprom_wear_leveling.c \
+ $Q/lib/fnv/hash_64a.c $Q/tmk_core/protocol/host.c $Q/tmk_core/protocol/report.c \
+ $Q/tmk_core/protocol/usb_device_state.c $Q/platforms/test/timer.c"
+QCK="$ROOT/firmware/platform/ch32v20x/ck5200_consumer.c \
+ $ROOT/firmware/platform/ch32v20x/wear_leveling_ch32v20x.c \
+ $ROOT/firmware/platform/ch32v20x/ck5200_keymap.c"
+
+cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_qmk_core_test \
+  tests/ck5200_qmk_core_test.c tests/qmk_shim/host_flash_model.c $QCORE $QCK
+
+/tmp/ck5200_qmk_core_test
+
+cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_protocol_task_test \
+  tests/ck5200_protocol_task_test.c tests/qmk_shim/host_flash_model.c \
+  firmware/platform/ch32v20x/protocol.c $QCORE $QCK
+
+/tmp/ck5200_protocol_task_test

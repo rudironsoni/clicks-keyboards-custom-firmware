@@ -13,8 +13,10 @@
 /* The first target uses a custom scanner matching the stock electrical scan. */
 #define CUSTOM_MATRIX
 
-/* Keep the first image small. Add VIA/NKRO/etc. only after basic bring-up. */
-#define NO_ACTION_ONESHOT
+/* Keep the first image small. Add VIA/NKRO/etc. only after basic bring-up.
+ * One-shot must stay enabled: the SYM key is OSL(1), and with
+ * NO_ACTION_ONESHOT it compiled to a no-op and locked out layer 1
+ * entirely (review 2026-10-11, F3). */
 #define NO_MUSIC_MODE
 
 /* QMK dynamic keymap, persistent through wear-leveled EEPROM over internal
