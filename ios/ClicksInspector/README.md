@@ -68,13 +68,13 @@ A simulator can validate the interface and empty state. It cannot validate this 
 
 The app now bundles both images and supports the full lifecycle:
 
-- **Flash custom firmware**: one tap on "Flash bundled custom firmware" (23,392 bytes, the current build), or import any `.bin` through the file picker. Works against stock firmware (first flash) and against custom firmware (re-flash/update).
-- **Restore stock firmware**: one tap on "Restore stock firmware (V122)". Works from custom firmware (restore) and from stock firmware (re-flash).
+- **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized, and the bundled QMK image is built for the wrong MCU family. The controller refuses any image that is not the authorized stock artifact; the buttons and the import path are removed until a separately reviewed image exists.
+- **Restore stock firmware**: one tap on "Restore stock firmware (V122)" (or "Re-flash stock firmware" while stock runs). The only operation the controller authorizes: the exact bundled V122 artifact after the keyboard identifies as the expected CK-5200 stock unit (model CK-5200, hardware 1.2.0, firmware 1.2.2, version payload 01 20 01 22).
 - **Self-test**: "Run self-test" executes identify, info, reads all four layers' keymaps, verifies every position against the decoded factory layout (from `FactoryLayout.swift`), then round-trips a write on the spare crossing. Publishes a per-check pass/fail report.
 - **Key test**: a focused text field where you type on the physical keyboard; every character that appears proves the HID report path works end to end.
 - **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
 - **Keymap editor**: now shows both the readable name and the hex value per cell, with an expanded preset list including arrows and the iOS keyboard toggle.
-- **Post-flash recovery**: after flashing, the keyboard reboots and re-enumerates. Re-open the session and run the self-test to verify the flash worked. The restore-stock button is always available.
+- **Post-flash state**: after A0 the session dies with the reboot. The app never claims installation success: it enters an `updateUnverified` state that survives reconnects and relaunches, refuses any further flashing, and clears only when you explicitly mark the update verified after the keyboard demonstrably works. A lost final-step reply is reported as commit-unknown, never as "nothing was written" (the outcome genuinely cannot be distinguished through this protocol).
 
 ## Run the focused host checks
 

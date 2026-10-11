@@ -2,6 +2,27 @@
 
 **Recovery is not verified. Do not flash custom firmware yet.**
 
+> **SUPERSEDED HARDWARE FACTS (2026-10-12).** This document predates the
+> MCU-family correction. The keyboard is a CH32X035-class device, and the
+> following statements in this file are wrong for it:
+>
+> - Any CH32V203 pin or debug claim. The X035's debug interface is WCH SDI
+>   (PC18 DIO / PC19 DCK, package-dependent, WCH probe only, not ARM SWD),
+>   and the X035's factory-boot entry signal is PC17, which is also USB D+,
+>   sampled at power-on (see `recovery-research.md`).
+> - Any memory-map claim beyond `0x0800F7FF`: main flash is 248 pages of
+>   256 bytes ending at `0x0800F7FF`; `0x0800F800` upward is RESERVED and
+>   must never be written.
+> - Any suggestion that ISP tools are safe on this device as-is: the
+>   maintained host tools (wchisp, chprog) erase and write code flash from
+>   offset 0 with a minimum 8 KB erase, would destroy the never-dumped
+>   Clicks installer, cannot read code flash back at all, and chprog's
+>   detect path can rewrite protection config, which can mass-erase.
+>
+> The current evidence is in [`recovery-research.md`](recovery-research.md)
+> and [`flash-readiness.md`](flash-readiness.md). Treat the physical
+> procedure sections below as historical CH32V203-era notes until rewritten.
+
 ## Preserve the stock application without touching USB
 
 From the repository root:
