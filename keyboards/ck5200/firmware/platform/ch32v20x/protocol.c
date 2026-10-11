@@ -34,7 +34,10 @@ static bool submit_hid_report(const report_keyboard_t *report) {
 
     uint8_t buf[HID_REPORT_SIZE];
     ck5200_consumer_pack(buf, (const uint8_t *)report);
-    if (!tud_hid_report(0, buf, sizeof(buf))) return false;
+    /* Boot protocol carries the plain 8-byte boot report; the consumer
+     * tail exists only in report protocol (review 2026-10-11, F7). */
+    const uint16_t length = keyboard_protocol ? HID_REPORT_SIZE : 8u;
+    if (!tud_hid_report(0, buf, length)) return false;
 
     keyboard_report_in_flight = true;
     return true;
@@ -188,7 +191,12 @@ static void retain_interrupted_keyboard_report(void) {
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     if (instance != 0 || !keyboard_report_in_flight) return;
     keyboard_report_in_flight = false;
-    if (!report || len != sizeof(last_keyboard_report)) return;
+    /* Transfers complete at the wire size (10 with the consumer tail, 8
+     * in boot protocol); the keyboard part is always the first 8 bytes.
+     * The old exact-8 check never matched, the pending report was never
+     * cleared, and one completed tap froze the scan forever (review
+     * 2026-10-11, F1/F-1). */
+    if (!report || len < sizeof(last_keyboard_report)) return;
 
     memcpy(&last_keyboard_report, report, sizeof(last_keyboard_report));
     last_keyboard_report_valid = true;
