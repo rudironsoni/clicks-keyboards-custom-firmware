@@ -79,7 +79,7 @@ struct ProtocolCheck {
         expectEqual("chunker starts unfinished", chunker.finished, false)
         var chunks: [[UInt8]] = []
         var accepted = 0
-        while let next = chunker.nextExchange {
+        while let next = chunker.nextExchange() {
             chunks.append(next.request)
             accepted = min(accepted + (next.request.count - 6), 100)
             try chunker.applyAcceptedOffset(UInt32(accepted))
@@ -98,6 +98,34 @@ struct ProtocolCheck {
         expectEqual("oversized image error", error, CustomKeyboardError.imageTooLarge(size: CustomKeyboardCommand.maximumImageSize + 1))
     } catch {
         preconditionFailure("unexpected error: \(error)")
+    }
+
+    // Exact chunk acknowledgements (review 2026-10-12): the stock handler
+    // returns the new cumulative offset, nothing else. Zero progress,
+    // partial acknowledgement, backward movement, and forward jumps all
+    // abort the transaction.
+    do {
+        let image = [UInt8](0..<200)
+        var chunker = try UpdateChunker(image: image)
+        _ = chunker.nextExchange() /* chunk 0..31 */
+        func badAck(_ value: UInt32, _ what: String) -> Bool {
+            do {
+                try chunker.applyAcceptedOffset(value)
+                return false
+            } catch CustomKeyboardError.updateRejected {
+                return true
+            } catch {
+                return false
+            }
+        }
+        expectEqual("zero-progress acknowledgement rejected", badAck(0, "zero"), true)
+        expectEqual("partial acknowledgement rejected", badAck(10, "partial"), true)
+        expectEqual("backward acknowledgement rejected", { _ = chunker.nextExchange(); return badAck(0, "backward") }(), true)
+        expectEqual("forward-jump acknowledgement rejected", { _ = chunker.nextExchange(); return badAck(1000, "jump") }(), true)
+        try chunker.applyAcceptedOffset(32)
+        expectEqual("exact acknowledgement accepted", chunker.offset, 32)
+    } catch {
+        preconditionFailure("chunker ack check threw: \(error)")
     }
 
     print("ok")

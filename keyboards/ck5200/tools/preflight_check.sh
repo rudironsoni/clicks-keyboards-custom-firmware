@@ -111,12 +111,27 @@ if xcrun swiftc -module-cache-path "$SWIFT_CACHE" \
     "$REPO/ios/ClicksInspector/Sources/CustomFirmwareController.swift" \
     "$REPO/ios/ClicksInspector/Tests/ck5200_flash_check.swift" \
     -o /tmp/ck5200_flash_check 2>/dev/null; then
-    check "Swift flash-path check (scripted stock device, review F-2/F-7)" \
+    check "Swift flash-path check (authorized stock only, review 2026-10-12)" \
         /tmp/ck5200_flash_check \
         "$REPO/ios/ClicksInspector/Resources/iKeyboard_CK-5200_V122_120.bin" \
         "$REPO/ios/ClicksInspector/Resources/ck5200_qmk.bin"
 else
     printf '  SKIP  Swift flash-path check (swiftc not available)\n'
+fi
+
+if xcrun swiftc -module-cache-path "$SWIFT_CACHE" \
+    "$REPO/ios/ClicksInspector/Sources/KeycodeNames.swift" \
+    "$REPO/ios/ClicksInspector/Sources/FactoryLayout.swift" \
+    "$REPO/ios/ClicksInspector/Sources/KeyboardSelfTest.swift" \
+    "$REPO/ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift" \
+    "$REPO/ios/ClicksInspector/Sources/CustomFirmwareController.swift" \
+    "$REPO/ios/ClicksInspector/Sources/StreamLink.swift" \
+    "$REPO/ios/ClicksInspector/Tests/ck5200_stream_check.swift" \
+    -o /tmp/ck5200_stream_check 2>/dev/null; then
+    check "Swift stream-adapter check (partial writes, fragments, loss)" \
+        /tmp/ck5200_stream_check
+else
+    printf '  SKIP  Swift stream-adapter check (swiftc not available)\n'
 fi
 
 header "Per-commit buildability"

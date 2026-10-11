@@ -2,16 +2,20 @@
  * Host check for the flash path of the REAL CustomFirmwareController.
  *
  * A scripted device implementing the decoded stock A1/A2/A3/A0 handler
- * semantics (dispatcher at stock 0x3216; the APK updater flow) receives the
- * bundled images through the real controller and asserts every outgoing
- * packet byte-for-byte, staging equality at A3, the timeout+retry path,
- * session death mid-flash, A0 reboot confirmation, and image validation.
- * This is the host-side mirror of the firmware's ck5200_restore_test.c
- * (review 2026-10-11, findings F-2/F-7).
+ * semantics receives the bundled stock image through the real controller
+ * and asserts the actual client behavior: every outgoing packet
+ * byte-for-byte, staging equality, the authorization gate, target-identity
+ * checks, reply-payload validation (advertised maximum, committed size),
+ * exact-offset acknowledgement, timeout and retry semantics, the A3
+ * commit-unknown state, session death mid-flash, A0 reboot handling, the
+ * unresolved-update state across relaunch, and reentrancy (reviews
+ * 2026-10-11 and 2026-10-12).
  *
  * Compile and run:
- *   swiftc Sources/CustomKeyboardProtocol.swift Sources/CustomFirmwareController.swift \
- *     Tests/ck5200_flash_check.swift -o /tmp/ck5200_flash_check
+ *   swiftc Sources/KeycodeNames.swift Sources/FactoryLayout.swift \
+ *     Sources/KeyboardSelfTest.swift Sources/CustomKeyboardProtocol.swift \
+ *     Sources/CustomFirmwareController.swift Tests/ck5200_flash_check.swift \
+ *     -o /tmp/ck5200_flash_check
  *   /tmp/ck5200_flash_check <stock.bin> <custom.bin>
  */
 import Foundation
@@ -37,22 +41,29 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
     private(set) var closed = false
     private var staged: [UInt8] = []
     private var stagedOffset: UInt32 = 0
-    private var a1Size: UInt32?     /* size announced by A1 */
+    private var a1Size: UInt32?
 
     /* Test controls. */
-    var dropNextReplies = 0        /* swallow the next N replies */
-    var muteA2 = false             /* never answer A2 (hard timeout path) */
-    var closeAfterA2Count: Int?    /* simulate session death mid-A2 */
-    var closeOnA0 = true           /* reboot after A0 kills the session */
-    private var a2Answers = 0
+    var dropNextReplies = 0
+    var muteA2 = false
+    var closeAfterA2Count: Int?
+    var closeOnA0 = true
+    var advertisedMaximum: UInt32 = 0x6A00
+    var a3CommittedOverride: UInt32?
+    var replyStuckOffsetOnce = false
+    var testOnlyIntegrityCheck = true
+    var corruptOneStagedByte = false
+    var versionPayload: [UInt8] = [0x01, 0x20, 0x01, 0x22]
+    var dropA3ReplyOnce = false
+    private var a3Dropped = false
 
     /* Observed by the checks. */
     private(set) var a1Count = 0
     private(set) var a2Count = 0
     private(set) var a3Count = 0
     private(set) var a0Seen = false
-    private(set) var duplicateOffsets: [UInt32] = []
     private(set) var stagingVerified = false
+    private(set) var corruptedStagingAccepted = false
     private(set) var protocolErrors: [String] = []
 
     init(image: [UInt8]) { self.image = image }
@@ -64,8 +75,8 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
             return
         }
         switch bytes[1] {
-        case 0x03: /* version: stock firmware identity */
-            reply([0x08, 0x02, 0x03, 0x00, 0x01, 0x20, 0x01, 0x22])
+        case 0x03: /* version: the device's reported identity */
+            reply([0x08, 0x02, 0x03, 0x00] + versionPayload)
 
         case 0xa1:
             a1Count += 1
@@ -75,7 +86,7 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
             staged = []
             stagedOffset = 0
             let ok = size >= 1 && size <= 0x6A00
-            reply([0x08, 0x02, 0xa1, ok ? 0x00 : 0x01, 0x00, 0x00, 0x6a, 0x00])
+            reply([0x08, 0x02, 0xa1, ok ? 0x00 : 0x01] + be32bytes(advertisedMaximum))
 
         case 0xa2:
             a2Count += 1
@@ -89,31 +100,54 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
                 reply([0x08, 0x02, 0xa2, 0x01] + be32bytes(stagedOffset))
                 return
             }
-            if lastA2Offset == offset && a2Count > 1 {
-                duplicateOffsets.append(offset) /* same offset twice = retry */
+            let replyOffset: UInt32
+            if replyStuckOffsetOnce && a2Count > 1 {
+                /* A misbehaving device acknowledges without progress once. */
+                replyOffset = stagedOffset
+            } else {
+                var chunk = Array(bytes[6...])
+                if corruptOneStagedByte && a2Count == 1 {
+                    /* Corruption in transit: the device stages corrupted
+                     * bytes and cannot know (review 2026-10-12). */
+                    chunk[chunk.count / 2] ^= 0xFF
+                }
+                staged.append(contentsOf: chunk)
+                stagedOffset += UInt32(chunk.count)
+                replyOffset = stagedOffset
             }
-            lastA2Offset = offset
-            let chunk = Array(bytes[6...])
-            staged.append(contentsOf: chunk)
-            stagedOffset += UInt32(chunk.count)
-            a2Answers += 1
-            if let die = closeAfterA2Count, a2Answers >= die {
+            if let die = closeAfterA2Count, a2Count >= die {
                 dieMidFlash()
                 return
             }
-            reply([0x08, 0x02, 0xa2, 0x00] + be32bytes(stagedOffset))
+            reply([0x08, 0x02, 0xa2, 0x00] + be32bytes(replyOffset))
 
         case 0xa3:
             a3Count += 1
+            if dropA3ReplyOnce && !a3Dropped {
+                /* A committed update whose reply was lost (review
+                 * 2026-10-12): indistinguishable from a failed commit. */
+                a3Dropped = true
+                return
+            }
             guard bytes.count == 6 else { protocolErrors.append("A3 length"); return }
             let size = be32(bytes, 2)
+            /* The real stock handler checks update state and length only; it
+             * does NOT compare the staged bytes against the source image.
+             * The equality check below is a TEST-ONLY assertion of the
+             * client's output, disabled for the corrupted-payload scenario
+             * (review 2026-10-12). */
             var ok = size == stagedOffset && size == a1Size
-            if ok {
-                /* The whole point: the staged bytes equal the source image. */
+            if ok && testOnlyIntegrityCheck {
                 stagingVerified = staged == image
                 ok = stagingVerified
             }
-            reply([0x08, 0x02, 0xa3, ok ? 0x00 : 0x01] + be32bytes(stagedOffset))
+            if ok && corruptOneStagedByte {
+                /* Honest negative: the staged bytes differ from the source
+                 * image, and the real protocol accepts anyway. */
+                corruptedStagingAccepted = staged != image
+            }
+            let committed = a3CommittedOverride ?? stagedOffset
+            reply([0x08, 0x02, 0xa3, ok ? 0x00 : 0x01] + be32bytes(committed))
 
         case 0xa0:
             guard bytes.count == 2 else { protocolErrors.append("A0 length"); return }
@@ -131,8 +165,6 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
     }
 
     func close() { closed = true } /* host-side close; the device stays silent */
-
-    private var lastA2Offset: UInt32 = 0xFFFF_FFFF
 
     private func dieMidFlash() {
         closed = true
@@ -176,10 +208,16 @@ private func waitUntil(_ what: String, timeout seconds: Double = 10,
 }
 
 @MainActor
-private func makeController(link: ScriptedDeviceLink) -> CustomFirmwareController {
+private func makeController(link: ScriptedDeviceLink,
+                            target: CustomFirmwareController.ConnectedTarget? =
+                                CustomFirmwareController.ConnectedTarget(
+                                    model: "CK-5200", firmwareRevision: "1.2.2",
+                                    hardwareRevision: "1.2.0")) -> CustomFirmwareController {
+    CustomFirmwareController.resetPendingUpdateForTesting()
     let controller = CustomFirmwareController()
     controller.exchangeTimeoutNanos = 200_000_000    /* 200 ms for the host run */
     controller.rebootConfirmTimeoutNanos = 300_000_000
+    controller.connectedTarget = target
     controller.attach(link)
     return controller
 }
@@ -205,68 +243,274 @@ struct FlashCheck {
         }
         let stockImage = loadFile(args[1])
         let customImage = loadFile(args[2])
+        defer { CustomFirmwareController.resetPendingUpdateForTesting() }
 
-        /* S1: validation accepts both bundled images and rejects garbage. */
-        do { try CustomKeyboardImageValidation.validate(image: stockImage); expect(true, "bundled stock image passes validation") }
-        catch { expect(false, "bundled stock image passes validation: \(error)") }
-        do { try CustomKeyboardImageValidation.validate(image: customImage); expect(true, "bundled custom image passes validation") }
-        catch { expect(false, "bundled custom image passes validation: \(error)") }
+        /* S1: structural validation still accepts both bundled images and
+         * rejects garbage; the GATE is separate and checked below. */
+        do { try CustomKeyboardImageValidation.validate(image: stockImage); expect(true, "bundled stock image passes structural validation") }
+        catch { expect(false, "bundled stock image passes structural validation: \(error)") }
         expect((try? CustomKeyboardImageValidation.validate(image: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x20, 0x00])) == nil,
-               "non-JAL first word is rejected")
-        expect((try? CustomKeyboardImageValidation.validate(image: [UInt8](repeating: 0xFF, count: 0x6A01))) == nil,
-               "oversized image is rejected")
-        expect((try? CustomKeyboardImageValidation.validate(image: [])) == nil,
-               "empty image is rejected")
+               "non-JAL first word is rejected structurally")
 
-        /* S2: the full stock image goes through the real controller, every
-         * packet byte-checked, staged bytes equal the source, A0 reboots. */
+        /* S2: the authorization gate. Only the exact authorized stock V122
+         * artifact may be staged; every other image is refused before any
+         * packet is sent (review 2026-10-12). */
         do {
             let link = ScriptedDeviceLink(image: stockImage)
             let controller = makeController(link: link)
-            await waitUntil("identify reports stock firmware", timeout: 5) {
+            await waitUntil("identify reports stock firmware (gate run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: customImage, rebootToInstall: true)
+            expect(link.a1Count == 0, "the unauthorized custom image was refused before A1")
+            if case .failed(let message) = controller.phase {
+                expect(message.contains("only the bundled stock V122 artifact"),
+                       "refusal names the gate (got: \(message))")
+            } else {
+                expect(false, "unauthorized image must fail the phase")
+            }
+
+            controller.flash(image: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x20, 0x00],
+                             rebootToInstall: true)
+            expect(link.a1Count == 0, "a structurally valid but unauthorized image is also refused")
+        }
+
+        /* S3: the target-identity checks (review 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            let controller = makeController(link: link, target: nil)
+            await waitUntil("identify reports stock firmware (no-target run)", timeout: 5) {
                 if case .stockFirmware = controller.phase { return true }
                 return false
             }
             controller.flash(image: stockImage, rebootToInstall: true)
-            await waitUntil("stock re-flash completes (A0 + session death)", timeout: 20) {
-                if case .idle = controller.phase { return link.a0Seen }
+            expect(link.a1Count == 0, "missing target identity refuses to flash")
+        }
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            let wrongTarget = CustomFirmwareController.ConnectedTarget(
+                model: "CK-9999", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            let controller = makeController(link: link, target: wrongTarget)
+            await waitUntil("identify reports stock firmware (wrong-model run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            expect(link.a1Count == 0, "wrong model refuses to flash")
+        }
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            let wrongHw = CustomFirmwareController.ConnectedTarget(
+                model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "9.9.9")
+            let controller = makeController(link: link, target: wrongHw)
+            await waitUntil("identify reports stock firmware (wrong-hardware run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            expect(link.a1Count == 0, "wrong hardware revision refuses to flash")
+        }
+        do {
+            /* The device reports an unrecognized version payload: flashing
+             * must be refused even with the right target strings. */
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.versionPayload = [0x01, 0x20, 0x01, 0x23]
+            let controller = makeController(link: link)
+            await waitUntil("identify reports the unrecognized firmware", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            expect(link.a1Count == 0, "flashing refused while the version payload is unrecognized")
+        }
+
+        /* S4: the full authorized stock re-flash: every packet byte-checked,
+         * A1 maximum honored, staged bytes equal the source, A0 reboots,
+         * and the controller ends in the unverified state, cleared only by
+         * explicit reconciliation (review 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (full run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("stock re-flash ends in the unverified state", timeout: 20) {
+                if case .updateUnverified = controller.phase { return link.a0Seen }
                 return false
             }
             expect(link.protocolErrors.isEmpty, "no protocol violations (got \(link.protocolErrors))")
-            expect(link.stagingVerified, "staged bytes equal the stock image byte-for-byte at A3")
+            expect(link.stagingVerified, "staged bytes equal the stock image byte-for-byte at A3 (test-only client-output assertion)")
             expect(link.a0Seen, "A0 reboot command was delivered")
+            expect(controller.pendingUpdate != nil, "the unresolved-update record exists until reconciled")
+
+            /* Refuse a second flash while unresolved: attach a fresh session
+             * (the old one died with the reboot) and try again. */
+            let relink = ScriptedDeviceLink(image: stockImage)
+            controller.connectedTarget = CustomFirmwareController.ConnectedTarget(
+                model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            controller.attach(relink)
+            await waitUntil("the unresolved update persists across reconnect", timeout: 5) {
+                if case .updateUnverified = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            if case .updateUnverified = controller.phase { expect(true, "a second flash is refused while the update is unresolved") }
+            else { expect(false, "a second flash is refused while the update is unresolved") }
+
+            /* Explicit reconciliation clears it. */
+            controller.markPendingUpdateVerified()
+            expect(controller.pendingUpdate == nil, "explicit reconciliation clears the record")
         }
 
-        /* S3: a dropped A1 reply must trigger exactly one retry and still
-         * complete; A1 is idempotent (it re-inits staging, which is what a
-         * fresh cycle does anyway). */
+        /* S5: reentrancy: two rapid submissions must start exactly one
+         * transaction (review 2026-10-12). */
         do {
-            let link = ScriptedDeviceLink(image: customImage)
+            let link = ScriptedDeviceLink(image: stockImage)
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (double-submit run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            controller.flash(image: stockImage, rebootToInstall: true)
+            expect(link.a1Count <= 1, "double submission starts at most one A1 (got \(link.a1Count))")
+        }
+
+        /* S6: A1's advertised maximum is enforced (review 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.advertisedMaximum = 0x800
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (max run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("too-large image fails at A1", timeout: 5) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a2Count == 0, "no A2 was sent after the advertised maximum refused the image")
+            if case .failed(let message) = controller.phase {
+                expect(message.contains("advertised maximum"), "failure names the advertised maximum (got: \(message))")
+            }
+        }
+
+        /* S7: A2 acknowledgements must advance exactly by the sent chunk:
+         * zero progress aborts the transaction (review 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.replyStuckOffsetOnce = true
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (stuck-ack run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a no-progress acknowledgement aborts the update", timeout: 5) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a2Count == 2, "the transaction aborts right after the stuck acknowledgement (got \(link.a2Count))")
+        }
+
+        /* S8: A3's committed size must equal the image size (review
+         * 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.a3CommittedOverride = 0x1234
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (committed-size run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a mismatched committed size fails the update", timeout: 5) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            if case .failed(let message) = controller.phase {
+                expect(message.contains("committed size"), "failure names the committed size (got: \(message))")
+            }
+        }
+
+        /* S9: a lost A3 reply is NOT retried: the outcome is reported as
+         * unknown and recorded until reconciled (review 2026-10-12). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.closeOnA0 = false
+            let controller = makeController(link: link)
+            await waitUntil("identify reports stock firmware (commit-unknown run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            link.dropA3ReplyOnce = true /* the A3 reply is lost */
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a lost A3 reply surfaces commit-unknown", timeout: 10) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a3Count == 1, "the A3 was not blindly retried (got \(link.a3Count))")
+            if case .failed(let message) = controller.phase {
+                expect(message.contains("UNKNOWN"), "the failure states the ambiguous outcome (got: \(message))")
+            } else {
+                expect(false, "commit-unknown must fail the phase")
+            }
+            expect(controller.pendingUpdate?.outcome == .commitUnknown,
+                   "the commit-unknown outcome is recorded")
+
+            /* Relaunch: a fresh controller must NOT silently treat the
+             * unresolved update as idle or verified (review 2026-10-12). */
+            let link2 = ScriptedDeviceLink(image: stockImage)
+            let relaunched = CustomFirmwareController()
+            relaunched.exchangeTimeoutNanos = 200_000_000
+            relaunched.rebootConfirmTimeoutNanos = 300_000_000
+            relaunched.connectedTarget = CustomFirmwareController.ConnectedTarget(
+                model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            relaunched.attach(link2)
+            await waitUntil("a relaunched controller surfaces the unresolved update", timeout: 5) {
+                if case .updateUnverified = relaunched.phase { return true }
+                return false
+            }
+            expect(relaunched.pendingUpdate?.outcome == .commitUnknown,
+                   "the record survives relaunch")
+            relaunched.markPendingUpdateVerified()
+            expect(relaunched.pendingUpdate == nil, "explicit reconciliation clears the relaunch record")
+        }
+
+        /* S10: one dropped A1 reply triggers exactly one retry and still
+         * completes; A1 is safe to resend (it re-inits staging). */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
             let controller = makeController(link: link)
             await waitUntil("identify reports stock firmware (retry run)", timeout: 5) {
                 if case .stockFirmware = controller.phase { return true }
                 return false
             }
-            link.dropNextReplies = 1 /* arms after identify, so it hits the A1 reply */
-            controller.flash(image: customImage, rebootToInstall: true)
-            await waitUntil("retry run completes after a dropped reply", timeout: 20) {
-                if case .idle = controller.phase { return link.a0Seen }
+            link.dropNextReplies = 1 /* armed after identify: hits the A1 reply */
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("retry run completes after a dropped A1 reply", timeout: 20) {
+                if case .updateUnverified = controller.phase { return link.a0Seen }
                 return false
             }
             expect(link.a1Count == 2, "the dropped A1 reply caused exactly one A1 retry (got \(link.a1Count))")
-            expect(link.stagingVerified, "retry run staged the custom image correctly")
+            expect(link.stagingVerified, "retry run staged the stock image correctly")
+            controller.markPendingUpdateVerified()
         }
 
-        /* S4: a session that dies mid-A2 must fail cleanly, not hang. */
+        /* S11: a session that dies mid-A2 must fail cleanly, not hang. */
         do {
-            let link = ScriptedDeviceLink(image: customImage)
+            let link = ScriptedDeviceLink(image: stockImage)
             link.closeAfterA2Count = 3
             let controller = makeController(link: link)
             await waitUntil("identify reports stock firmware (death run)", timeout: 5) {
                 if case .stockFirmware = controller.phase { return true }
                 return false
             }
-            controller.flash(image: customImage, rebootToInstall: true)
+            controller.flash(image: stockImage, rebootToInstall: true)
             await waitUntil("mid-flash session death fails the update", timeout: 10) {
                 if case .failed = controller.phase { return true }
                 return false
@@ -276,17 +520,16 @@ struct FlashCheck {
             }
         }
 
-        /* S5: a device that never answers must fail via the timeout, not
-         * hang in .busy forever. */
+        /* S12: a device that never answers fails via the timeout. */
         do {
-            let link = ScriptedDeviceLink(image: customImage)
+            let link = ScriptedDeviceLink(image: stockImage)
             link.muteA2 = true
             let controller = makeController(link: link)
             await waitUntil("identify reports stock firmware (mute run)", timeout: 5) {
                 if case .stockFirmware = controller.phase { return true }
                 return false
             }
-            controller.flash(image: customImage, rebootToInstall: true)
+            controller.flash(image: stockImage, rebootToInstall: true)
             await waitUntil("silent device fails via timeout", timeout: 10) {
                 if case .failed = controller.phase { return true }
                 return false
@@ -296,25 +539,32 @@ struct FlashCheck {
             }
         }
 
-        /* S6: a garbage image is refused before any packet is sent. */
+        /* S13: honest negative (review 2026-10-12): the stock protocol
+         * checks update state and length only; it does NOT verify staged
+         * content. The client must not rely on the device catching a
+         * corrupted transfer. */
         do {
             let link = ScriptedDeviceLink(image: stockImage)
+            link.testOnlyIntegrityCheck = false
+            link.corruptOneStagedByte = true
+            link.closeOnA0 = true
             let controller = makeController(link: link)
-            await waitUntil("identify reports stock firmware (garbage run)", timeout: 5) {
+            await waitUntil("identify reports stock firmware (corruption run)", timeout: 5) {
                 if case .stockFirmware = controller.phase { return true }
                 return false
             }
-            controller.flash(image: [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x20, 0x00], rebootToInstall: true)
-            expect(link.a1Count == 0, "no A1 was sent for a rejected image")
-            if case .failed(let message) = controller.phase {
-                expect(message.contains("Rejected image"), "phase names the rejection")
-            } else {
-                expect(false, "garbage image must fail the phase")
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a corrupted transfer is NOT detected by the protocol", timeout: 20) {
+                if case .updateUnverified = controller.phase { return link.a0Seen }
+                return false
             }
+            expect(link.corruptedStagingAccepted,
+                   "A3 accepted despite corrupted staged bytes: the residual risk is real and documented")
+            controller.markPendingUpdateVerified()
         }
 
-        /* S7: A0 answered but the keyboard never reboots: the app must say
-         * the image is staged, not report success. */
+        /* S14: A0 answered but the keyboard never reboots: staged, not
+         * installed, and the state stays unverified either way. */
         do {
             let link = ScriptedDeviceLink(image: stockImage)
             link.closeOnA0 = false
@@ -324,13 +574,14 @@ struct FlashCheck {
                 return false
             }
             controller.flash(image: stockImage, rebootToInstall: true)
-            await waitUntil("missing reboot is reported as staged, not success", timeout: 10) {
-                if case .failed = controller.phase { return true }
+            await waitUntil("missing reboot stays unverified, never success", timeout: 10) {
+                if case .updateUnverified = controller.phase { return true }
                 return false
             }
-            if case .failed(let message) = controller.phase {
-                expect(message.contains("staged"), "the failure explains the staged state")
+            if case .updateUnverified(let message) = controller.phase {
+                expect(message.contains("staged"), "the state explains the staged-not-installed outcome")
             }
+            controller.markPendingUpdateVerified()
         }
 
         print(checkFailures == 0 ? "ok" : "==== \(checkFailures) failure(s) ====")
