@@ -28,6 +28,15 @@ final class CustomFirmwareController: ObservableObject {
     private var link: KeyboardPacketLink?
     private var exchange: CustomKeyboardExchange?
     private var continuation: CheckedContinuation<[UInt8], Error>?
+    private var timeoutTask: Task<Void, Never>?
+    private var rebootTask: Task<Void, Never>?
+    private var awaitingReboot = false
+
+    /// Per-exchange timeout, and the window after A0 in which the keyboard
+    /// must reboot (its session dies). Injectable so the host check can
+    /// exercise the timeout paths quickly (review 2026-10-11, F-7).
+    var exchangeTimeoutNanos: UInt64 = 5_000_000_000
+    var rebootConfirmTimeoutNanos: UInt64 = 10_000_000_000
 
     var layers: Int { info?.layers ?? 0 }
     var rows: Int { info?.rows ?? 0 }
@@ -38,12 +47,29 @@ final class CustomFirmwareController: ObservableObject {
         self.link = link
         link.onFragment = { [weak self] fragment in self?.receive(fragment) }
         link.onClosed = { [weak self] reason in
-            self?.link = nil
-            guard case .busy = self?.phase else {
-                self?.phase = .idle
+            guard let self else { return }
+            self.link = nil
+            self.timeoutTask?.cancel()
+            self.timeoutTask = nil
+            self.rebootTask?.cancel()
+            self.rebootTask = nil
+            if self.awaitingReboot {
+                /* Expected: the keyboard reboots to install after A0, which
+                 * kills the session. Not an error. */
+                self.awaitingReboot = false
+                self.resumePending(with: CustomKeyboardError.transportUnavailable)
+                self.phase = .idle
                 return
             }
-            self?.phase = .failed("Link closed: \(reason)")
+            /* Resume whatever exchange was in flight so the UI fails
+             * cleanly instead of hanging in .busy forever (review
+             * 2026-10-11, F-7). */
+            self.resumePending(with: CustomKeyboardError.transportUnavailable)
+            guard case .busy = self.phase else {
+                self.phase = .idle
+                return
+            }
+            self.phase = .failed("Link closed: \(reason)")
         }
         identify()
     }
@@ -51,11 +77,18 @@ final class CustomFirmwareController: ObservableObject {
     func detach() {
         link?.close()
         link = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        rebootTask?.cancel()
+        rebootTask = nil
+        awaitingReboot = false
         resumePending(with: CustomKeyboardError.transportUnavailable)
         phase = .idle
     }
 
     private func resumePending(with error: Error) {
+        timeoutTask?.cancel()
+        timeoutTask = nil
         exchange = nil
         let pending = continuation
         continuation = nil
@@ -228,35 +261,80 @@ final class CustomFirmwareController: ObservableObject {
     /// Works against stock firmware (first flash) and custom firmware
     /// (updates and restore-to-stock): the update dialect is identical.
     func flash(image: [UInt8], rebootToInstall: Bool) {
+        guard link != nil else {
+            fail("No connection; cannot flash")
+            return
+        }
+        if case .busy = phase { return } /* reentrancy guard */
+        do {
+            try CustomKeyboardImageValidation.validate(image: image)
+        } catch {
+            fail("Rejected image; \(error)")
+            return
+        }
         Task {
             do {
                 phase = .busy("Starting update session")
                 flashingProgress = 0
-                _ = try await perform(.beginUpdate(size: image.count))
+                _ = try await performWithRetry(.beginUpdate(size: image.count))
                 var chunker = try UpdateChunker(image: image)
                 while let next = chunker.nextExchange {
                     phase = .busy("Writing \(chunker.offset)/\(image.count) bytes")
-                    let reply = try await perform(next)
+                    let reply = try await performWithRetry(next)
                     guard reply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
                     try chunker.applyAcceptedOffset(reply.reduce(0) { ($0 << 8) | UInt32($1) })
                     flashingProgress = Double(chunker.offset) / Double(image.count)
                 }
                 phase = .busy("Finalizing update")
-                _ = try await perform(.finishUpdate(size: image.count))
+                _ = try await performWithRetry(.finishUpdate(size: image.count))
                 if rebootToInstall {
+                    /* A0 asks the keyboard to reboot into the installer; the
+                     * reboot kills the session. Keep the case attached. */
+                    phase = .busy("Waiting for the keyboard to reboot (about 10 seconds)")
+                    awaitingReboot = true
                     link?.send(CustomKeyboardCommand.rebootRequest)
-                    phase = .idle
-                    detach()
+                    rebootTask = Task { [weak self] in
+                        guard let self else { return }
+                        let confirmMillis = Int(self.rebootConfirmTimeoutNanos / 1_000_000)
+                        try? await Task.sleep(for: .milliseconds(confirmMillis))
+                        guard !Task.isCancelled else { return }
+                        self.rebootNotConfirmed()
+                    }
                 } else {
                     phase = .customFirmware("Update staged; it installs on the next keyboard reboot.")
                 }
             } catch {
+                /* onClosed already reported the real cause (link closed);
+                 * do not overwrite it with the generic transport error. */
+                if case .failed = phase { return }
                 fail("Update failed; \(error)")
             }
         }
     }
 
+    /// The session did not die within the confirmation window after A0:
+    /// the image is staged (A3 committed), so it installs on the next
+    /// power cycle, but the reboot may not have been delivered.
+    private func rebootNotConfirmed() {
+        guard awaitingReboot else { return }
+        awaitingReboot = false
+        phase = .failed("The keyboard did not reboot after the update command. The image is staged and installs on the next power cycle; it is safe to retry the update.")
+    }
+
     // MARK: Exchange plumbing
+
+    /// One bounded retry on a timeout. A1 and A3 are idempotent (A1 re-inits
+    /// staging, which is what a fresh cycle does anyway). For A2 the retry
+    /// covers a lost request; a lost reply after the device accepted the
+    /// chunk surfaces as an offset rejection, which fails the update
+    /// cleanly, and the next full attempt resyncs via A1.
+    private func performWithRetry(_ exchange: CustomKeyboardExchange) async throws -> [UInt8] {
+        do {
+            return try await perform(exchange)
+        } catch CustomKeyboardError.timedOut {
+            return try await perform(exchange)
+        }
+    }
 
     private func perform(_ exchange: CustomKeyboardExchange) async throws -> [UInt8] {
         guard let link else { throw CustomKeyboardError.transportUnavailable }
@@ -265,13 +343,31 @@ final class CustomFirmwareController: ObservableObject {
         return try await withCheckedThrowingContinuation { continuation in
             self.exchange = exchange
             self.continuation = continuation
+            timeoutTask?.cancel()
+            timeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(Int((self?.exchangeTimeoutNanos ?? 5_000_000_000) / 1_000_000)))
+                guard !Task.isCancelled else { return }
+                self?.exchangeTimedOut()
+            }
             link.send(request)
         }
+    }
+
+    /// A lost reply must fail the exchange cleanly instead of hanging the
+    /// UI in .busy forever (review 2026-10-11, F-7).
+    private func exchangeTimedOut() {
+        guard let pending = continuation else { return }
+        exchange = nil
+        continuation = nil
+        timeoutTask = nil
+        pending.resume(throwing: CustomKeyboardError.timedOut)
     }
 
     private func receive(_ fragment: [UInt8]) {
         guard var current = exchange else { return }
         guard let pendingContinuation = continuation else { return }
+        timeoutTask?.cancel()
+        timeoutTask = nil
         do {
             if let payload = try current.accumulator.append(fragment) {
                 exchange = nil

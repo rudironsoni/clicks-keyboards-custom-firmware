@@ -13,9 +13,12 @@ protocol KeyboardPacketLink: AnyObject {
  * Custom CK-5200 firmware protocol, same framing as stock
  * ([len, cmd, ...] / [len, 0x02, cmd, status, payload...], big-endian).
  *
- * Commands beyond the stock read set exist only in this project's QMK
- * firmware. Stock CK-5200 firmware 1.2.2 answers the version query with
- * hardware 01 20, never "QM", so every write below is unreachable on stock.
+ * The keymap commands 0x90..0x93 exist only in this project's QMK
+ * firmware; stock CK-5200 firmware 1.2.2 answers the version query with
+ * hardware 01 20, never "QM", so those are unreachable on stock. The
+ * A1/A2/A3/A0 update dialect, however, IS implemented by stock: the
+ * first flash from this app runs through the stock handler (see
+ * docs/FLASHING.md).
  */
 
 enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
@@ -28,6 +31,8 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
     case transportUnavailable
     case imageTooLarge(size: Int)
     case updateRejected(at: String, status: UInt8)
+    case timedOut
+    case invalidImage(String)
 
     var description: String {
         switch self {
@@ -49,6 +54,10 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
             "Image is \(size) bytes; the keyboard accepts at most 27136 (0x6a00)"
         case .updateRejected(let at, let status):
             "Update failed at \(at); status 0x\(String(status, radix: 16))"
+        case .timedOut:
+            "The keyboard did not answer in time; nothing was committed and the update can be retried safely"
+        case .invalidImage(let reason):
+            "Firmware image rejected: \(reason)"
         }
     }
 }
@@ -57,6 +66,56 @@ struct KeyboardInfo: Equatable {
     let layers: Int
     let rows: Int
     let columns: Int
+}
+
+/// Structural validation of a CK-5200 application image, the same checks
+/// as the Mac tool's validate_binary (keyboards/ck5200/tools/validate_image.py):
+/// a bootable image starts with a JAL to its reset handler inside the image,
+/// and declares the vector-table base at word 1. Stops the app from staging
+/// an arbitrary imported file into the one state the project calls
+/// unrecoverable (review 2026-10-11, F-2).
+enum CustomKeyboardImageValidation {
+    static let appBase = 0x2000
+    static let maxImageSize = 0x6A00
+
+    static func validate(image: [UInt8]) throws {
+        guard !image.isEmpty else { throw CustomKeyboardError.invalidImage("empty file") }
+        guard image.count <= CustomKeyboardCommand.maximumImageSize else {
+            throw CustomKeyboardError.imageTooLarge(size: image.count)
+        }
+        guard image.count >= 8 else {
+            throw CustomKeyboardError.invalidImage("too short for a reset jump and first vector entry")
+        }
+
+        func word(_ offset: Int) -> UInt32 {
+            UInt32(image[offset]) | (UInt32(image[offset + 1]) << 8)
+                | (UInt32(image[offset + 2]) << 16) | (UInt32(image[offset + 3]) << 24)
+        }
+
+        let instruction = word(0)
+        guard instruction & 0x7F == 0x6F else {
+            throw CustomKeyboardError.invalidImage("first instruction is not a JAL reset jump")
+        }
+        guard (instruction >> 7) & 0x1F == 0 else {
+            throw CustomKeyboardError.invalidImage("reset JAL must use x0 as its destination")
+        }
+
+        var immediate = ((instruction >> 31) & 1) << 20
+            | ((instruction >> 21) & 0x3FF) << 1
+            | ((instruction >> 20) & 1) << 11
+            | ((instruction >> 12) & 0xFF) << 12
+        if immediate & (1 << 20) != 0 { immediate -= 1 << 21 }
+        let target = appBase + Int(Int32(bitPattern: immediate))
+        guard target >= appBase, target < appBase + image.count else {
+            throw CustomKeyboardError.invalidImage("reset target 0x\(String(target, radix: 16)) is outside the image")
+        }
+        guard target & 1 == 0 else {
+            throw CustomKeyboardError.invalidImage("reset target is not 2-byte aligned")
+        }
+        guard word(4) == appBase else {
+            throw CustomKeyboardError.invalidImage("first vector target is 0x\(String(word(4), radix: 16)), expected 0x\(String(appBase, radix: 16))")
+        }
+    }
 }
 
 enum CustomKeyboardCommand {

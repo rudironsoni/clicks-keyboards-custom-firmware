@@ -210,9 +210,14 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate, Keyb
         if customLinkAttached {
             customLinkAttached = false
             customOutbox.removeAll()
+            let onClosed = linkOnClosed
             linkOnFragment = nil
             linkOnClosed = nil
-            customFirmware.detach()
+            /* Notify the controller so it drops the link, resumes any
+             * in-flight exchange, and sets its phase; without this a
+             * session death mid-flash hung the app in .busy forever
+             * (review 2026-10-11, F-7). */
+            onClosed?(reason)
         }
         if let session {
             let streams: [Stream?] = [session.inputStream, session.outputStream]

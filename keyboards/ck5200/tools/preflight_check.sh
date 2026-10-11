@@ -74,7 +74,7 @@ header "Host harnesses"
 cd "$ROOT"
 TEST_OUTPUT=$(bash scripts/test.sh 2>&1)
 OK_COUNT=$(echo "$TEST_OUTPUT" | grep -cE '^ok|passed')
-check "all 9 test outputs pass" test "$OK_COUNT" -ge 9
+check "all 11 test outputs pass" test "$OK_COUNT" -ge 11
 
 header "Restore-cycle harness (real images, real handler)"
 check "full stock + custom restore cycles" \
@@ -103,6 +103,22 @@ else
     printf '  SKIP  Swift layout check (swiftc not available)\n'
 fi
 
+if xcrun swiftc -module-cache-path "$SWIFT_CACHE" \
+    "$REPO/ios/ClicksInspector/Sources/KeycodeNames.swift" \
+    "$REPO/ios/ClicksInspector/Sources/FactoryLayout.swift" \
+    "$REPO/ios/ClicksInspector/Sources/KeyboardSelfTest.swift" \
+    "$REPO/ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift" \
+    "$REPO/ios/ClicksInspector/Sources/CustomFirmwareController.swift" \
+    "$REPO/ios/ClicksInspector/Tests/ck5200_flash_check.swift" \
+    -o /tmp/ck5200_flash_check 2>/dev/null; then
+    check "Swift flash-path check (scripted stock device, review F-2/F-7)" \
+        /tmp/ck5200_flash_check \
+        "$REPO/ios/ClicksInspector/Resources/iKeyboard_CK-5200_V122_120.bin" \
+        "$REPO/ios/ClicksInspector/Resources/ck5200_qmk.bin"
+else
+    printf '  SKIP  Swift flash-path check (swiftc not available)\n'
+fi
+
 header "Per-commit buildability"
 # This builds 11 commits, each a full firmware build (~15 minutes).
 # Run it separately: bash tools/verify_history.sh c1d9e7c
@@ -113,12 +129,11 @@ printf '        last recorded: 11/11 built, 0 failed\n'
 printf '\n%s\n' "-----------------------------------------"
 if [[ $FAIL -eq 0 ]]; then
     printf 'PREFLIGHT PASS: %s checks, 0 failures.\n\n' "$PASS"
-    printf 'All offline checks passed. You may proceed to the flash\n'
-    printf 'procedure in docs/FLASHING.md. Remember:\n'
-    printf '  1. Verify the stock keyboard types on the iPhone before flashing.\n'
-    printf '  2. Keep the case attached during the entire flash cycle.\n'
-    printf '  3. Run the self-test after the reboot to validate.\n'
-    printf '  4. The Mac restore path is always available as backup.\n'
+    printf 'All offline checks passed. This is a necessary gate, NOT flash\n'
+    printf 'approval: per the 2026-10-11 safety review, flashing stays blocked\n'
+    printf 'until the MCU family question is settled (read the chip marking) and\n'
+    printf 'an independent recovery path is demonstrated. See\n'
+    printf 'docs/reviews/2026-10-11-flash-safety-review.md and docs/RECOVERY.md.\n'
 else
     printf 'PREFLIGHT FAIL: %s passed, %s FAILED.\n\n' "$PASS" "$FAIL"
     printf 'DO NOT FLASH. Fix the failing checks first.\n'

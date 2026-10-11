@@ -1,5 +1,7 @@
+import CryptoKit
 import ExternalAccessory
 import SwiftUI
+import UIKit
 
 @main
 struct ClicksInspectorApp: App {
@@ -84,6 +86,15 @@ struct ClicksInspectorApp: App {
                 .toolbar {
                     Button("Refresh") { inspector.refresh() }
                 }
+                /* Keep the screen awake while flashing: a locked phone kills
+                 * the session mid-A2 (review 2026-10-11, F-7). */
+                .onChange(of: inspector.customFirmware.phase) { _, phase in
+                    if case .busy = phase {
+                        UIApplication.shared.isIdleTimerDisabled = true
+                    } else {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                    }
+                }
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -105,6 +116,7 @@ private struct CustomFirmwareSection: View {
     @ObservedObject var custom: CustomFirmwareController
     @State private var importingFirmware = false
     @State private var confirmation: Confirmation?
+    @State private var importError: String?
 
     private enum Confirmation: Identifiable {
         case flashCustom([UInt8])
@@ -162,8 +174,16 @@ private struct CustomFirmwareSection: View {
                 guard url.startAccessingSecurityScopedResource(),
                       let image = try? Data(contentsOf: url) else { return }
                 defer { url.stopAccessingSecurityScopedResource() }
-                if !image.isEmpty {
-                    confirmation = .flashCustom(Array(image))
+                let bytes = Array(image)
+                /* Reject anything that is not a structurally valid CK-5200
+                 * image before it can reach the flash button (review
+                 * 2026-10-11, F-2). */
+                do {
+                    try CustomKeyboardImageValidation.validate(image: bytes)
+                    importError = nil
+                    confirmation = .flashCustom(bytes)
+                } catch {
+                    importError = "\(error)"
                 }
             case .failure:
                 break
@@ -174,10 +194,10 @@ private struct CustomFirmwareSection: View {
                 switch confirmation {
                 case .flashCustom(let image):
                     ("Flash custom firmware",
-                     "Stages \(image.count) bytes and reboots the keyboard to install. Keep the case attached until it restarts.")
+                     "Stages \(image.count) bytes (sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install. Keep the case attached until it restarts.")
                 case .restoreStock(let image):
                     ("Restore stock firmware",
-                     "Stages the bundled Clicks V122 image (\(image.count) bytes) and reboots the keyboard to install it.")
+                     "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.")
                 }
             }()
             ConfirmationView(title: title, detail: detail) {
@@ -187,6 +207,15 @@ private struct CustomFirmwareSection: View {
                 }
             }
         }
+        if let importError {
+            Text("Import rejected: \(importError)")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private static func sha256(_ bytes: [UInt8]) -> String {
+        SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func stockImage() -> [UInt8]? {
