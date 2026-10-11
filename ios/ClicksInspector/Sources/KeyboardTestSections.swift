@@ -91,7 +91,7 @@ struct LayoutPreviewSection: View {
             if custom.phaseIsCustomFirmware, custom.layers > 0 {
                 Picker("Layer", selection: $selectedLayer) {
                     ForEach(0..<custom.layers, id: \.self) { layer in
-                        Text("Layer \(layer): \(Self.layerNames[layer])").tag(layer)
+                        Text("Layer \(layer): \(LayoutStyle.layerNames[layer])").tag(layer)
                     }
                 }
                 ForEach(0..<custom.rows, id: \.self) { row in
@@ -104,7 +104,7 @@ struct LayoutPreviewSection: View {
                                     .frame(maxWidth: .infinity, minHeight: 28)
                                     .background(
                                         RoundedRectangle(cornerRadius: 4)
-                                            .fill(Self.backgroundColor(for: keycode))
+                                            .fill(LayoutStyle.backgroundColor(for: keycode))
                                     )
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 4)
@@ -123,7 +123,7 @@ struct LayoutPreviewSection: View {
         }
     }
 
-    private struct Self {
+    private struct LayoutStyle {
         static let layerNames = ["Base (QWERTY)", "SYM (numbers/symbols)", "Cursor (hold Clicks key)", "Reserved"]
         static func backgroundColor(for keycode: UInt16) -> Color {
             if keycode == KeycodeNames.transparent { return Color.gray.opacity(0.08) }
