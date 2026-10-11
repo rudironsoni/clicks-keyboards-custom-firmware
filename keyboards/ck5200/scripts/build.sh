@@ -25,7 +25,7 @@ if ! command -v riscv-none-elf-gcc >/dev/null 2>&1 && ! command -v riscv-none-em
   exit 1
 fi
 
-if [[ ! -d external/qmk_firmware/.git || ! -d external/tinyusb/.git || ! -d external/ch32v20x/.git ]]; then
+if [[ ! -d external/qmk_firmware/.git || ! -d external/tinyusb/.git || ! -d external/ch32x035/.git ]]; then
   echo "Source dependencies are missing. Run: bash scripts/setup.sh" >&2
   exit 1
 fi
@@ -44,7 +44,7 @@ verify_pin() {
 }
 verify_pin external/qmk_firmware "$QMK_COMMIT"
 verify_pin external/tinyusb "$TINYUSB_COMMIT"
-verify_pin external/ch32v20x "$OPENWCH_COMMIT"
+verify_pin external/ch32x035 "$OPENWCH_X035_COMMIT"
 
 cmake -S . -B build -G Ninja   -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-gcc-toolchain.cmake   -DCMAKE_BUILD_TYPE=MinSizeRel
 

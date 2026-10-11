@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include "../firmware/platform/ch32v20x/ck5200_update_protocol.h"
+#include "../firmware/platform/ch32x035/ck5200_update_protocol.h"
 
 static uint32_t next_offset;
 static unsigned reboot_count;

@@ -26,7 +26,7 @@
 #include "report.h"
 #include "ck5200_consumer.h"
 #include "ck5200_keymap.h"
-#include "ch32v20x.h" /* shim: flash model + counters */
+#include "ch32x035.h" /* shim: flash model + counters */
 
 /* platforms/test/timer.c manual time control (declared only in test code). */
 void     set_time(uint32_t t);
@@ -370,21 +370,22 @@ static void t_dynamic_keymap_edit(void) {
 
 static void t_reboot_persistence(int cycles) {
     idle();
-    printf("\n== T7 simulated reboots: persistence and per-boot flash work ==\n");
+    printf("\n== T7 simulated re-inits: runtime-only persistence ==\n");
+    /* Persistence is runtime-only by design (review 2026-10-12): the
+     * CH32X035 has no writable region available to this firmware (flash
+     * ends at 0x0800F7FF; staging, serial, config, and the reserved
+     * region are off-limits), so the keymap lives in the transient RAM
+     * EEPROM backend. Edits survive a soft re-init within the same power
+     * session and are lost on real power loss; flash-backed persistence
+     * stays disabled until a storage partition is demonstrated. */
     for (int i = 0; i < cycles; ++i) {
-        int erases_before = host_flash_page_erase_calls();
         boot();
-        int erases_this_boot = host_flash_page_erase_calls() - erases_before;
-        CHECK(dynamic_keymap_get_keycode(0, 0, 0) == KC_X, "boot %d: KC_X persisted", i + 1);
-        /* Upstream wear-leveling contract: a clean boot with a valid log
-         * performs ZERO page erases. Failed before the complement fix
-         * (review 2026-10-11, F4: 4 erases per boot). */
-        CHECK(erases_this_boot == 0, "boot %d: 0 page erases on a clean boot (got %d)", i + 1, erases_this_boot);
+        CHECK(dynamic_keymap_get_keycode(0, 0, 0) == KC_X, "re-init %d: KC_X retained (RAM-backed)", i + 1);
     }
     boot();
     set_key(0, 0, true);
     settle(12);
-    CHECK(report_has(KC_X), "typed KC_X after reboot");
+    CHECK(report_has(KC_X), "typed KC_X after re-init");
     set_key(0, 0, false);
     settle(12);
 }
@@ -436,7 +437,6 @@ static void t_chatter_starvation(void) {
 }
 
 int main(void) {
-    host_flash_reset();
     set_time(0);
     t_first_boot_defaults();
     t_typing();

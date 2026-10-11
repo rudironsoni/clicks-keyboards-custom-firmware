@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-#define CFG_TUSB_MCU                 OPT_MCU_CH32V20X
+#define CFG_TUSB_MCU                 OPT_MCU_CH32X035
 #define CFG_TUSB_OS                  OPT_OS_NONE
 #define CFG_TUSB_DEBUG               0
 

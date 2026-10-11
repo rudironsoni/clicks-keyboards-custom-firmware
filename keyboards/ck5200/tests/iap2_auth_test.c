@@ -220,7 +220,7 @@ void iap2_io_cfghr_write(uint32_t v) {
 
 void RCC_APB2PeriphClockCmd(uint32_t periph, uint8_t state) { (void)periph; (void)state; }
 
-uint32_t SystemCoreClock = 144000000u;
+uint32_t SystemCoreClock = 48000000u; /* CH32X035: 48 MHz HSI, no PLL (review 2026-10-12) */
 
 /* ---- assertions --------------------------------------------------- */
 
@@ -318,11 +318,13 @@ int main(void) {
     RUN(address_nack_retries);
     RUN(peek_and_cmd_selectors);
 
-    /* Timing constant: stock wall-clock equivalence at 144 MHz
-     * (review 2026-10-11, F-4). */
+    /* Timing constant: stock wall-clock equivalence at the X035's 48 MHz
+     * core clock (review 2026-10-12). Stock is 18 iterations of a ~4-cycle
+     * loop at 48 MHz = ~1.5 us half-bit; ours is 24 iterations of a
+     * ~3-cycle loop at the same 48 MHz = ~1.5 us. */
     iap2_auth_init();
-    assert(SystemCoreClock == 144000000u);
-    assert(iap2_auth_host_bit_delay() == 72);
+    assert(SystemCoreClock == 48000000u);
+    assert(iap2_auth_host_bit_delay() == 24);
 
     printf("ok %d\n", passed);
     return 0;

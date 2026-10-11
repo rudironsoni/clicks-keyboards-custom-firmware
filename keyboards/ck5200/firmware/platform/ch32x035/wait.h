@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "ch32v20x.h"
+#include "ch32x035.h"
 
 static inline void ck5200_wait_us(uint32_t us) {
     /* Bring-up delay. The loop is intentionally conservative. Matrix timing is not critical. */

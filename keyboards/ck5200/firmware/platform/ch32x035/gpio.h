@@ -2,9 +2,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "ch32v20x.h"
-#include "ch32v20x_gpio.h"
-#include "ch32v20x_rcc.h"
+#include "ch32x035.h"
+#include "ch32x035_gpio.h"
+#include "ch32x035_rcc.h"
 
 typedef uint8_t pin_t;
 #define NO_PIN 0xFFu

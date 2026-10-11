@@ -45,9 +45,9 @@ static void bl_peripheral_init(void) { /* asserted by the harness stubs */ }
 static void     bl_write(size_t off, uint32_t v) { *(volatile uint32_t *)(TIM1_BASE_ADDR + off) = v; }
 static uint32_t bl_read(size_t off) { return *(volatile uint32_t *)(TIM1_BASE_ADDR + off); }
 
-#include "ch32v20x.h"
-#include "ch32v20x_gpio.h"
-#include "ch32v20x_rcc.h"
+#include "ch32x035.h"
+#include "ch32x035_gpio.h"
+#include "ch32x035_rcc.h"
 
 static void bl_peripheral_init(void) {
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_TIM1, ENABLE);

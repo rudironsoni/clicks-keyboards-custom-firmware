@@ -3,7 +3,7 @@
  * 0x50ec (send byte), 0x51cc (read transaction), 0x515c (write transaction).
  */
 #include "iap2_auth.h"
-#include "ch32v20x.h"
+#include "ch32x035.h"
 
 #ifdef IAP2_AUTH_HOST_TEST
 /* Host-test hooks: the replay harness provides the register endpoints so

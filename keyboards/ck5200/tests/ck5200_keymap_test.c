@@ -14,7 +14,7 @@ void eeconfig_update_kb(uint32_t setting) { stub_kb_setting = setting; }
 static uint8_t stub_brightness;
 void ck5200_backlight_set(uint8_t raw) { stub_brightness = raw; }
 uint8_t ck5200_backlight_get(void) { return stub_brightness; }
-#include "../firmware/platform/ch32v20x/ck5200_keymap.h"
+#include "../firmware/platform/ch32x035/ck5200_keymap.h"
 
 #define MATRIX_ROWS 6
 #define MATRIX_COLS 6

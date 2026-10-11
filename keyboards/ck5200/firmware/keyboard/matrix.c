@@ -14,9 +14,9 @@
 
 #include "matrix.h"
 #include "wait.h"
-#include "ch32v20x.h"
-#include "ch32v20x_gpio.h"
-#include "ch32v20x_rcc.h"
+#include "ch32x035.h"
+#include "ch32x035_gpio.h"
+#include "ch32x035_rcc.h"
 
 #define MATRIX_MASK ((uint16_t)0x003Fu)
 
@@ -31,7 +31,7 @@ void matrix_init_custom(void) {
     GPIO_Init(GPIOA, &gpio);
 
     gpio.GPIO_Pin = MATRIX_MASK;
-    gpio.GPIO_Speed = GPIO_Speed_10MHz;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
     gpio.GPIO_Mode = GPIO_Mode_Out_PP;
     GPIO_Init(GPIOB, &gpio);
     GPIO_ResetBits(GPIOB, MATRIX_MASK);
