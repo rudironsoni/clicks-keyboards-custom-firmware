@@ -32,13 +32,13 @@ Final local build (CH32X035 re-target, X035 SDK pinned at `c6253942`):
 
 ```text
 file     build/ck5200_qmk.bin
-size     24136 bytes (0x5e48)
+size     24124 bytes (0x5e3c)
 maximum  27136 bytes (0x6a00)
 base     0x2000
-sha256   249eb262a9d743a282227ea2e48d178299a02f239bf8a93fd3c9049313964ea6
+sha256   7799f866ee18ea4c3ba93852b5c6cb7b32864a29efc88fc79301af7f84d09623
 ```
 
-Flash use is 88.94 percent of the application region on the X035 build. RAM use is 29.38 percent. Persistence is runtime-only (transient RAM EEPROM): no writable flash region exists on this part for this firmware, and flash-backed keymaps stay disabled until a storage partition is demonstrated. These checks establish the offline image layout, not hardware execution.
+Flash use is 88.90 percent of the application region on the X035 build. RAM use is 29.38 percent. Persistence is runtime-only (transient RAM EEPROM): no writable flash region exists on this part for this firmware, and flash-backed keymaps stay disabled until a storage partition is demonstrated. These checks establish the offline image layout, not hardware execution.
 
 The temporary `/tmp` ASan harnesses an earlier session used to claim protocol coverage are superseded: the 2026-10-11 review proved their completion-callback model was idealized (it passed while the production path froze the scan after one tap) and their sources no longer exist. The committed `tests/ck5200_protocol_task_test.c` replaces them with a TinyUSB-0.21-faithful stub.
 
