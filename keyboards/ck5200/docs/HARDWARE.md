@@ -19,7 +19,7 @@ The resulting application interval is `[0x00002000, 0x00008A00)`. Flash physical
 
 ## Chip and keyboard wiring
 
-[INFERENCE] The code and address map are consistent with a CH32V203-class MCU with 20 KiB RAM. The exact part, package, board revision, flash protection, oscillator, and debug-pad layout remain **UNVERIFIED**.
+[INFERENCE] The code and address map are consistent with a CH32X035-class MCU with 20 KiB RAM; the earlier CH32V203 reading is superseded ([X035-PORT.md](X035-PORT.md)). Photo evidence (2026-10-13) verifies a 48-lead QFP package for U3, consistent with the CH32X035C8T6 if the family holds, plus four labeled pads 3V3/SWD/GND/SWC beside it. The exact part marking, board revision, flash protection, oscillator, and pad-to-pin continuity remain **UNVERIFIED**. See [hardware-photo-report.md](hardware-photo-report.md).
 
 [CORRECTION] A 64 KiB application-flash description is not a complete backup boundary. The [CH32V203 datasheet, table 2-1 note 1](https://cdn-learn.adafruit.com/assets/assets/000/131/418/original/CH32V203DS0.PDF?1721655401=) distinguishes the fast program area from additional flash, with 224 KiB combined. Confirm the actual part and cover its additional storage before calling a dump complete. See [RECOVERY.md](RECOVERY.md).
 

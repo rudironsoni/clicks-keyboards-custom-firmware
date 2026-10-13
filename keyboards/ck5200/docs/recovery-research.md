@@ -63,8 +63,8 @@ Consequences for the CK-5200:
 | --- | --- | --- | --- |
 | Stock running, update interrupted | Recovers: fresh A1/A2/A3 rewrites staging (VERIFIED in the restore harness) | Would destroy the installer | Readback-verified restore possible |
 | Custom app runs, has a fault | Recovers: A1/A2/A3/A0 retained in the port; software `Start_Mode_BOOT` is an orderly exit, not rescue | Entry requires the app or a strap (unknown) | Yes |
-| Custom app does not boot | NO (protocol needs USB enumerating) | Only if PC17 entry is accessible on this board: UNKNOWN | Yes, if the pads exist and are unprotected |
-| USB does not enumerate | NO | Only via PC17 entry: UNKNOWN | Yes, same conditions |
+| Custom app does not boot | NO (protocol needs USB enumerating) | Only if PC17 entry is accessible on this board: UNKNOWN; no BOOT pad appears in the 2026-10-13 photos | Yes, if the labeled 3V3/SWD/GND/SWC pads beside U3 are the SDI pair: continuity and protection state UNVERIFIED (2026-10-13 photos) |
+| USB does not enumerate | NO | Only via PC17 entry: UNKNOWN; no BOOT pad appears in the 2026-10-13 photos | Yes, same conditions |
 | Installer region destroyed | Nothing recovers it: no artifact contains the installer bytes | Would brick the vendor update path permanently | Only a pre-existing dump could |
 
 ## 5. Non-eliminable risks under the current constraints
@@ -97,7 +97,22 @@ investigation, in order:
    installer backup.
 3. If PC17 is not accessible: report the recovery requirement as UNMET. The
    SDI probe route remains as the only full-dump option and requires
-   physical access decisions outside the current constraints.
+   physical access decisions outside the current constraints. Photo
+   update: labeled 3V3/SWD/GND/SWC pads beside U3 make this route
+   concrete; continuity, pin assignment, and protection state remain
+   unverified (hardware-photo-report.md).
 
 A successful stock-to-stock update must never be used to override this
 conclusion.
+
+## 7. Photo evidence update (2026-10-13)
+
+The 24 back-side PCB photographs are analyzed in
+[hardware-photo-report.md](hardware-photo-report.md). Effects on this
+report: U3 is a 48-lead QFP (12 leads per side, VERIFIED in five frames by
+two models), so the CH32X035C8T6 (LQFP48) replaces the R8T6 (LQFP64M) as
+the package hypothesis and that report's pin table applies (PC16=32,
+PC17=33, PC18=34, PC19=37). Four labeled pads 3V3/SWD/GND/SWC sit beside
+U3 (labels VERIFIED, two models; continuity UNVERIFIED). No BOOT pad
+appears in any photo, so the PC17 questions stay UNKNOWN. The GO/NO-GO is
+unchanged.
