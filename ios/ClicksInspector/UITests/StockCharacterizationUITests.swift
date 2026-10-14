@@ -151,16 +151,20 @@ final class StockCharacterizationUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, up: Bool) {
-        for _ in 0..<30 {
-            if element.exists && element.isHittable { return }
-            var moveUp = up
-            if element.exists, !element.frame.isEmpty, element.frame.minY.isFinite {
-                moveUp = element.frame.midY > app.frame.midY
+        // Lazy list rows can disappear after an insertion moves them above the viewport.
+        // Search both directions rather than continuing into the same list boundary.
+        for direction in [up, !up] {
+            for _ in 0..<30 {
+                if element.exists && element.isHittable { return }
+                var moveUp = direction
+                if element.exists, !element.frame.isEmpty, element.frame.minY.isFinite {
+                    moveUp = element.frame.midY > app.frame.midY
+                }
+                // Short drags in the list gutter avoid the nested text view and overshoot.
+                let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
+                let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: moveUp ? 0.35 : 0.75))
+                start.press(forDuration: 0.05, thenDragTo: end)
             }
-            // Short drags in the list gutter avoid the nested text view and overshoot.
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: moveUp ? 0.35 : 0.75))
-            start.press(forDuration: 0.05, thenDragTo: end)
         }
         XCTAssertTrue(element.isHittable)
     }
