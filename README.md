@@ -1,8 +1,14 @@
 # Clicks keyboards custom firmware
 
-Experimental QMK port for the Clicks Keyboard Case for **iPhone 15 Pro Max**, identified here as CK-5200. The goal is a usable iOS keyboard with custom keys and layers.
+An iOS app and experimental custom firmware for the Clicks CK-5200 case for **iPhone 15 Pro Max**.
 
-**Status: ready for first flash.** The firmware builds, validates, passes all host harnesses, and carries the full Apple session (MFi) stack, the decoded physical keymap, the backlight driver, and the update/restore dialect. The first flash is the first live hardware test. Read [FLASHING.md](keyboards/ck5200/docs/FLASHING.md) before proceeding.
+The product goals are official stock installation, separately authorized custom-firmware transitions, and iPhone-only stock recovery. Preserve the only keyboard and reuse maintained upstream code.
+
+**Custom firmware readiness: NO-GO.** Host tests and builds do not prove boot, USB, authentication, key mapping, power, or recovery on this keyboard. The handwritten accessory-side `iap2.c` and `iap2_auth.c` remain experimental. No custom image is authorized.
+
+**R3 independent recovery: UNMET.** The proprietary installer remains unread. An application key chord cannot recover an application that cannot execute. Debug and factory ISP research remain contingencies, not the iPhone-only recovery architecture.
+
+Current work: [Stock Characterization in Clicks Inspector](ios/ClicksInspector/STOCK_CHARACTERIZATION.md). Collect real stock observations before firmware replacement. This mode cannot flash or change settings. The separate firmware controller retains its existing stock-only authorization.
 
 ## Safe local work
 
@@ -29,7 +35,7 @@ bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 
 ## Project state
 
-- [Read-only iPhone accessory inspector](ios/ClicksInspector/README.md).
+- [Clicks Inspector: stock evidence and gated firmware controls](ios/ClicksInspector/README.md).
 - [Current status and all eight work packages](keyboards/ck5200/STATUS.md).
 - [**Flashing: procedure, risks, and recovery**](keyboards/ck5200/docs/FLASHING.md).
 - [Build and image checks](keyboards/ck5200/docs/BUILD_AND_FLASH.md).

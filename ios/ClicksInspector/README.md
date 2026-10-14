@@ -1,8 +1,18 @@
 # Clicks Inspector for iPhone
 
-A read-only experiment for the Clicks case on iPhone 15 Pro Max. It lists accessories visible to Apple's External Accessory framework and attempts a session with `com.clickscompanion.protocol` when you tap **Open session**. An open session enables selected stock queries for model `CK-5200`, hardware `1.2.0`, firmware `1.2.2` only.
+Clicks Inspector supports stock characterization and separately gated firmware controls for the CK-5200 on iPhone 15 Pro Max.
+Use [Stock Characterization](STOCK_CHARACTERIZATION.md) for the current baseline procedure, export contract, observation limits, and dependency assessment.
 
-The app sends a fixed read or diagnostic request only when you tap **Read selected value**. It has no arbitrary-command, settings-write, update, reboot, or memory-read operation. iOS manages accessory session setup. Opening a session is not proof that flash reading, firmware updates or recovery are supported. The app does not spoof the official Clicks app's bundle identifier.
+**Custom firmware: NO-GO. R3 independent recovery: UNMET.** The goal remains an iOS app and custom keyboard firmware with iPhone-only recovery.
+Builds and host tests do not prove hardware reliability. The installer remains unread.
+
+**Open session** uses the stock read-only path. It does not start the firmware controller or send automatic identification traffic.
+The seven demonstrated getters require model `CK-5200`, hardware `1.2.0`, firmware `1.2.2`.
+The characterization screen adds user-started three-pass reads, native keyboard-event recording, checkpoints, and redacted JSON/report export.
+It sends no settings, reset, update, or unknown-command requests.
+
+**Open firmware-control session** is separate and blocked during recording. The existing controller retains its stock-only gate and confirmation flow.
+Apple manages the accessory session and authentication. Opening a session does not prove memory access or recovery.
 
 ## Build and install
 
@@ -46,15 +56,20 @@ An empty list means this app cannot currently see an External Accessory connecti
 
 **Open** requires both streams to report that they opened. This proves only session access. The fixed read list is `02 03`, `02 84`, `02 86`, `02 88`, `02 8a`, `02 8c`, and `02 8d`. The [stock command audit](../../keyboards/ck5200/docs/USB_AND_IPHONE.md#stock-ios-session-and-read-command-investigation-2026-10-08) records each handler and its limits.
 
-Two additional diagnostics test specific static findings. **Probe checksum service 0x08** sends only `05 08 00 00 00`, expected reply `04 02 08 00`. **Probe newer user-key read 0x8F** sends only `06 8f 00 00 00 00`, expected reply `08 02 8f ff 00 00 00 00`. The latter explicitly expects an unsupported-command response, not a keymap. Only this probe permits status `ff`, and it also requires four zero payload bytes. Any different response closes the session and remains in the bounded RX log. These are fixed packets, not an opcode scan. Their [handler analysis](../../keyboards/ck5200/docs/USB_AND_IPHONE.md#bounded-service-probes) explains why they do not write keyboard state.
+Historical diagnostics used `05 08 00 00 00`, with reply `04 02 08 00`, and `06 8f 00 00 00 00`, with reply `08 02 8f ff 00 00 00 00`.
+They established an acknowledgement and an unsupported-command response, not a checksum, firmware dump, or keymap.
+Their parsers and [evidence](../../keyboards/ck5200/docs/USB_AND_IPHONE.md#bounded-service-probes) remain available for offline checks.
 
-After installing the diagnostic build, open the session, select each probe, and tap **Read selected value** once. Record the result and RX log before closing. Do not treat the expected acknowledgement or unsupported response as firmware readback.
+M1 removes both probes from the executable UI and rejects them through the stock policy. See the [version-specific command inventory](STOCK_COMMAND_INVENTORY.md).
 
 One request can run at a time. The app handles partial writes and fragmented replies, bounds replies to the selected command's expected length, and checks the reply type, echoed command, and status. A five-second timer covers output availability and the reply. Queued input before a request or input before a full send stops the attempt. Opening, refreshing, reconnecting, or choosing a command never sends a query automatically.
 
 ## Logs and lifecycle
 
-The screen retains the latest 200 timestamped entries in memory, newest first. Unified system logs use subsystem `com.rudironsoni.clicks-inspector`, category `accessory`. User actions, command selection, connection changes, session state, stream errors, and read results are logged. TX logs contain only the fixed request bytes. RX logs contain at most nine bytes per read while a query is active. Unsolicited input is discarded with a byte count. Serial numbers are not logged. The app has no log files, upload, or network feature; iOS manages its own system-log retention.
+The legacy session screen retains the latest 200 log entries. Unified logs use subsystem `com.rudironsoni.clicks-inspector`, category `accessory`.
+Stock Characterization stores a separate bounded session, including stream fragments, lifecycle events, read outcomes, and focused keyboard events.
+It writes local checkpoints and exports JSON plus Markdown. Default share exports omit characters and unvalidated bytes.
+Serial numbers and chip identifiers are not collected as metadata. No upload occurs automatically.
 
 Leaving the app for the background closes the session. Disconnecting the active accessory also closes it. Returning to the foreground refreshes the list but never opens a session automatically. **Clear logs** clears the on-screen buffer, not the operating system's logs.
 
@@ -66,19 +81,25 @@ A simulator can validate the interface and empty state. It cannot validate this 
 
 ## New capabilities, 2026-10-10
 
-The app now bundles both images and supports the full lifecycle:
+The app bundles both images, but the full product lifecycle is not yet authorized or verified:
 
 - **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized; the controller refuses any image that is not the authorized stock artifact, and the buttons and the import path are removed until a separately reviewed image exists.
 - **Restore stock firmware**: one tap on "Re-flash stock firmware (V122)", offered ONLY while the keyboard identifies as the expected stock unit (model CK-5200, hardware 1.2.0, firmware 1.2.2, version payload 01 20 01 22). Restoring stock from custom firmware is not offered: that path needs its own authorization and verification first (2026-10-13).
-- **Self-test**: "Run self-test" executes identify, info, reads all four layers' keymaps, verifies every position against the decoded factory layout (from `FactoryLayout.swift`), then round-trips a write on the spare crossing. Publishes a per-check pass/fail report.
-- **Key test**: a focused text field where you type on the physical keyboard; every character that appears proves the HID report path works end to end.
+- **Self-test, custom mode only**: reads identity and keymaps, then round-trips a write on the spare crossing. This is not part of stock characterization.
+- **Stock key recorder**: focused UIKit text input plus `UIPress`/`UIKey` and `GCKeyboard` callbacks. Visible text proves that iOS delivered text, not that all HID behavior is correct.
 - **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
 - **Keymap editor**: now shows both the readable name and the hex value per cell, with an expanded preset list including arrows and the iOS keyboard toggle.
 - **Post-flash state**: after A0 the session dies with the reboot. The app never claims installation success: it enters an `updateUnverified` state that survives reconnects and relaunches, refuses any further flashing, and clears only when you explicitly mark the update verified after the keyboard demonstrably works. A lost final-step reply is reported as commit-unknown, never as "nothing was written" (the outcome genuinely cannot be distinguished through this protocol).
 
 ## Run the focused host checks
 
-Three host-runnable checks cover the protocol, stock reads, and the new layout/keycode modules. Run from the repository root with the appropriate `DEVELOPER_DIR` if needed:
+Run all six Swift check executables, including the stock recorder and existing controller/stream checks:
+
+```sh
+bash ios/ClicksInspector/test.sh
+```
+
+The individual commands below remain useful for focused checks. Run from the repository root with the appropriate `DEVELOPER_DIR` if needed:
 
 ```sh
 # Protocol layer (requests, accumulator, chunker).

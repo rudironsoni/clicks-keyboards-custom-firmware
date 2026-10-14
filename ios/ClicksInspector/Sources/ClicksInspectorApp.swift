@@ -12,8 +12,13 @@ struct ClicksInspectorApp: App {
         WindowGroup {
             NavigationStack {
                 List {
+                    Section("Stock evidence") {
+                        NavigationLink("Stock characterization and key recorder") {
+                            StockCharacterizationView(inspector: inspector)
+                        }
+                    }
                     Section("Session") {
-                        Text("Only the selected read or diagnostic request is sent when you tap Read selected value.")
+                        Text("Open session uses the stock read-only path. Firmware controls require a separate session.")
                         Text(inspector.state.description)
                         Text("An open session does not mean firmware backup or memory access is available.")
                             .font(.caption)
@@ -28,12 +33,12 @@ struct ClicksInspectorApp: App {
                     KeymapSection(inspector: inspector)
                     Section("Read-only stock query") {
                         Picker("Command", selection: $inspector.selectedReadCommand) {
-                            ForEach(StockReadCommand.allCases) { command in
+                            ForEach(StockReadPolicy.demonstrated) { command in
                                 Text(command.title).tag(command)
                             }
                         }
                         Button("Read selected value") { inspector.readSelectedValue() }
-                            .disabled(!inspector.canReadSelectedCommand)
+                            .disabled(!inspector.canReadSelectedCommand || inspector.stockSweepRemaining > 0)
                         Text(inspector.readState)
                         if let result = inspector.lastReadResult {
                             Text(result).textSelection(.enabled)
@@ -63,6 +68,10 @@ struct ClicksInspectorApp: App {
                                 }
                                 Button("Open session") { inspector.openSession(for: accessory) }
                                     .disabled(!accessory.isConnected || !accessory.protocolStrings.contains(AccessoryInspector.supportedProtocol))
+                                Button("Open firmware-control session") {
+                                    inspector.openSession(for: accessory, firmwareControls: true)
+                                }
+                                .disabled(inspector.stockEvidence.isRecording || inspector.customFirmware.phaseIsBusy || !accessory.isConnected)
                                 if !accessory.protocolStrings.contains(AccessoryInspector.supportedProtocol) {
                                     Text("Session unavailable: com.clickscompanion.protocol is not advertised.")
                                         .font(.caption)

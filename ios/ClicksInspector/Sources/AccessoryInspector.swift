@@ -2,17 +2,28 @@ import Combine
 import ExternalAccessory
 import Foundation
 import OSLog
+import UIKit
 
 @MainActor
 final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     static let supportedProtocol = "com.clickscompanion.protocol"
 
     let customFirmware = CustomFirmwareController()
+    let stockEvidence = StockEvidenceRecorder()
+    @Published private(set) var stockSweepRemaining = 0
+    private var stockQueue: [StockReadCommand] = []
+    private var sweepTimer: Timer?
+    private var checkpointTimer: Timer?
+    private var firmwareSession = false
+    static var evidenceDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("StockEvidence", isDirectory: true)
+    }
     private var customStreamLink: StreamLink?
     private var customLinkAttached = false
 
     private func attachCustomFirmwareLink() {
-        guard !customLinkAttached else { return }
+        guard firmwareSession, !stockEvidence.isRecording, !customLinkAttached else { return }
         customLinkAttached = true
         /* The custom protocol now flows through the host-testable stream
          * adapter; the inspector keeps servicing the dual-use session
@@ -71,17 +82,19 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
 
     private struct PendingRead {
         let command: StockReadCommand
+        let evidenceID: Int?
         var requestOffset = 0
         var accumulator: StockReadAccumulator
 
-        init(command: StockReadCommand) {
+        init(command: StockReadCommand, evidenceID: Int?) {
             self.command = command
+            self.evidenceID = evidenceID
             self.accumulator = StockReadAccumulator(command: command)
         }
     }
 
     var canReadSelectedCommand: Bool {
-        guard case .open(let connectionID) = state,
+        guard !firmwareSession, !customLinkAttached, case .open(let connectionID) = state,
               let session,
               let accessory = session.accessory,
               accessory.connectionID == connectionID,
@@ -90,13 +103,13 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
               session.inputStream?.streamStatus == .open,
               session.outputStream?.streamStatus == .open,
               pendingRead == nil else { return false }
-        return accessory.modelNumber == "CK-5200"
-            && accessory.firmwareRevision == "1.2.2"
-            && accessory.hardwareRevision == "1.2.0"
+        return StockReadPolicy.allows(selectedReadCommand.request, model: accessory.modelNumber,
+            firmware: accessory.firmwareRevision, hardware: accessory.hardwareRevision)
     }
 
     override init() {
         super.init()
+        stockEvidence.recoverCheckpoint(in: Self.evidenceDirectory)
         let center = NotificationCenter.default
         for name in [Notification.Name.EAAccessoryDidConnect, .EAAccessoryDidDisconnect] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -105,6 +118,10 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                     let accessory = note.userInfo?[EAAccessoryKey] as? EAAccessory
                     let id = accessory?.connectionID
                     self.log("Accessory \(name == .EAAccessoryDidConnect ? "connected" : "disconnected"); connection \(id.map(String.init) ?? "unknown")")
+                    if accessory?.modelNumber == "CK-5200" {
+                        self.stockEvidence.state.connected = name == .EAAccessoryDidConnect
+                        self.stockEvidence.record(source: "EA", kind: name == .EAAccessoryDidConnect ? "attach" : "detach")
+                    }
                     if name == .EAAccessoryDidDisconnect, id == self.session?.accessory?.connectionID {
                         self.closeSession(reason: "Accessory disconnected")
                     }
@@ -120,6 +137,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     deinit {
         timeout?.invalidate()
         readTimeout?.invalidate()
+        sweepTimer?.invalidate()
+        checkpointTimer?.invalidate()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         EAAccessoryManager.shared().unregisterForLocalNotifications()
         let streams: [Stream?] = [session?.inputStream, session?.outputStream]
@@ -141,11 +160,15 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
            !accessories.contains(where: { $0.connectionID == id && $0.isConnected }) {
             closeSession(reason: "Active accessory is no longer connected")
         }
+        updateEvidenceIdentity()
+        stockEvidence.record(source: "EA", kind: "accessory-snapshot")
     }
 
-    func openSession(for accessory: EAAccessory) {
+    func openSession(for accessory: EAAccessory, firmwareControls: Bool = false) {
+        guard !customFirmware.phaseIsBusy, !(firmwareControls && stockEvidence.isRecording) else { return }
         log("User tapped Open session; connection \(accessory.connectionID)")
         closeSession(reason: "Close previous session before opening")
+        firmwareSession = firmwareControls
         guard accessory.isConnected,
               EAAccessoryManager.shared().connectedAccessories.contains(where: { $0.connectionID == accessory.connectionID }) else {
             fail("Accessory is no longer connected")
@@ -161,6 +184,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             return
         }
         session = newSession
+        updateEvidenceIdentity()
         setState(.opening(accessory.connectionID, openedStreams: []))
         for stream in [input as Stream, output as Stream] {
             stream.delegate = self
@@ -177,11 +201,21 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
 
     func closeSession(reason: String = "User tapped Close session") {
         log(reason)
+        stockEvidence.record(source: "EA", kind: "session-close", fields: ["reason": reason])
         timeout?.invalidate()
         timeout = nil
         readTimeout?.invalidate()
         readTimeout = nil
-        if pendingRead != nil { readState = "Cancelled: \(reason)" }
+        sweepTimer?.invalidate()
+        stockQueue.removeAll()
+        stockSweepRemaining = 0
+        if let pending = pendingRead {
+            readState = "Cancelled: \(reason)"
+            if let id = pending.evidenceID {
+                stockEvidence.state.session = "closed"
+                stockEvidence.finishRead(id, outcome: "interrupted: \(reason)", response: pending.accumulator.bytes)
+            }
+        }
         pendingRead = nil
         if customLinkAttached {
             customLinkAttached = false
@@ -203,6 +237,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         }
         session = nil
         setState(.closed)
+        stockEvidence.interruptKeys(reason: reason)
+        stockEvidence.checkpoint(in: Self.evidenceDirectory)
     }
 
     func clearLogs() {
@@ -211,18 +247,30 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     func foreground() {
+        stockEvidence.state.app = "active"
+        stockEvidence.record(source: "app", kind: "foreground")
         refresh(reason: "App entered foreground")
     }
 
     func background() {
+        stockEvidence.state.app = "background"
+        stockEvidence.record(source: "app", kind: "background; callbacks may stop")
         closeSession(reason: "App entered background")
     }
 
     func inactive() {
+        stockEvidence.state.app = "inactive"
+        stockEvidence.record(source: "app", kind: "inactive")
+        stockEvidence.interruptKeys(reason: "app inactive")
         log("App became inactive")
     }
 
     func readSelectedValue() {
+        guard stockSweepRemaining == 0 else { return }
+        performStockRead()
+    }
+
+    private func performStockRead() {
         let command = selectedReadCommand
         log("User tapped Read selected value; command 0x\(hex([command.rawValue]))")
         guard canReadSelectedCommand else {
@@ -239,7 +287,10 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             failRead("Input data was already queued before the request")
             return
         }
-        pendingRead = PendingRead(command: command)
+        let wasRecording = stockEvidence.isRecording
+        let evidenceID = stockEvidence.beginRead(command)
+        guard !wasRecording || (stockEvidence.isRecording && evidenceID != nil) else { return }
+        pendingRead = PendingRead(command: command, evidenceID: evidenceID)
         readState = "Waiting to send \(command.title)"
         readTimeout?.invalidate()
         readTimeout = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
@@ -291,6 +342,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             let count = input.read(&buffer, maxLength: maxLength)
             if count > 0 {
                 let received = Array(buffer.prefix(count))
+                stockEvidence.record(source: "EA", kind: "rx-fragment", bytes: received, readID: pendingRead?.evidenceID)
                 if pendingRead != nil {
                     receiveReadFragment(received)
                 } else if customLinkAttached {
@@ -331,7 +383,9 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             }
             guard written > 0 else { break }
             log("TX \(hex(Array(remaining.prefix(written))))")
+            stockEvidence.record(source: "EA", kind: "tx-fragment", bytes: Array(remaining.prefix(written)), readID: pending.evidenceID)
             pending.requestOffset += written
+            if pending.requestOffset == request.count, let id = pending.evidenceID { stockEvidence.sent(id) }
         }
         pendingRead = pending
         if pending.requestOffset == request.count {
@@ -356,12 +410,20 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         log("RX \(hex(fragment))")
         do {
             if let result = try pending.accumulator.append(fragment) {
+                if let id = pending.evidenceID {
+                    stockEvidence.finishRead(id, outcome: "validated", response: pending.accumulator.bytes)
+                }
                 pendingRead = nil
                 readTimeout?.invalidate()
                 readTimeout = nil
                 lastReadResult = result.summary
                 readState = "Completed"
                 log("Read completed: \(result.summary)")
+                if pending.command == .version, result.payload != [0x01, 0x20, 0x01, 0x22] {
+                    failRead("Version payload does not match the demonstrated stock revision")
+                    return
+                }
+                scheduleNextStockRead()
                 return
             }
             pendingRead = pending
@@ -373,19 +435,113 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
 
     private func failRead(_ reason: String) {
         log("Read failed: \(reason)")
+        stockEvidence.state.session = "failed"
+        stockEvidence.record(source: "EA", kind: "read-error", fields: ["reason": reason], readID: pendingRead?.evidenceID)
+        if let pending = pendingRead, let id = pending.evidenceID {
+            stockEvidence.finishRead(id, outcome: "failed: \(reason)", response: pending.accumulator.bytes)
+        }
         closeSession(reason: "Read failed")
         readState = "Failed: \(reason)"
         setState(.failed(reason))
     }
 
     private func fail(_ reason: String) {
+        stockEvidence.record(source: "EA", kind: "error", fields: ["reason": reason])
         closeSession(reason: reason)
         setState(.failed(reason))
     }
 
     private func setState(_ next: SessionState) {
         state = next
+        switch next {
+        case .closed: stockEvidence.state.session = "closed"
+        case .opening: stockEvidence.state.session = "opening"
+        case .open: stockEvidence.state.session = "open"
+        case .failed: stockEvidence.state.session = "failed"
+        }
+        stockEvidence.record(source: "EA", kind: "session-state", fields: ["state": stockEvidence.state.session])
         log("Session state: \(next.description)")
+    }
+
+    private func updateEvidenceIdentity() {
+        let accessory = session?.accessory ?? accessories.first { $0.modelNumber == "CK-5200" }
+        stockEvidence.state.connected = accessory?.isConnected ?? false
+        if let accessory {
+            stockEvidence.state.accessory = StockAccessoryIdentity(model: accessory.modelNumber,
+                firmware: accessory.firmwareRevision, hardware: accessory.hardwareRevision, protocols: accessory.protocolStrings)
+        }
+    }
+
+    func startStockRecording() {
+        guard !customFirmware.phaseIsBusy, !stockEvidence.isRecording else { return }
+        if firmwareSession || pendingRead != nil { closeSession(reason: "Switch to stock characterization") }
+        firmwareSession = false
+        selectedReadCommand = .version
+        readState = "Not started"
+        lastReadResult = nil
+        updateEvidenceIdentity()
+        #if targetEnvironment(simulator)
+        let observationSource = "simulator iOS callbacks; no physical accessory evidence"
+        #else
+        let observationSource = "physical iOS API observations; not a firmware-image fixture"
+        #endif
+        stockEvidence.start(environment: [
+            "iOS": UIDevice.current.systemVersion,
+            "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "appBuild": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            "source": observationSource,
+        ])
+        checkpointTimer?.invalidate()
+        checkpointTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.stockEvidence.checkpoint(in: Self.evidenceDirectory)
+                if !self.stockEvidence.isRecording { self.checkpointTimer?.invalidate() }
+            }
+        }
+    }
+
+    func stopStockRecording() {
+        closeSession(reason: "Stop stock characterization")
+        stockEvidence.stop()
+        checkpointTimer?.invalidate()
+        stockEvidence.checkpoint(in: Self.evidenceDirectory)
+    }
+
+    func readStockBaseline() {
+        guard stockEvidence.isRecording, canReadSelectedCommand, stockQueue.isEmpty,
+              stockSweepRemaining == 0 else { return }
+        stockQueue = (0..<3).flatMap { _ in StockReadPolicy.demonstrated }
+        stockSweepRemaining = stockQueue.count
+        nextStockRead()
+    }
+
+    private func nextStockRead() {
+        guard stockEvidence.isRecording, !stockQueue.isEmpty else {
+            stockQueue.removeAll()
+            stockSweepRemaining = 0
+            return
+        }
+        selectedReadCommand = stockQueue.removeFirst()
+        stockSweepRemaining = stockQueue.count + 1
+        performStockRead()
+        if pendingRead == nil {
+            stockQueue.removeAll()
+            stockSweepRemaining = 0
+        }
+    }
+
+    private func scheduleNextStockRead() {
+        guard stockSweepRemaining > 0 else { return }
+        stockSweepRemaining = stockQueue.count
+        guard !stockQueue.isEmpty else {
+            stockEvidence.record(source: "EA", kind: "three-pass-baseline-completed")
+            stockEvidence.checkpoint(in: Self.evidenceDirectory)
+            return
+        }
+        sweepTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.nextStockRead() }
+        }
     }
 
     private func log(_ message: String) {

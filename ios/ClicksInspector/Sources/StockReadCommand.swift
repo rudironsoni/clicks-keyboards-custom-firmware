@@ -52,6 +52,20 @@ enum StockReadCommand: UInt8, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// Authorization is scoped to demonstrated packets on this exact stock revision.
+/// The two historical service probes remain decodable, but are not M1 getters.
+enum StockReadPolicy {
+    static let demonstrated: [StockReadCommand] = [
+        .version, .brightness, .backlightDelay, .batteryIdleInterval,
+        .rawSetting8A, .rawSetting8C, .statusFlags,
+    ]
+
+    static func allows(_ request: [UInt8], model: String, firmware: String, hardware: String) -> Bool {
+        model == "CK-5200" && firmware == "1.2.2" && hardware == "1.2.0"
+            && demonstrated.contains { $0.request == request }
+    }
+}
+
 enum StockReadError: Error, Equatable, CustomStringConvertible {
     case wrongLength(expected: Int, declared: Int)
     case overlength(expected: Int, actual: Int)

@@ -20,8 +20,28 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
     dependencies:
       - sdk: ExternalAccessory.framework
-    scheme: {}
+      - sdk: GameController.framework
+  ClicksInspectorUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rudironsoni.clicks-inspector.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+    dependencies:
+      - target: ClicksInspector
+schemes:
+  ClicksInspector:
+    build:
+      targets:
+        ClicksInspector: all
+    test:
+      targets:
+        - ClicksInspectorUITests
