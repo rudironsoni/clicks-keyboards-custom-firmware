@@ -57,15 +57,15 @@ Historical `08` and unsupported `8f` evidence remains in the [command inventory]
 
 ## Record every physical key
 
-1. Select `each physical key` as the condition. Choose the key label and `single key` combination.
+1. Select `each physical key` as the condition. In **Trial**, choose the matrix candidate and `single` action. Read its label-evidence classification; do not guess unknown caps.
 2. Tap **Begin key trial**. Tap the test-text box to give it focus.
 3. Press and release that key once. Check the visible callback lines and character output.
 4. Release all keys. End the active trial with completed, failed, ambiguous, or unobservable. Repeat for each identified cap and relevant action. Text alone or an incomplete down/up sequence becomes ambiguous, not a passed physical key.
-5. Repeat with Shift, 123/SYM, Command, and cursor mode. Test the special keys separately.
-6. Select `simultaneous keys`. Hold two, three, then four keys. Release them in a different order.
-7. Select `long press/repeat`. Hold a letter for two seconds. Repeat with Backspace and a cursor key.
-8. Try rapid taps, then sustained test typing. Use no personal text or passwords.
-9. For a system-consumed shortcut, tap **Mark combination unobservable**. This records your observation, not a firmware diagnosis.
+5. Repeat with the catalog's `shift`, `sym`, `command`, `control`, and `cursor` actions. If a mode's stock activation is unknown, end that trial as unobservable. Do not substitute custom QMK activation rules.
+6. Run the `consumerChord` trial only after both caps have been identified. Additional two-, three-, and four-key experiments can be recorded under `simultaneous keys` outside an active trial; these unassigned observations do not complete catalog coverage.
+7. Select a `hold` trial. Hold the identified key for two seconds, then release it.
+8. Try rapid taps and sustained test typing outside an active trial. Use no personal text or passwords.
+9. For a system-consumed shortcut or unknown cap, tap **End trial: unobservable**. This records your observation, not a firmware diagnosis.
 
 The recorder retains down/up/cancelled/changed callbacks, API key codes, available modifiers, character edits, selection changes, and callback times.
 It tracks held keys separately for GCKeyboard and UIKit. It does not combine two API observations into one fabricated HID event.
@@ -107,7 +107,7 @@ Wall-clock times and key codes remain in exports. Unknown strings and raw errors
 Local checkpoints retain exact getter requests, responses, fragments, unexpected bytes, and focused test text.
 They omit serial numbers, connection IDs, phone names, and chip identifiers as metadata.
 Unexpected raw bytes can contain identifiers, so local checkpoints are not shareable reports.
-The app writes `Library/Application Support/StockEvidence/stock-local.json` atomically every five seconds, after a completed baseline, and on session closure.
+The app queues an atomic write to `Library/Application Support/StockEvidence/stock-local.json` immediately on start, every five seconds, after a completed baseline, and on session closure. Encoding and disk writes run on a serial background queue. A process kill before the queued write completes can lose that snapshot.
 Relaunch restores that checkpoint for export. An unfinished session remains interrupted, with later observations unknown.
 Starting another session replaces the checkpoint. Existing named exports remain in the app container.
 Export first if you need to retain a session. The recorder stops at 20,000 events instead of silently dropping old evidence.
