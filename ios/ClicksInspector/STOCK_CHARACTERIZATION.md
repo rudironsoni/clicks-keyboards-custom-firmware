@@ -101,6 +101,8 @@ Tap **Stop and save**, then **Create JSON and report**, then **Share evidence fi
 Sharing opens Apple's share sheet. No upload occurs automatically.
 The default JSON omits test characters and unvalidated payload bytes. Enable **Include my test characters in JSON** only for intentional test text.
 The Markdown report always omits typed text.
+The [complete export audit](REVIEW_EVIDENCE.md#field-by-field-export-audit) defines the `shareable-v2` field allowlist and retained metadata.
+Wall-clock times and key codes remain in exports. Unknown strings and raw errors do not.
 
 Local checkpoints retain exact getter requests, responses, fragments, unexpected bytes, and focused test text.
 They omit serial numbers, connection IDs, phone names, and chip identifiers as metadata.
@@ -110,6 +112,8 @@ Relaunch restores that checkpoint for export. An unfinished session remains inte
 Starting another session replaces the checkpoint. Existing named exports remain in the app container.
 Export first if you need to retain a session. The recorder stops at 20,000 events instead of silently dropping old evidence.
 Storage errors appear on screen. Data since the last checkpoint can be lost on process termination.
+To remove local captures, stop recording and use **Clear captured text and diagnostics**. Confirm **Delete local stock evidence**.
+This also clears the text box and on-screen session logs. Shared copies and system logs remain outside the recorder's control.
 
 ## JSON contract
 
@@ -129,10 +133,11 @@ The random `sessionID` identifies an evidence session, not the keyboard.
 | `sameAsPrevious` | Exact response equality against the previous validated read of that command, across conditions. Missing means no comparison. |
 | `responseLatencyMS` | Last accepted request byte to final response or failure callback. Includes iOS scheduling. It is not USB wire latency. |
 
-Sources are `EA`, `GCKeyboard`, `UIPress`, `text-input`, `app`, or `user`.
+Sources are `EA`, `GCKeyboard`, `UIPress`, `UIKit`, `text-input`, `app`, or `user`.
 Only parser-validated getter responses retain RX bytes in shareable output.
 Failed, partial, unsolicited, and pending RX bytes retain timing, counts, and outcome, but omit payload bytes.
-`request` and `tx-fragment` remain exact because the executable policy only permits fixed getter packets.
+Request and fragment bytes survive export only when they match the allowlisted request or revalidated response.
+Raw error strings become fixed outcome categories and reason codes. Unknown fields are omitted.
 Default text redaction removes `characters` and `text`, retaining lengths, key codes, and modifiers.
 Key codes can still reveal typed text. Use only test text.
 No response is generated from the downloaded stock image. Test fixtures run only in the host tests.
@@ -193,7 +198,7 @@ The new checks cover fragments, timing, consistency, key gaps, redaction, checkp
 These are host simulations. They do not prove iOS callback coverage, physical compatibility, independent recovery, or production reliability.
 No live keyboard update belongs to M1. Physical firmware acceptance remains separately authorized M5 work.
 
-### Verified in this implementation, 2026-10-14
+### Historical local checks for d2f679d, 2026-10-14
 
 - Starting HEAD: `cab182e3bb801ce315009fbb6f4f9dc09678534b`, clean worktree.
 - All six executables in `bash ios/ClicksInspector/test.sh` passed. These include the existing stream and stock-only flash-controller simulations.

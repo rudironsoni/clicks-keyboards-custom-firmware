@@ -508,6 +508,17 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         stockEvidence.checkpoint(in: Self.evidenceDirectory)
     }
 
+    func clearStockEvidence() {
+        guard !stockEvidence.isRecording, !customFirmware.phaseIsBusy else { return }
+        closeSession(reason: "Clear stock evidence")
+        checkpointTimer?.invalidate()
+        stockEvidence.clear(in: Self.evidenceDirectory)
+        logs.removeAll()
+        readState = "Not started"
+        lastReadResult = nil
+        // Do not clear the firmware controller's durable unresolved-update record.
+    }
+
     func readStockBaseline() {
         guard stockEvidence.isRecording, canReadSelectedCommand, stockQueue.isEmpty,
               stockSweepRemaining == 0 else { return }

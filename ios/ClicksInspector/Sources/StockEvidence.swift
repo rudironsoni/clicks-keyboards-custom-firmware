@@ -69,6 +69,7 @@ final class StockEvidenceRecorder: ObservableObject {
     @Published private(set) var exportURLs: [URL] = []
     @Published private(set) var exportedWithTestText: Bool?
     @Published private(set) var storageError: String?
+    @Published private(set) var textResetID = UUID()
     private(set) var bundle: StockEvidenceBundle?
     var state = StockObservationState()
     private let now: () -> Date
@@ -90,6 +91,7 @@ final class StockEvidenceRecorder: ObservableObject {
         startUptime = uptime()
         bundle = StockEvidenceBundle(schemaVersion: 1, sessionID: UUID(), startedAt: now(), environment: environment)
         held.removeAll()
+        textResetID = UUID()
         eventCount = 0
         exportURLs = []
         exportedWithTestText = nil
@@ -190,30 +192,8 @@ final class StockEvidenceRecorder: ObservableObject {
     }
 
     func encoded(shareable: Bool, includeTestText: Bool = false) throws -> Data {
-        guard var copy = bundle else { throw CocoaError(.fileNoSuchFile) }
-        if shareable {
-            copy.privacy = includeTestText
-                ? "shareable: identifiers and unvalidated bytes omitted; test text explicitly included"
-                : "shareable: identifiers, test text and unvalidated bytes omitted"
-            let validatedIDs = Set(copy.reads.filter { $0.outcome == "validated" }.map(\.id))
-            for index in copy.events.indices {
-                let event = copy.events[index]
-                if event.bytes != nil && event.kind != "request" && event.kind != "tx-fragment"
-                    && !validatedIDs.contains(event.readID ?? -1) {
-                    copy.events[index].bytes = nil
-                    copy.events[index].fields["redaction"] = "unvalidated stream payload"
-                }
-                if !includeTestText {
-                    for key in ["characters", "text"] where event.fields[key] != nil {
-                        copy.events[index].fields[key + "Length"] = String(event.fields[key]!.count)
-                        copy.events[index].fields.removeValue(forKey: key)
-                    }
-                }
-            }
-            for index in copy.reads.indices where copy.reads[index].outcome != "validated" {
-                copy.reads[index].response = []
-            }
-        }
+        guard let bundle else { throw CocoaError(.fileNoSuchFile) }
+        let copy = shareable ? StockEvidencePrivacy.project(bundle, includeTestText: includeTestText) : bundle
         let encoder = JSONEncoder()
         encoder.outputFormatting = shareable ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -221,7 +201,8 @@ final class StockEvidenceRecorder: ObservableObject {
     }
 
     var report: String {
-        guard let bundle else { return "No stock observations." }
+        guard let original = bundle else { return "No stock observations." }
+        let bundle = StockEvidencePrivacy.project(original)
         let good = bundle.reads.filter { $0.outcome == "validated" }
         let changed = good.filter { $0.sameAsPrevious == false }
         let latencies = good.compactMap(\.responseLatencyMS)
@@ -278,6 +259,28 @@ final class StockEvidenceRecorder: ObservableObject {
             exportURLs = [json, markdown]
             storageError = nil
         } catch { storageError = "Evidence export failed: \(error.localizedDescription)" }
+    }
+
+    /// Clears only recorder-owned files. Copies already shared outside the app are not accessible here.
+    func clear(in directory: URL) {
+        stop(reason: "user-stop")
+        do {
+            if FileManager.default.fileExists(atPath: directory.path) {
+                let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                for file in files where file.lastPathComponent == "stock-local.json"
+                    || file.lastPathComponent.range(of: "^stock-[A-Fa-f0-9-]{36}-(redacted|test-text)\\.(json|md)$", options: .regularExpression) != nil {
+                    try FileManager.default.removeItem(at: file)
+                }
+            }
+            bundle = nil
+            state = StockObservationState()
+            eventCount = 0
+            held.removeAll()
+            textResetID = UUID()
+            exportURLs = []
+            exportedWithTestText = nil
+            storageError = nil
+        } catch { storageError = "Evidence deletion failed: \(error.localizedDescription)" }
     }
 
     func recoverCheckpoint(in directory: URL) {

@@ -2,6 +2,7 @@
 
 Clicks Inspector supports stock characterization and separately gated firmware controls for the CK-5200 on iPhone 15 Pro Max.
 Use [Stock Characterization](STOCK_CHARACTERIZATION.md) for the current baseline procedure, export contract, observation limits, and dependency assessment.
+See [review evidence and privacy audit](REVIEW_EVIDENCE.md) for production paths and CI, and [development signing](SIGNING_AND_BASELINE.md) to install on the iPhone.
 
 **Custom firmware: NO-GO. R3 independent recovery: UNMET.** The goal remains an iOS app and custom keyboard firmware with iPhone-only recovery.
 Builds and host tests do not prove hardware reliability. The installer remains unread.

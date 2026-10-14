@@ -1,0 +1,56 @@
+name: Clicks Inspector iOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/ClicksInspector/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/ClicksInspector/**"
+      - ".github/workflows/ios.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Record toolchain and revision
+        run: |
+          mkdir -p evidence
+          { git rev-parse HEAD; xcodebuild -version; xcrun swiftc --version; xcodegen --version; } 2>&1 | tee evidence/toolchain.log
+      - name: Run all six Swift test programs
+        run: |
+          set -o pipefail
+          bash ios/ClicksInspector/test.sh 2>&1 | tee evidence/swift-tests.log
+      - name: Build unsigned simulator application
+        run: |
+          set -o pipefail
+          xcodegen generate --spec ios/ClicksInspector/project.yml 2>&1 | tee evidence/generate.log
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+      - name: Test recording, export, and deletion in Simulator
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration Debug \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+      - name: Publish complete verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-verification-${{ github.sha }}
+          path: evidence/
+          retention-days: 30

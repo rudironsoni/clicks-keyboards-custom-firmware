@@ -32,6 +32,16 @@ final class StockCharacterizationUITests: XCTestCase {
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.lifetime = .keepAlways
         add(screenshot)
+        let clear = app.buttons["stock.clear"]
+        reveal(clear, in: app, up: true)
+        clear.tap()
+        app.buttons["Delete local stock evidence"].tap()
+        // Wait for SwiftUI to apply the deletion state after dismissing the confirmation.
+        let exportDisabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == false"), object: app.buttons["stock.export"])
+        XCTAssertEqual(XCTWaiter.wait(for: [exportDisabled], timeout: 5), .completed)
+        XCTAssertFalse(app.buttons["stock.share"].exists)
+        reveal(app.textViews["stock.text"], in: app, up: false)
+        XCTAssertEqual(app.textViews["stock.text"].value as? String, "")
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, up: Bool) {

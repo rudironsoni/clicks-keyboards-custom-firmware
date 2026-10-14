@@ -21,7 +21,7 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
     dependencies:
       - sdk: ExternalAccessory.framework
       - sdk: GameController.framework

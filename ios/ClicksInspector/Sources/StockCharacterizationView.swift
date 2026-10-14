@@ -12,6 +12,7 @@ struct StockCharacterizationView: View {
     @State private var combination = "single key"
     @State private var includeTestText = false
     @State private var confirmNewSession = false
+    @State private var confirmClear = false
 
     private let conditions = ["baseline", "initial connection", "foreground/background", "disconnect/reconnect",
         "each physical key", "modifiers/layers", "simultaneous keys", "long press/repeat",
@@ -85,6 +86,7 @@ struct StockCharacterizationView: View {
                 }
                 Text("Tap the box, then press and release the chosen key. Try each modifier, layer, chord, long press, and rapid tap. Release all keys before ending a trial.")
                 StockKeyCapture(recorder: recorder)
+                    .id(recorder.textResetID)
                     .frame(height: 150)
                 ForEach((recorder.bundle?.events.suffix(8) ?? []).filter { $0.kind == "key" || $0.source == "text-input" }, id: \.sequence) { event in
                     Text("\(event.source): \(event.fields["phase"] ?? event.kind) \(event.fields["code"] ?? "") \(event.fields["characters"] ?? "")")
@@ -104,7 +106,7 @@ struct StockCharacterizationView: View {
             .disabled(!recorder.isRecording)
             Section("Evidence export") {
                 Toggle("Include my test characters in JSON", isOn: $includeTestText)
-                Text("Default exports omit characters, serial numbers, chip IDs, and unvalidated stream bytes. Local checkpoints keep raw observations.")
+                Text("Exports retain wall-clock times, key codes, and known revision metadata. They omit unknown strings and raw errors. Key codes can reveal typed text. Use test text only.")
                     .font(.caption)
                 Button("Create JSON and report") {
                     recorder.export(in: AccessoryInspector.evidenceDirectory, includeTestText: includeTestText)
@@ -116,6 +118,11 @@ struct StockCharacterizationView: View {
                         .accessibilityIdentifier("stock.share")
                 }
                 if let error = recorder.storageError { Text(error).foregroundStyle(.red) }
+                Button("Clear captured text and diagnostics", role: .destructive) { confirmClear = true }
+                    .disabled(recorder.isRecording || inspector.customFirmware.phaseIsBusy)
+                    .accessibilityIdentifier("stock.clear")
+                Text("Stop recording first. Clear deletes this app's stock checkpoints and exports, the test-text box, and on-screen session logs. It cannot delete shared copies or iOS system logs.")
+                    .font(.caption)
                 if recorder.bundle != nil, !recorder.isRecording {
                     Text(recorder.report).font(.caption.monospaced()).textSelection(.enabled)
                 }
@@ -129,6 +136,9 @@ struct StockCharacterizationView: View {
         .navigationTitle("Stock evidence")
         .confirmationDialog("Replace the current local session? Export it first if needed.", isPresented: $confirmNewSession) {
             Button("Start new session", role: .destructive) { inspector.startStockRecording() }
+        }
+        .confirmationDialog("Delete all local stock recordings and exports? Shared copies remain outside this app.", isPresented: $confirmClear) {
+            Button("Delete local stock evidence", role: .destructive) { inspector.clearStockEvidence() }
         }
         .onDisappear { recorder.interruptKeys(reason: "left characterization screen") }
     }

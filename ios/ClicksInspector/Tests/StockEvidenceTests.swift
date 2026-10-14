@@ -9,7 +9,8 @@ struct StockEvidenceTests {
     static func main() throws {
         try recordsRealInputsAndExports()
         try refusesUnsafeReadsAndPreservesUncertainty()
-        print("2 stock evidence checks passed (host simulation, no physical device)")
+        try auditsEveryExportSurfaceAndClearsData()
+        print("3 stock evidence checks passed (host simulation, no physical device)")
     }
 
     @MainActor
@@ -116,5 +117,74 @@ struct StockEvidenceTests {
         for _ in 0...StockEvidenceRecorder.eventLimit { recorder.record(source: "test", kind: "event") }
         precondition(!recorder.isRecording && recorder.eventCount == StockEvidenceRecorder.eventLimit)
         precondition(recorder.bundle!.endReason!.contains("event-limit"))
+    }
+
+    @MainActor
+    static func auditsEveryExportSurfaceAndClearsData() throws {
+        let secret = "PRIVATE_SENTINEL_NOT_FOR_SHARING"
+        let recorder = StockEvidenceRecorder()
+        recorder.state.accessory = identity
+        recorder.start(environment: ["iOS": secret, "appVersion": secret, "appBuild": secret, "source": secret, "phoneName": secret])
+        let id = recorder.beginRead(.brightness)!
+        let valid: [UInt8] = [5, 2, 0x84, 0, 42]
+        recorder.record(source: "EA", kind: "rx-fragment", bytes: valid, readID: id)
+        recorder.finishRead(id, outcome: "validated", response: valid)
+        // A validated read ID alone must never authorize arbitrary event bytes.
+        for kind in ["request", "tx-fragment", "rx-fragment", "future-payload"] {
+            recorder.record(source: "EA", kind: kind, bytes: Array(secret.utf8), readID: id)
+        }
+        let malformedID = recorder.beginRead(.version)!
+        recorder.finishRead(malformedID, outcome: "validated", response: Array(secret.utf8))
+        let failedID = recorder.beginRead(.statusFlags)!
+        recorder.finishRead(failedID, outcome: "failed: \(secret)")
+        recorder.state.accessory = StockAccessoryIdentity(model: secret, firmware: secret, hardware: secret, protocols: [secret])
+        recorder.state.session = secret
+        recorder.state.app = secret
+        recorder.state.condition = secret
+        recorder.state.backlight = secret
+        recorder.state.charging = secret
+        recorder.state.focus = secret
+        recorder.record(source: secret, kind: secret, fields: [
+            "reason": secret, "outcome": "failed: \(secret)", "meaning": secret, "newFreeFormField": secret,
+            "code": secret, "apiTimestamp": secret, "physicalKey": secret, "combination": secret,
+            "heldInSource": secret, "unresolvedPresses": secret, "text": "intentional-test-text", "characters": "intentional-test-text",
+        ])
+        recorder.stop(reason: secret)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        recorder.checkpoint(in: directory)
+        // Exercise the same recovered checkpoint route used by the shipping app.
+        let recovered = StockEvidenceRecorder()
+        recovered.recoverCheckpoint(in: directory)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for includeText in [false, true] {
+            recovered.export(in: directory, includeTestText: includeText)
+            precondition(recovered.storageError == nil && recovered.exportURLs.count == 2)
+            for url in recovered.exportURLs {
+                let contents = try String(contentsOf: url, encoding: .utf8)
+                precondition(!contents.contains(secret) && !url.lastPathComponent.contains(secret))
+                precondition(contents.contains("intentional-test-text") == (includeText && url.pathExtension == "json"))
+            }
+            let shared = try decoder.decode(StockEvidenceBundle.self, from: Data(contentsOf: recovered.exportURLs[0]))
+            precondition(shared.reads[0].response == valid)
+            precondition(shared.reads[1].response.isEmpty && shared.reads[1].outcome.hasPrefix("failed"))
+            precondition(shared.events.filter { $0.kind == "rx-fragment" || $0.kind == "tx-fragment" }.allSatisfy { $0.bytes == nil })
+            precondition(shared.startedAt.timeIntervalSince1970.rounded(.down) == recorder.bundle!.startedAt.timeIntervalSince1970.rounded(.down))
+        }
+        let unrelated = directory.appendingPathComponent("unrelated.txt")
+        try Data("preserve".utf8).write(to: unrelated)
+        recovered.clear(in: unrelated) // Deterministic I/O failure, not a permission-dependent mock.
+        precondition(recovered.storageError != nil && recovered.bundle != nil)
+        let resetID = recovered.textResetID
+        recovered.clear(in: directory)
+        precondition(recovered.storageError == nil && recovered.bundle == nil && recovered.eventCount == 0)
+        precondition(recovered.exportURLs.isEmpty && recovered.textResetID != resetID && !recovered.isRecording)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        precondition(files.map(\.lastPathComponent) == ["unrelated.txt"])
+        recovered.checkpoint(in: directory) // A later timer must not recreate deleted evidence.
+        let empty = StockEvidenceRecorder()
+        empty.recoverCheckpoint(in: directory)
+        precondition(empty.bundle == nil)
     }
 }
