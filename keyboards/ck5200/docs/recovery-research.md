@@ -116,3 +116,11 @@ PC17=33, PC18=34, PC19=37). Four labeled pads 3V3/SWD/GND/SWC sit beside
 U3 (labels VERIFIED, two models; continuity UNVERIFIED). No BOOT pad
 appears in any photo, so the PC17 questions stay UNKNOWN. The GO/NO-GO is
 unchanged.
+
+The SDI route is now concretized in
+[recovery-sdi-probe.md](recovery-sdi-probe.md): the read-only tooling
+(`wlink` supports CH32X035 identify, protection-state read, and a full
+flash dump), the WCH-LinkE probe requirement, the unpowered continuity
+procedure that must precede any probe session, and the hard prohibitions
+(no erase, no write, no unprotect, no chprog). Nothing in it has been
+executed.
