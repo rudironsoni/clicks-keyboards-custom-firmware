@@ -122,11 +122,7 @@ struct StockCharacterizationView: View {
                     ShareLink(items: recorder.exportURLs) { Label("Share evidence files", systemImage: "square.and.arrow.up") }
                         .accessibilityIdentifier("stock.share")
                     NavigationLink("Inspect exported JSON") {
-                        // Read the actual file, not a second serialization of recorder memory.
-                        TextEditor(text: .constant((try? String(contentsOf: recorder.exportURLs[0], encoding: .utf8)) ?? "Cannot read export"))
-                            .font(.caption.monospaced())
-                            .accessibilityIdentifier("stock.export.json")
-                            .navigationTitle("Exported JSON")
+                        StockExportPreview(url: recorder.exportURLs[0])
                     }.accessibilityIdentifier("stock.inspectExport")
                 }
                 if let error = recorder.storageError { Text(error).foregroundStyle(.red) }
@@ -166,6 +162,42 @@ struct StockCharacterizationView: View {
         recorder.state.backlight = backlight
         recorder.state.charging = charging
         recorder.record(source: "user", kind: "state-mark", fields: ["phase": phase])
+    }
+}
+
+/// Bound text layout cost on older iOS runtimes. Pages are exact file substrings.
+private struct StockExportPreview: View {
+    let url: URL
+    @State private var pages: [String] = []
+    @State private var page = 0
+
+    var body: some View {
+        VStack {
+            if !pages.isEmpty {
+                Text("Page \(page + 1) of \(pages.count)")
+                HStack {
+                    Button("Previous JSON page") { page -= 1 }.disabled(page == 0)
+                    Button("Next JSON page") { page += 1 }
+                        .disabled(page + 1 == pages.count)
+                        .accessibilityIdentifier("stock.export.next")
+                }
+                TextEditor(text: .constant(pages[page]))
+                    .font(.caption.monospaced())
+                    .disabled(true)
+                    .accessibilityIdentifier("stock.export.json")
+            }
+        }
+        .navigationTitle("Exported JSON")
+        .task {
+            guard pages.isEmpty else { return }
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "Cannot read export"
+            var start = text.startIndex
+            while start < text.endIndex {
+                let end = text.index(start, offsetBy: 16384, limitedBy: text.endIndex) ?? text.endIndex
+                pages.append(String(text[start..<end]))
+                start = end
+            }
+        }
     }
 }
 

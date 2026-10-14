@@ -86,7 +86,12 @@ final class StockCharacterizationUITests: XCTestCase {
         inspect.tap()
         let json = app.textViews["stock.export.json"]
         XCTAssertTrue(json.waitForExistence(timeout: 5))
-        let value = try XCTUnwrap(json.value as? String)
+        var value = try XCTUnwrap(json.value as? String)
+        let next = app.buttons["stock.export.next"]
+        while next.isEnabled {
+            next.tap()
+            value += try XCTUnwrap(json.value as? String)
+        }
         let attachment = XCTAttachment(string: value)
         attachment.name = "actual-export.json"
         attachment.lifetime = .keepAlways
