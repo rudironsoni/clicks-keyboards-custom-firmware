@@ -218,6 +218,12 @@ private struct StockKeyCapture: UIViewRepresentable {
         view.smartQuotesType = .no
         view.smartDashesType = .no
         view.smartInsertDeleteType = .no
+        let toolbar = UIToolbar()
+        toolbar.items = [UIBarButtonItem(systemItem: .flexibleSpace),
+                         UIBarButtonItem(title: "Done typing", style: .done, target: view,
+                                         action: #selector(StockCaptureTextView.finishTyping))]
+        toolbar.sizeToFit()
+        view.inputAccessoryView = toolbar
         view.installKeyboardNotifications()
         return view
     }
@@ -233,6 +239,7 @@ private struct StockKeyCapture: UIViewRepresentable {
 }
 
 private final class StockCaptureTextView: UITextView, UITextViewDelegate {
+    @objc func finishTyping() { resignFirstResponder() }
     private weak var owner: StockEvidenceRecorder?
     private var captureSessionID: UUID?
     var recorder: StockEvidenceRecorder? {

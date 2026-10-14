@@ -24,6 +24,7 @@ final class StockCharacterizationUITests: XCTestCase {
         text.tap()
         text.typeText("abc")
         XCTAssertEqual(text.value as? String, "abc")
+        app.buttons["Done typing"].tap()
         let finish = app.buttons["stock.trial.completed"]
         reveal(finish, in: app, up: true)
         finish.tap()
@@ -150,9 +151,16 @@ final class StockCharacterizationUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, up: Bool) {
-        for _ in 0..<12 {
+        for _ in 0..<30 {
             if element.exists && element.isHittable { return }
-            if up { app.swipeUp() } else { app.swipeDown() }
+            var moveUp = up
+            if element.exists, !element.frame.isEmpty, element.frame.minY.isFinite {
+                moveUp = element.frame.midY > app.frame.midY
+            }
+            // Short drags in the list gutter avoid the nested text view and overshoot.
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: moveUp ? 0.35 : 0.75))
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
         XCTAssertTrue(element.isHittable)
     }
