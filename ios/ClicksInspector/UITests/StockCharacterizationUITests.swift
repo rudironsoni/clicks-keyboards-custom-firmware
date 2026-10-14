@@ -155,7 +155,8 @@ final class StockCharacterizationUITests: XCTestCase {
         // Search both directions rather than continuing into the same list boundary.
         for direction in [up, !up] {
             for _ in 0..<30 {
-                if element.exists && element.isHittable { return }
+                if element.exists && element.isHittable,
+                   app.frame.insetBy(dx: 0, dy: 100).contains(element.frame) { return }
                 var moveUp = direction
                 if element.exists, !element.frame.isEmpty, element.frame.minY.isFinite {
                     moveUp = element.frame.midY > app.frame.midY
@@ -166,6 +167,7 @@ final class StockCharacterizationUITests: XCTestCase {
                 start.press(forDuration: 0.05, thenDragTo: end)
             }
         }
-        XCTAssertTrue(element.isHittable)
+        XCTAssertTrue(element.isHittable && app.frame.insetBy(dx: 0, dy: 100).contains(element.frame),
+                      "Control must be fully inside the scrollable viewport before tapping")
     }
 }
