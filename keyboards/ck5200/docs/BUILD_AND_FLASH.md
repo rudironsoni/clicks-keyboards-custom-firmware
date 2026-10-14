@@ -1,6 +1,6 @@
 # Build and inspect the CK-5200 image
 
-Build instructions, image contract, and protocol reference. For the full flashing procedure, risk analysis, and recovery steps, see [FLASHING.md](FLASHING.md).
+Offline build instructions and protocol reference. [flash-readiness.md](flash-readiness.md) owns current readiness. No live flashing is authorized here.
 
 ## Build and test
 
@@ -58,23 +58,23 @@ The custom image answers the stock framing `[len, cmd, ...]` on its vendor bulk 
 | Command | Request | Reply | Meaning |
 | --- | --- | --- | --- |
 | `0x03` | `02 03` | 8 B, payload `51 4d 00 01` ("QM") | Identifies the custom firmware. Stock answers `01 20 01 22`, so the app gates all writes on this reply. |
-| `0x82` | `03 82 raw` | 4 B | Set backlight brightness (stock formula, persists). |
+| `0x82` | `03 82 raw` | 4 B | Set runtime backlight brightness; disabled in M1. |
 | `0x84` | `02 84` | 5 B, payload `raw` | Read backlight brightness. |
 | `0x90` | `02 90` | 8 B, payload `layers rows cols flags` | Keymap dimensions. |
 | `0x91` | `05 91 layer row col` | 6 B, payload keycode | Read one key. |
-| `0x92` | `07 92 layer row col kc_hi kc_lo` | 4 B | Set one key. Durable immediately: QMK dynamic keymap over wear-leveled EEPROM (four flash pages at `0x0800F800`). |
+| `0x92` | `07 92 layer row col kc_hi kc_lo` | 4 B | Set one runtime key in transient RAM. Lost on power loss; disabled in M1. |
 | `0x93` | `02 93` | 4 B | Reset keymap to the factory layout. |
-| `0xA1/0xA2/0xA3/0xA0` | stock update dialect | as stock | Stage an image and reboot to install. Identical to stock, so the same flow flashes the custom image onto stock firmware and restores stock onto the custom firmware. |
+| `0xA1/0xA2/0xA3/0xA0` | stock update dialect | as stock | Staging/commit/reboot protocol, blocked by diagnostics builds. No restoration guarantee. |
 
 Commands `0x86`/`0x88`/`0x8a`/`0x8c`/`0x8d` (backlight delay, idle, other settings) are not implemented and return the unsupported-command status. They are future work, not a regression.
 
-The dispatcher is reachable through two independent channels:
+The experimental dispatcher implements two application-dependent channels, neither proven on the custom image in the physical case:
 
 1. **The Apple session (EP3)**: once the MFi handshake completes, the phone app opens an EA session and the dispatcher runs on the raw data channel.
-2. **The Mac fallback (EP2)**: any non-iPhone host that sends dispatcher-framed packets on EP2 reaches the same dispatcher without a session. This is the recovery path that survives a broken session stack.
+2. **The Mac dispatcher (EP2)**: a non-iPhone host can address the application dispatcher without an Apple session. This requires a running application and is not independent recovery.
 
-See [FLASHING.md](FLASHING.md) for the full procedure and risk analysis.
+The old [flashing guide](FLASHING.md) is retired.
 
 ## iOS app
 
-The Clicks Inspector app (see [ios/ClicksInspector/README.md](../../ios/ClicksInspector/README.md)) implements all commands over the EASession, plus a self-test, key test, layout preview, and one-tap flash/restore with both images bundled.
+The [Clicks Inspector app](../../../ios/ClicksInspector/README.md) defaults to diagnostics-only builds. Legacy write controls cannot bypass the controller gate.

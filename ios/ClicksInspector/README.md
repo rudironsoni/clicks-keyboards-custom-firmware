@@ -12,7 +12,8 @@ The seven demonstrated getters require model `CK-5200`, hardware `1.2.0`, firmwa
 The characterization screen adds user-started three-pass reads, native keyboard-event recording, checkpoints, and redacted JSON/report export.
 It sends no settings, reset, update, or unknown-command requests.
 
-**Open firmware-control session** is separate and blocked during recording. The existing controller retains its stock-only gate and confirmation flow.
+**Debug and Release are diagnostics-only.** The controller permits only the exact demonstrated stock getters on the known identity, including through legacy firmware controls. A0/A1/A2/A3, settings, and reset commands are refused.
+The `AuthorizedStockUpdate` build configuration retains the stock-only update path for a later separately authorized milestone. Do not install that configuration for M1. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
 Apple manages the accessory session and authentication. Opening a session does not prove memory access or recovery.
 
 ## Build and install
@@ -85,7 +86,7 @@ A simulator can validate the interface and empty state. It cannot validate this 
 The app bundles both images, but the full product lifecycle is not yet authorized or verified:
 
 - **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized; the controller refuses any image that is not the authorized stock artifact, and the buttons and the import path are removed until a separately reviewed image exists.
-- **Restore stock firmware**: one tap on "Re-flash stock firmware (V122)", offered ONLY while the keyboard identifies as the expected stock unit (model CK-5200, hardware 1.2.0, firmware 1.2.2, version payload 01 20 01 22). Restoring stock from custom firmware is not offered: that path needs its own authorization and verification first (2026-10-13).
+- **Stock update implementation**: retained behind `AuthorizedStockUpdate`; default builds refuse it before any firmware packet. Restoring stock from custom firmware remains unauthorized and unverified.
 - **Self-test, custom mode only**: reads identity and keymaps, then round-trips a write on the spare crossing. This is not part of stock characterization.
 - **Stock key recorder**: focused UIKit text input plus `UIPress`/`UIKey` and `GCKeyboard` callbacks. Visible text proves that iOS delivered text, not that all HID behavior is correct.
 - **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
@@ -94,7 +95,7 @@ The app bundles both images, but the full product lifecycle is not yet authorize
 
 ## Run the focused host checks
 
-Run all six Swift check executables, including the stock recorder and existing controller/stream checks:
+Run the Swift checks and checkpoint benchmark, including the recorder, diagnostics boundary, and retained stock-update simulations:
 
 ```sh
 bash ios/ClicksInspector/test.sh

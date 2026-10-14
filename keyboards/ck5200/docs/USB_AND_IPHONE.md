@@ -186,7 +186,7 @@ The stock keymap is now fully decoded (the stock maps every electrical crossing 
 
 ### Backlight, 2026-10-10
 
-The stock backlight is now decoded and ported (it is TIM1 PWM on PA8/PA9/PA10, not SPI as the earlier note guessed): prescaler 0, auto-reload 6000, duty `(0x100 - raw) * 6000 >> 8` on all three channels, MOE/ARPE/CEN per stock. The dispatcher answers the stock-shaped brightness commands: `03 82 raw` sets and persists the byte through the wear-leveled EEPROM, `02 84` reads it back (`05 02 84 00 raw`). The persisted value applies at boot. Deliberate deviation: the channels stay enabled at boot; the stock's activity-based on/off state machine (its auto-off after the configured delay) is future work, so commands `0x86`/`0x88`/`0x8a` remain unimplemented rather than lying with canned replies.
+The stock backlight is decoded and ported (TIM1 PWM on PA8/PA9/PA10): prescaler 0, auto-reload 6000, duty `(0x100 - raw) * 6000 >> 8` on all three channels, MOE/ARPE/CEN per stock. [CORRECTION] The X035 custom port uses transient RAM, not flash persistence. `03 82 raw` changes runtime brightness and `02 84` reads it back (`05 02 84 00 raw`). Power loss discards runtime changes. Deliberate deviation: the channels stay enabled at boot; the stock's activity-based on/off state machine remains future work, so commands `0x86`/`0x88`/`0x8a` remain unimplemented. M1 diagnostics builds refuse the write command. See [current readiness](flash-readiness.md).
 
 ### Verification state
 

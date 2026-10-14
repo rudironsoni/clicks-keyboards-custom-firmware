@@ -8,9 +8,11 @@ It was local-only when first reported. It is now published without rewriting his
 ## Reproduce and inspect complete outputs
 
 The [iOS workflow](../../.github/workflows/ios.yml) runs on pushes and pull requests that change `ios/ClicksInspector/**` or the workflow.
-It runs on `macos-15`, records the checkout SHA and toolchain, runs all six programs, builds the simulator app, and executes the UI test without signing.
+It runs on `macos-15`, records the checkout SHA and toolchain, reproduces the version/session/diagnostics failures against `8bde397`, runs the original six programs plus new regressions and the checkpoint benchmark, builds unsigned simulator and generic iPhone apps, and executes receiver and UI integration tests.
 Its `ios-verification-<SHA>` artifact contains full stdout/stderr and the UI `.xcresult`, including warnings, commands, and test attachments, even after failure.
 Signing, physical-device access, and firmware operations are not CI steps.
+`Tests/reproduce_red.py` retains complete expected-failure output. `StockReceiverTests` verifies that the mismatched version stops the real receive path without any validated observation. The UI test reads actual exported files after UIKit typing, in both privacy modes, and checks replacement/deletion.
+`RecorderBenchmark` prints event counts, peak process RSS, synchronous checkpoint duration, and enqueue-plus-next-callback duration. These are host measurements, not iPhone callback timing evidence. Production checkpoints use the serial background queue immediately on start and then every five seconds.
 
 ```sh
 gh run list --workflow ios.yml --limit 5
@@ -53,7 +55,9 @@ The separate simulator UI test exercises recording, text input, export, and dele
 
 ## Field-by-field export audit
 
-Schema remains 1. `privacy` identifies the stricter `shareable-v2` policy.
+Schema is now 2. `privacy` identifies the `shareable-v2` field filter. Schema 1 checkpoints can still be recovered.
+Schema 2 adds allowlisted catalog trial IDs, numeric attempt IDs, typed trial outcomes, and coverage regenerated from filtered events.
+Catalog labels, actions, matrix coordinates, and evidence classifications come from static code, never arbitrary saved strings.
 This is a filtered diagnostic export, **not anonymous data**. Wall times and key codes are deliberately retained and disclosed before sharing.
 
 | Surface | Local checkpoint | Shareable JSON / Markdown |
@@ -83,12 +87,12 @@ The other negative check exhausts the local opcode policy and tests interrupted 
 ## What runs without another tap?
 
 - At launch: register EA notifications, enumerate connected accessories, and recover the app's local checkpoint. No stock command or EA session opens.
-- After **Start characterization**: record delivered callbacks and save checkpoints every five seconds. Native keyboard capture requires the test box to have focus.
+- After **Start characterization**: enqueue the new session checkpoint immediately, then every five seconds. Encoding and atomic writing use a serial utility queue. Native keyboard capture requires the test box to have focus.
 - After **Open stock session**: iOS establishes the EA session and handles its own USB/authentication traffic. The app sends no getter yet.
 - After **Read seven getters, three passes**: the authorized 21-request sequence runs until completion or failure. This automation is bounded by that user action.
 - On background/detach: close the session, cancel queued reads, record the interruption, and checkpoint. Returning only refreshes accessory discovery.
 - After export: files stay local. **Share evidence files** opens the system share sheet. No automatic upload exists in this app. System backup behavior is controlled by iOS.
-- **Open firmware-control session** is a separate explicit action. It starts the existing controller's identification flow. Do not use it for this baseline.
+- **Open firmware-control session** is a separate explicit action. Default builds still enforce diagnostics-only commands at the controller boundary. `AuthorizedStockUpdate` is a later, separately authorized configuration, not an M1 build.
 
 ## Data removal and its limits
 

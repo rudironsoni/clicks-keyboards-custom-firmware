@@ -238,7 +238,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         session = nil
         setState(.closed)
         stockEvidence.interruptKeys(reason: reason)
-        stockEvidence.checkpoint(in: Self.evidenceDirectory)
+        stockEvidence.checkpointInBackground(in: Self.evidenceDirectory)
     }
 
     func clearLogs() {
@@ -256,6 +256,11 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         stockEvidence.state.app = "background"
         stockEvidence.record(source: "app", kind: "background; callbacks may stop")
         closeSession(reason: "App entered background")
+        let task = UIApplication.shared.beginBackgroundTask(withName: "Save stock evidence")
+        Task {
+            await stockEvidence.waitForCheckpoints()
+            if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+        }
     }
 
     func inactive() {
@@ -419,19 +424,30 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                 lastReadResult = result.summary
                 readState = "Completed"
                 log("Read completed: \(result.summary)")
-                if pending.command == .version, result.payload != [0x01, 0x20, 0x01, 0x22] {
-                    failRead("Version payload does not match the demonstrated stock revision")
-                    return
-                }
                 scheduleNextStockRead()
                 return
             }
             pendingRead = pending
             readState = "Receiving \(pending.accumulator.bytes.count)/\(pending.command.expectedResponseLength) response bytes"
         } catch {
+            pendingRead = pending // Preserve the rejected reply before failure closes the sweep.
             failRead("Invalid \(pending.command.title) response; \(error)")
         }
     }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Simulator integration fixture: exercises the real receiver and cancellation path.
+    /// No EASession or output stream exists, so this cannot send a packet.
+    func simulateVersionResponse(_ bytes: [UInt8]) {
+        stockEvidence.start(environment: ["source": "simulator iOS callbacks; no physical accessory evidence"])
+        stockEvidence.state.accessory = StockAccessoryIdentity(model: "CK-5200", firmware: "1.2.2", hardware: "1.2.0", protocols: [Self.supportedProtocol])
+        stockQueue = [.brightness, .backlightDelay]
+        stockSweepRemaining = 3
+        pendingRead = PendingRead(command: .version, evidenceID: stockEvidence.beginRead(.version))
+        pendingRead?.requestOffset = 2
+        receiveReadFragment(bytes)
+    }
+    #endif
 
     private func failRead(_ reason: String) {
         log("Read failed: \(reason)")
@@ -464,8 +480,11 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     private func updateEvidenceIdentity() {
-        let accessory = session?.accessory ?? accessories.first { $0.modelNumber == "CK-5200" }
+        let connected = EAAccessoryManager.shared().connectedAccessories
+        let accessory = connected.first { $0.connectionID == session?.accessory?.connectionID }
+            ?? connected.first { $0.modelNumber == "CK-5200" }
         stockEvidence.state.connected = accessory?.isConnected ?? false
+        stockEvidence.state.accessory = nil
         if let accessory {
             stockEvidence.state.accessory = StockAccessoryIdentity(model: accessory.modelNumber,
                 firmware: accessory.firmwareRevision, hardware: accessory.hardwareRevision, protocols: accessory.protocolStrings)
@@ -480,6 +499,11 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         readState = "Not started"
         lastReadResult = nil
         updateEvidenceIdentity()
+        switch UIApplication.shared.applicationState {
+        case .active: stockEvidence.state.app = "active"
+        case .background: stockEvidence.state.app = "background"
+        default: stockEvidence.state.app = "inactive"
+        }
         #if targetEnvironment(simulator)
         let observationSource = "simulator iOS callbacks; no physical accessory evidence"
         #else
@@ -491,11 +515,12 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             "appBuild": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
             "source": observationSource,
         ])
+        stockEvidence.checkpointInBackground(in: Self.evidenceDirectory)
         checkpointTimer?.invalidate()
         checkpointTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.stockEvidence.checkpoint(in: Self.evidenceDirectory)
+                self.stockEvidence.checkpointInBackground(in: Self.evidenceDirectory)
                 if !self.stockEvidence.isRecording { self.checkpointTimer?.invalidate() }
             }
         }
@@ -505,7 +530,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         closeSession(reason: "Stop stock characterization")
         stockEvidence.stop()
         checkpointTimer?.invalidate()
-        stockEvidence.checkpoint(in: Self.evidenceDirectory)
+        stockEvidence.checkpointInBackground(in: Self.evidenceDirectory)
     }
 
     func clearStockEvidence() {
@@ -547,7 +572,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         stockSweepRemaining = stockQueue.count
         guard !stockQueue.isEmpty else {
             stockEvidence.record(source: "EA", kind: "three-pass-baseline-completed")
-            stockEvidence.checkpoint(in: Self.evidenceDirectory)
+            stockEvidence.checkpointInBackground(in: Self.evidenceDirectory)
             return
         }
         sweepTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in

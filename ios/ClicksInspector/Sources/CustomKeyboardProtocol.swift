@@ -29,6 +29,7 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
     case rejected(status: UInt8)
     case notCustomFirmware
     case transportUnavailable
+    case diagnosticsOnly
     case imageTooLarge(size: Int)
     case updateRejected(at: String, status: UInt8)
     case timedOut
@@ -50,6 +51,8 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
             "Connected keyboard did not identify as the custom QMK firmware"
         case .transportUnavailable:
             "No usable transport to the keyboard is available"
+        case .diagnosticsOnly:
+            "Diagnostics-only build: firmware, reset, and settings writes are disabled"
         case .imageTooLarge(let size):
             "Image is \(size) bytes; the keyboard accepts at most 27136 (0x6a00)"
         case .updateRejected(let at, let status):

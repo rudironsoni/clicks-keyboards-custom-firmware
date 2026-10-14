@@ -31,6 +31,8 @@ struct StockEvidenceEvent: Codable {
     var bytes: [UInt8]?
     let byteCount: Int?
     let readID: Int?
+    var trialID: String?
+    var trialAttempt: Int?
 }
 
 struct StockReadObservation: Codable {
@@ -59,6 +61,8 @@ struct StockEvidenceBundle: Codable {
     var privacy = "local: identifying metadata omitted; test text and raw stream bytes retained"
     var reads: [StockReadObservation] = []
     var events: [StockEvidenceEvent] = []
+    var trials: [StockTrialRun]?
+    var coverage: [StockTrialCoverage]?
 }
 
 /// Records caller-delivered observations. Host tests supply explicitly labeled simulations.
@@ -70,12 +74,14 @@ final class StockEvidenceRecorder: ObservableObject {
     @Published private(set) var exportedWithTestText: Bool?
     @Published private(set) var storageError: String?
     @Published private(set) var textResetID = UUID()
+    @Published private(set) var activeTrialID: String?
     private(set) var bundle: StockEvidenceBundle?
     var state = StockObservationState()
     private let now: () -> Date
     private let uptime: () -> Double
     private var startUptime = 0.0
     private var held: [String: Double] = [:]
+    private let storageQueue = DispatchQueue(label: "stock-evidence.checkpoint", qos: .utility)
     static let eventLimit = 20_000
 
     init(now: @escaping () -> Date = Date.init,
@@ -88,8 +94,13 @@ final class StockEvidenceRecorder: ObservableObject {
 
     func start(environment: [String: String]) {
         guard !isRecording else { return }
+        // Only live fields refreshed by the session owner survive replacement.
+        state = StockObservationState(accessory: state.accessory, connected: state.connected,
+                                      session: state.session, app: state.app)
         startUptime = uptime()
-        bundle = StockEvidenceBundle(schemaVersion: 1, sessionID: UUID(), startedAt: now(), environment: environment)
+        bundle = StockEvidenceBundle(schemaVersion: 2, sessionID: UUID(), startedAt: now(), environment: environment)
+        bundle?.trials = []
+        activeTrialID = nil
         held.removeAll()
         textResetID = UUID()
         eventCount = 0
@@ -107,9 +118,11 @@ final class StockEvidenceRecorder: ObservableObject {
             stop(reason: "event-limit; remaining observations not captured")
             return
         }
+        let attempt = activeTrialID == nil ? nil : bundle?.trials?.last?.id
         bundle?.events.append(StockEvidenceEvent(sequence: eventCount, timestamp: now(), elapsedMS: elapsedMS,
             source: source, kind: kind, state: state, fields: fields, bytes: bytes,
-            byteCount: bytes?.count, readID: readID))
+            byteCount: bytes?.count, readID: readID, trialID: activeTrialID,
+            trialAttempt: attempt))
         eventCount += 1
     }
 
@@ -176,8 +189,40 @@ final class StockEvidenceRecorder: ObservableObject {
         held.removeAll()
     }
 
+    @discardableResult
+    func beginTrial(_ id: String) -> Bool {
+        guard isRecording, activeTrialID == nil, StockTrialCatalog.find(id) != nil else { return false }
+        activeTrialID = id
+        let attempt = bundle?.trials?.count ?? 0
+        bundle?.trials?.append(StockTrialRun(id: attempt, trialID: id, startedMS: elapsedMS))
+        record(source: "user", kind: "key-trial-start")
+        return true
+    }
+
+    func endTrial(_ requested: StockTrialStatus) {
+        guard let id = activeTrialID, let attempt = bundle?.trials?.last, requested != .active else { return }
+        let events = bundle?.events.filter { $0.trialID == id && $0.trialAttempt == attempt.id } ?? []
+        let hasDown = events.contains { $0.kind == "key" && $0.fields["phase"] == "down" }
+        let hasUp = events.contains { $0.kind == "key" && $0.fields["phase"] == "up" }
+        let gap = events.contains { $0.kind == "key-observation-gap" }
+        let status: StockTrialStatus = requested == .completed && (!hasDown || !hasUp || gap || !held.isEmpty)
+            ? .ambiguous : requested
+        if !held.isEmpty { interruptKeys(reason: "user ended trial; unresolved release") }
+        bundle?.trials?[attempt.id].status = status
+        bundle?.trials?[attempt.id].endedMS = elapsedMS
+        record(source: "user", kind: "key-trial-end", fields: ["trialStatus": status.rawValue])
+        activeTrialID = nil
+    }
+
     func stop(reason: String = "user-stop") {
         guard isRecording else { return }
+        if activeTrialID != nil {
+            // Seal directly at the event limit to avoid recursive record -> stop calls.
+            if let index = bundle?.trials?.indices.last {
+                bundle?.trials?[index].status = .ambiguous
+                bundle?.trials?[index].endedMS = elapsedMS
+            }
+        }
         // Seal directly so a full event buffer cannot recursively call stop().
         if let last = bundle?.reads.last, last.outcome == "pending" {
             bundle?.reads[last.id].outcome = "interrupted: \(reason)"
@@ -185,6 +230,7 @@ final class StockEvidenceRecorder: ObservableObject {
             bundle?.reads[last.id].endedMS = elapsedMS
         }
         if eventCount < Self.eventLimit { interruptKeys(reason: reason) }
+        activeTrialID = nil
         held.removeAll()
         bundle?.endedAt = now()
         bundle?.endReason = reason
@@ -212,7 +258,7 @@ final class StockEvidenceRecorder: ObservableObject {
             return "- \(command.title): \(reads.count) validated. Replies: \(values.joined(separator: " / "))"
         }
         return """
-        # Stock characterization v1
+        # Stock characterization v2
         Session: \(bundle.sessionID)
         Source: \(bundle.environment["source"] ?? bundle.environment["test"] ?? "unknown")
         iOS: \(bundle.environment["iOS"] ?? "n/a"). App: \(bundle.environment["appVersion"] ?? "n/a") (\(bundle.environment["appBuild"] ?? "n/a")).
@@ -226,6 +272,8 @@ final class StockEvidenceRecorder: ObservableObject {
         Evidence: iOS callbacks and user-marked conditions, not USB captures.
         Key events: \(bundle.events.filter { $0.kind == "key" }.count). Text edits: \(bundle.events.filter { $0.source == "text-input" }.count).
         Key observation gaps: \(bundle.events.filter { $0.kind == "key-observation-gap" }.count).
+        Trials: \(bundle.trials?.count ?? 0) attempts from \(StockTrialCatalog.version). Coverage includes all untested trials.
+        Trial completion is not physical validation. See JSON coverage for matrix candidates, label confidence, actions, callback/text/gap event references, and outcomes.
         See JSON for timestamps, fragments, before/after state, held keys, and per-read outcomes.
         Serial numbers and chip identifiers are omitted as metadata. This report omits typed text.
 
@@ -238,12 +286,39 @@ final class StockEvidenceRecorder: ObservableObject {
 
     /// Checkpoints are local and exact. Share exports use a separate, redacted projection.
     func checkpoint(in directory: URL) {
-        guard bundle != nil else { return }
+        guard let bundle else { return }
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try encoded(shareable: false).write(to: directory.appendingPathComponent("stock-local.json"), options: .atomic)
+            try storageQueue.sync { try Self.save(bundle, in: directory) }
             storageError = nil
         } catch { storageError = "Evidence save failed: \(error.localizedDescription)" }
+    }
+
+    /// Snapshot on the actor; encode and write on a serial queue. Call immediately on start too.
+    func checkpointInBackground(in directory: URL) {
+        guard let snapshot = bundle else { return }
+        storageQueue.async { [weak self] in
+            let error: String?
+            do { try Self.save(snapshot, in: directory); error = nil }
+            catch let failure { error = "Evidence save failed: \(failure.localizedDescription)" }
+            Task { @MainActor [weak self] in
+                guard self?.bundle?.sessionID == snapshot.sessionID else { return }
+                self?.storageError = error
+            }
+        }
+    }
+
+    func waitForCheckpoints() async {
+        await withCheckedContinuation { continuation in
+            storageQueue.async { continuation.resume() }
+        }
+    }
+
+    nonisolated private static func save(_ snapshot: StockEvidenceBundle, in directory: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try encoder.encode(snapshot).write(to: directory.appendingPathComponent("stock-local.json"), options: .atomic)
     }
 
     func export(in directory: URL, includeTestText: Bool) {
@@ -264,6 +339,7 @@ final class StockEvidenceRecorder: ObservableObject {
     /// Clears only recorder-owned files. Copies already shared outside the app are not accessible here.
     func clear(in directory: URL) {
         stop(reason: "user-stop")
+        storageQueue.sync {} // A queued save must finish before deletion.
         do {
             if FileManager.default.fileExists(atPath: directory.path) {
                 let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -273,6 +349,7 @@ final class StockEvidenceRecorder: ObservableObject {
                 }
             }
             bundle = nil
+            activeTrialID = nil
             state = StockObservationState()
             eventCount = 0
             held.removeAll()
@@ -291,7 +368,10 @@ final class StockEvidenceRecorder: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             var recovered = try decoder.decode(StockEvidenceBundle.self, from: Data(contentsOf: file))
-            guard recovered.schemaVersion == 1 else { throw CocoaError(.fileReadCorruptFile) }
+            guard [1, 2].contains(recovered.schemaVersion) else { throw CocoaError(.fileReadCorruptFile) }
+            for index in recovered.trials?.indices ?? 0..<0 where recovered.trials?[index].status == .active {
+                recovered.trials?[index].status = .ambiguous
+            }
             if recovered.endedAt == nil {
                 recovered.endReason = "interrupted; recovered last checkpoint, later events unknown"
                 for index in recovered.reads.indices where recovered.reads[index].outcome == "pending" {

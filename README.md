@@ -8,7 +8,7 @@ The product goals are official stock installation, separately authorized custom-
 
 **R3 independent recovery: UNMET.** The proprietary installer remains unread. An application key chord cannot recover an application that cannot execute. Debug and factory ISP research remain contingencies, not the iPhone-only recovery architecture.
 
-Current work: [Stock Characterization in Clicks Inspector](ios/ClicksInspector/STOCK_CHARACTERIZATION.md). Collect real stock observations before firmware replacement. This mode cannot flash or change settings. The separate firmware controller retains its existing stock-only authorization.
+Current work: [Stock Characterization in Clicks Inspector](ios/ClicksInspector/STOCK_CHARACTERIZATION.md). Collect real stock observations before firmware replacement. Default iOS builds block all firmware and settings writes at the controller boundary. [Authoritative readiness record](keyboards/ck5200/docs/flash-readiness.md).
 
 ## Safe local work
 
@@ -36,8 +36,8 @@ bash keyboards/ck5200/scripts/revert-stock.sh --download-only
 ## Project state
 
 - [Clicks Inspector: stock evidence and gated firmware controls](ios/ClicksInspector/README.md).
-- [Current status and all eight work packages](keyboards/ck5200/STATUS.md).
-- [**Flashing: procedure, risks, and recovery**](keyboards/ck5200/docs/FLASHING.md).
+- [Current status](keyboards/ck5200/STATUS.md).
+- [Retired flashing guide](keyboards/ck5200/docs/FLASHING.md).
 - [Build and image checks](keyboards/ck5200/docs/BUILD_AND_FLASH.md).
 - [Stock decode record](keyboards/ck5200/docs/STOCK_DECODE.md).
 - [Stock recovery requirements](keyboards/ck5200/docs/RECOVERY.md).

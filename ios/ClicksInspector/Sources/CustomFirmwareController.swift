@@ -3,11 +3,33 @@ import Foundation
 import OSLog
 
 /// Drives the custom-firmware feature set over a KeyboardPacketLink:
-/// identity check, keymap editing (durable per-key writes), keymap reset,
+/// identity check, runtime-only keymap editing, keymap reset,
 /// flashing an image (works against both stock and custom firmware, which
 /// share the A1/A2/A3/A0 update dialect), and restoring stock.
 @MainActor
 final class CustomFirmwareController: ObservableObject {
+    #if STOCK_UPDATE_AUTHORIZED
+    static let diagnosticsOnly = false
+    #else
+    static let diagnosticsOnly = true
+    #endif
+
+    /// Sole controller-to-transport boundary, including the fire-and-forget reboot.
+    func dispatch(_ request: [UInt8]) throws {
+        try checkBuildPermission(request)
+        guard let link else { throw CustomKeyboardError.transportUnavailable }
+        link.send(request)
+    }
+
+    private func checkBuildPermission(_ request: [UInt8]) throws {
+        if Self.diagnosticsOnly {
+            guard let target = connectedTarget,
+                  StockReadPolicy.allows(request, model: target.model,
+                      firmware: target.firmwareRevision, hardware: target.hardwareRevision) else {
+                throw CustomKeyboardError.diagnosticsOnly
+            }
+        }
+    }
     enum Phase: Equatable {
         case idle
         case identifying
@@ -359,7 +381,7 @@ final class CustomFirmwareController: ObservableObject {
         }
     }
 
-    /// Per-key writes are durable in the firmware; there is no save step.
+    /// Custom X035 keymap edits are runtime-only and lost on power loss.
     func setKey(layer: Int, row: Int, column: Int, keycode: UInt16) {
         guard let info, layer < info.layers, row < info.rows, column < info.columns else { return }
         Task {
@@ -395,6 +417,10 @@ final class CustomFirmwareController: ObservableObject {
     /// stock V122 artifact (SHA-256 pinned), and only onto a target that
     /// identifies as the expected CK-5200 stock unit.
     func flash(image: [UInt8], rebootToInstall: Bool) {
+        guard !Self.diagnosticsOnly else {
+            fail(CustomKeyboardError.diagnosticsOnly.description)
+            return
+        }
         guard link != nil else {
             fail("No connection; cannot flash")
             return
@@ -502,7 +528,7 @@ final class CustomFirmwareController: ObservableObject {
                      * reboot kills the session. Keep the case attached. */
                     phase = .busy("Waiting for the keyboard to reboot (about 10 seconds)")
                     awaitingReboot = true
-                    link?.send(CustomKeyboardCommand.rebootRequest)
+                    try dispatch(CustomKeyboardCommand.rebootRequest)
                     rebootTask = Task { [weak self] in
                         guard let self else { return }
                         let confirmMillis = Int(self.rebootConfirmTimeoutNanos / 1_000_000)
@@ -551,7 +577,8 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func perform(_ exchange: CustomKeyboardExchange) async throws -> [UInt8] {
-        guard let link else { throw CustomKeyboardError.transportUnavailable }
+        try checkBuildPermission(exchange.request)
+        guard link != nil else { throw CustomKeyboardError.transportUnavailable }
         guard self.exchange == nil, continuation == nil else { throw CustomKeyboardError.transportUnavailable }
         let request = exchange.request
         return try await withCheckedThrowingContinuation { continuation in
@@ -563,7 +590,8 @@ final class CustomFirmwareController: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self?.exchangeTimedOut()
             }
-            link.send(request)
+            do { try dispatch(request) }
+            catch { resumePending(with: error) }
         }
     }
 

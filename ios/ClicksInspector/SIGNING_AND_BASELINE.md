@@ -19,8 +19,8 @@ Status: **physical acceptance not collected**. This procedure installs the iOS a
 5. Enable **Automatically manage signing**. Select your team. Keep credentials and provisioning profiles out of Git.
 6. If your team cannot register `com.rudironsoni.clicks-inspector`, choose a unique development bundle ID locally. Do not impersonate Clicks' bundle ID.
 7. Connect and unlock the iPhone 15 Pro Max. Trust the computer and enable Developer Mode when iOS requests it.
-8. Select the **ClicksInspector** scheme and that physical iPhone as the destination. Run with **Product → Run**.
-9. Confirm app version `0.2.0`, build `3` in the exported environment fields. Record the source commit with the baseline.
+8. Select the **ClicksInspector** scheme, **Debug** configuration, and that physical iPhone as the destination. Run with **Product → Run**. Do not select `AuthorizedStockUpdate`.
+9. Confirm **DIAGNOSTICS ONLY** on the recorder screen and app version `0.2.0`, build `4` in the export. Record the source commit with the baseline.
 
 If signing fails, preserve the exact Xcode error. Do not disable accessory authentication or modify keyboard firmware to fix an app-signing problem.
 
@@ -61,12 +61,14 @@ An unsigned simulator build or generic unsigned iPhone build cannot substitute f
 4. Tap **Open stock session**. Wait for both streams to open.
 5. Select `baseline`. Mark visible backlight and charging state, then tap **Mark state before observation**.
 6. Tap **Read seven getters, three passes**. Preserve failures as failures. Do not substitute commands.
-7. Mark state after observation. Run each physical key trial in the focused text box, including modifiers and layers.
+7. Mark state after observation. Choose a catalog trial and tap **Begin key trial**. Focus the test box, follow the shown action, then end with completed, failed, ambiguous, or unobservable. Only one trial can run at once. Repeat for known keys and modifier/layer combinations.
 8. Test ordinary detach/reconnect and foreground/background. Reopen manually, then request another getter pass.
 9. Tap **Stop and save**, then **Create JSON and report**. Review privacy choices before using **Share evidence files**.
 10. Record the commit, signing/install result, and the JSON session UUID with your observations.
 
 Use [the full baseline procedure](STOCK_CHARACTERIZATION.md#safe-operating-state-procedure) for idle/wake, backlight, sustained typing, and normal charging.
+The catalog covers 35 statically decoded non-spare crossings and an unmapped Shift entry. Printed labels and their matrix positions remain unverified. Q has a documented conflict between the decode and the custom keymap; do not infer its position from the custom HID value. Unknown consumer caps and unknown mode controls must remain unobservable until identified.
+The exported `coverage` array lists every trial, including `not-started` entries, with callback, applied-text, and gap event references. A completed trial means an observation was finished, not that a physical key passed validation. Compare the actual case with the evidence before accepting a mapping.
 The app cannot observe system-consumed shortcuts, raw HID packets, or events during suspension. Mark those cases as unobservable.
 
 ## Acceptance record

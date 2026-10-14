@@ -12,7 +12,8 @@ func fragmentedVersionAndAllFixedGetters() throws {
     for command in StockReadCommand.allCases {
         if command == .checksumService || command == .newerUserKeyProbe { continue }
         precondition(command.request == [0x02, command.rawValue])
-        let payload = [UInt8](repeating: 0x5a, count: command.expectedResponseLength - 4)
+        let payload: [UInt8] = command == .version ? [1, 0x20, 1, 0x22]
+            : [UInt8](repeating: 0x5a, count: command.expectedResponseLength - 4)
         let response = [UInt8(command.expectedResponseLength), 0x02, command.rawValue, 0x00] + payload
         var accumulator = StockReadAccumulator(command: command)
         let decoded = try accumulator.append(response)

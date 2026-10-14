@@ -103,11 +103,12 @@ else
     printf '  SKIP  Swift layout check (swiftc not available)\n'
 fi
 
-if xcrun swiftc -module-cache-path "$SWIFT_CACHE" \
+if xcrun swiftc -D STOCK_UPDATE_AUTHORIZED -module-cache-path "$SWIFT_CACHE" \
     "$REPO/ios/ClicksInspector/Sources/KeycodeNames.swift" \
     "$REPO/ios/ClicksInspector/Sources/FactoryLayout.swift" \
     "$REPO/ios/ClicksInspector/Sources/KeyboardSelfTest.swift" \
     "$REPO/ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift" \
+    "$REPO/ios/ClicksInspector/Sources/StockReadCommand.swift" \
     "$REPO/ios/ClicksInspector/Sources/CustomFirmwareController.swift" \
     "$REPO/ios/ClicksInspector/Tests/ck5200_flash_check.swift" \
     -o /tmp/ck5200_flash_check 2>/dev/null; then
@@ -119,11 +120,12 @@ else
     printf '  SKIP  Swift flash-path check (swiftc not available)\n'
 fi
 
-if xcrun swiftc -module-cache-path "$SWIFT_CACHE" \
+if xcrun swiftc -D STOCK_UPDATE_AUTHORIZED -module-cache-path "$SWIFT_CACHE" \
     "$REPO/ios/ClicksInspector/Sources/KeycodeNames.swift" \
     "$REPO/ios/ClicksInspector/Sources/FactoryLayout.swift" \
     "$REPO/ios/ClicksInspector/Sources/KeyboardSelfTest.swift" \
     "$REPO/ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift" \
+    "$REPO/ios/ClicksInspector/Sources/StockReadCommand.swift" \
     "$REPO/ios/ClicksInspector/Sources/CustomFirmwareController.swift" \
     "$REPO/ios/ClicksInspector/Sources/StreamLink.swift" \
     "$REPO/ios/ClicksInspector/Tests/ck5200_stream_check.swift" \

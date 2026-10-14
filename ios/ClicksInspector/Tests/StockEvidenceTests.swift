@@ -7,10 +7,39 @@ struct StockEvidenceTests {
 
     @MainActor
     static func main() throws {
+        if CommandLine.arguments.contains("--session-reset") {
+            resetsObservationState()
+            return
+        }
         try recordsRealInputsAndExports()
         try refusesUnsafeReadsAndPreservesUncertainty()
         try auditsEveryExportSurfaceAndClearsData()
+        resetsObservationState()
         print("3 stock evidence checks passed (host simulation, no physical device)")
+    }
+
+    @MainActor
+    static func resetsObservationState() {
+        let recorder = StockEvidenceRecorder()
+        recorder.start(environment: [:])
+        let first = recorder.bundle!.sessionID
+        recorder.state.condition = "normal charging"
+        recorder.state.backlight = "on"
+        recorder.state.charging = "connected; iOS charging"
+        recorder.state.focus = "test-text-input"
+        recorder.stop()
+        // The session owner has just refreshed these live fields.
+        recorder.state.accessory = identity
+        recorder.state.connected = true
+        recorder.state.session = "open"
+        recorder.start(environment: [:])
+        precondition(recorder.bundle!.sessionID != first)
+        precondition(recorder.state.condition == "baseline", "new session kept old condition")
+        precondition(recorder.state.focus == "none" && recorder.state.backlight == "not-observed")
+        precondition(recorder.state.charging == "not-observed")
+        precondition(recorder.state.accessory == identity && recorder.state.connected && recorder.state.session == "open")
+        precondition(recorder.bundle!.events.count == 1 && recorder.bundle!.events[0].state == recorder.state)
+        print("PASS two-session reset")
     }
 
     @MainActor
@@ -65,7 +94,7 @@ struct StockEvidenceTests {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(StockEvidenceBundle.self, from: recorder.encoded(shareable: true))
-        precondition(decoded.schemaVersion == 1 && decoded.reads[0].response == reply)
+        precondition(decoded.schemaVersion == 2 && decoded.reads[0].response == reply)
         precondition(decoded.events.filter { $0.kind == "rx-fragment" }.compactMap(\.bytes).count == 6)
         precondition(!shared.contains("serialNumber") && !shared.contains("connectionID"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

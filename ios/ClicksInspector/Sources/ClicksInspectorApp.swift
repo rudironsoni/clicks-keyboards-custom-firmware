@@ -286,7 +286,7 @@ private struct KeymapSection: View {
                     }
                 }
                 Button("Reset keymap to factory") { custom.resetKeymap() }
-                Text("Each applied key persists in the keyboard's flash immediately.")
+                Text("Custom X035 keymap edits are runtime-only and lost on power loss. Diagnostics builds block all writes.")
                     .font(.caption)
             case .idle, .identifying, .stockFirmware, .busy, .failed, .updateUnverified:
                 Text("Keymap editing is available when the custom QMK firmware is connected.")

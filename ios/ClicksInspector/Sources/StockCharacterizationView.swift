@@ -8,8 +8,7 @@ struct StockCharacterizationView: View {
     @State private var condition = "baseline"
     @State private var backlight = "not-observed"
     @State private var charging = "not-observed"
-    @State private var testKey = "Q"
-    @State private var combination = "single key"
+    @State private var trialID = StockTrialCatalog.all[0].id
     @State private var includeTestText = false
     @State private var confirmNewSession = false
     @State private var confirmClear = false
@@ -17,9 +16,6 @@ struct StockCharacterizationView: View {
     private let conditions = ["baseline", "initial connection", "foreground/background", "disconnect/reconnect",
         "each physical key", "modifiers/layers", "simultaneous keys", "long press/repeat",
         "sustained typing", "backlight timing", "idle/wake", "normal charging", "stock-app settings comparison"]
-    private let keys = Array("QWERTYUIOPASDFGHJKLZXCVBNM").map(String.init)
-        + ["Space", "Enter", "Backspace", "Shift", "123/SYM", "Command", "Clicks", "special key 1", "special key 2", "special key 3"]
-    private let combinations = ["single key", "Shift", "123/SYM", "Command", "cursor mode", "two keys", "three keys", "four keys", "long press", "rapid taps"]
 
     init(inspector: AccessoryInspector) {
         self.inspector = inspector
@@ -29,6 +25,7 @@ struct StockCharacterizationView: View {
     var body: some View {
         List {
             Section("Stock characterization") {
+                Text(CustomFirmwareController.diagnosticsOnly ? "DIAGNOSTICS ONLY: firmware and settings writes blocked" : "AUTHORIZED STOCK UPDATE CONFIGURATION: not for M1")
                 Text("Observe the stock CK-5200. This mode sends only the seven demonstrated getters. It cannot update firmware or write settings.")
                 Text("\(recorder.isRecording ? "Recording" : "Stopped"): \(recorder.eventCount)/\(StockEvidenceRecorder.eventLimit) events")
                 if recorder.isRecording {
@@ -78,13 +75,23 @@ struct StockCharacterizationView: View {
             }
             .disabled(!recorder.isRecording)
             Section("Physical key trial") {
-                Picker("Physical key", selection: $testKey) { ForEach(keys, id: \.self) { Text($0) } }
-                Picker("Combination", selection: $combination) { ForEach(combinations, id: \.self) { Text($0) } }
+                Picker("Trial", selection: $trialID) {
+                    ForEach(StockTrialCatalog.all) { trial in
+                        Text("\(trial.key.id): \(trial.key.physicalLabel), \(trial.action.rawValue)").tag(trial.id)
+                    }
+                }.disabled(recorder.activeTrialID != nil)
+                if let trial = StockTrialCatalog.find(recorder.activeTrialID ?? trialID) {
+                    Text(trial.expectedAction)
+                    Text("Expected from static decode: \(trial.expectedBehavior)").font(.caption)
+                    Text("Label evidence: \(trial.key.labelEvidence.rawValue). Matrix: \(trial.key.id). Physical mapping unverified.").font(.caption)
+                }
                 Button("Begin key trial") {
                     markState("before-key-trial")
-                    recorder.record(source: "user", kind: "key-trial-start", fields: ["physicalKey": testKey, "combination": combination])
+                    recorder.beginTrial(trialID)
                 }
-                Text("Tap the box, then press and release the chosen key. Try each modifier, layer, chord, long press, and rapid tap. Release all keys before ending a trial.")
+                .disabled(recorder.activeTrialID != nil)
+                .accessibilityIdentifier("stock.trial.begin")
+                Text("Tap the box, follow the action, and release all keys. A completed observation is not physical validation. Text alone cannot validate a key.")
                 StockKeyCapture(recorder: recorder)
                     .id(recorder.textResetID)
                     .frame(height: 150)
@@ -92,13 +99,10 @@ struct StockCharacterizationView: View {
                     Text("\(event.source): \(event.fields["phase"] ?? event.kind) \(event.fields["code"] ?? "") \(event.fields["characters"] ?? "")")
                         .font(.caption.monospaced())
                 }
-                Button("End key trial") {
-                    recorder.record(source: "user", kind: "key-trial-end", fields: ["physicalKey": testKey, "combination": combination])
-                    recorder.interruptKeys(reason: "user ended trial; any unresolved release is unknown")
-                }
-                Button("Mark combination unobservable") {
-                    recorder.record(source: "user", kind: "unobservable", fields: ["physicalKey": testKey, "combination": combination,
-                        "meaning": "user saw no app event; iOS may consume this combination"])
+                ForEach([StockTrialStatus.completed, .failed, .ambiguous, .unobservable], id: \.rawValue) { status in
+                    Button("End trial: \(status.rawValue)") { recorder.endTrial(status) }
+                        .disabled(recorder.activeTrialID == nil)
+                        .accessibilityIdentifier("stock.trial.\(status.rawValue)")
                 }
                 Text("GCKeyboard reports a coalesced keyboard, not a proven CK-5200 source. Disconnect other keyboards. UIKit and text-input events remain separate.")
                     .font(.caption)
@@ -106,6 +110,7 @@ struct StockCharacterizationView: View {
             .disabled(!recorder.isRecording)
             Section("Evidence export") {
                 Toggle("Include my test characters in JSON", isOn: $includeTestText)
+                    .accessibilityIdentifier("stock.includeText")
                 Text("Exports retain wall-clock times, key codes, and known revision metadata. They omit unknown strings and raw errors. Key codes can reveal typed text. Use test text only.")
                     .font(.caption)
                 Button("Create JSON and report") {
@@ -116,6 +121,13 @@ struct StockCharacterizationView: View {
                 if !recorder.exportURLs.isEmpty, recorder.exportedWithTestText == includeTestText {
                     ShareLink(items: recorder.exportURLs) { Label("Share evidence files", systemImage: "square.and.arrow.up") }
                         .accessibilityIdentifier("stock.share")
+                    NavigationLink("Inspect exported JSON") {
+                        // Read the actual file, not a second serialization of recorder memory.
+                        TextEditor(text: .constant((try? String(contentsOf: recorder.exportURLs[0], encoding: .utf8)) ?? "Cannot read export"))
+                            .font(.caption.monospaced())
+                            .accessibilityIdentifier("stock.export.json")
+                            .navigationTitle("Exported JSON")
+                    }.accessibilityIdentifier("stock.inspectExport")
                 }
                 if let error = recorder.storageError { Text(error).foregroundStyle(.red) }
                 Button("Clear captured text and diagnostics", role: .destructive) { confirmClear = true }
@@ -141,6 +153,12 @@ struct StockCharacterizationView: View {
             Button("Delete local stock evidence", role: .destructive) { inspector.clearStockEvidence() }
         }
         .onDisappear { recorder.interruptKeys(reason: "left characterization screen") }
+        .onChange(of: recorder.textResetID) { _, _ in
+            condition = "baseline"
+            backlight = "not-observed"
+            charging = "not-observed"
+            includeTestText = false
+        }
     }
 
     private func markState(_ phase: String) {
@@ -183,7 +201,12 @@ private struct StockKeyCapture: UIViewRepresentable {
 }
 
 private final class StockCaptureTextView: UITextView, UITextViewDelegate {
-    weak var recorder: StockEvidenceRecorder?
+    private weak var owner: StockEvidenceRecorder?
+    private var captureSessionID: UUID?
+    var recorder: StockEvidenceRecorder? {
+        get { owner?.bundle?.sessionID == captureSessionID ? owner : nil }
+        set { owner = newValue; captureSessionID = newValue?.bundle?.sessionID }
+    }
     private var keyboard: GCKeyboard?
     private var observers: [NSObjectProtocol] = []
     private var previousText = ""

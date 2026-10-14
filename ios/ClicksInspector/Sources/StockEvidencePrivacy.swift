@@ -68,13 +68,14 @@ enum StockEvidencePrivacy {
                 result[key] = choice(value, ["closed", "opening", "open", "failed"])
             } else if key == "outcome" {
                 result[key] = outcome(value)
+            } else if key == "trialStatus", let status = StockTrialStatus(rawValue: value) {
+                result[key] = status.rawValue
             } else if key == "reason" {
                 result["reasonCode"] = reasonCode(value)
             } else if key == "physicalKey" {
-                result[key] = choice(value, Array("QWERTYUIOPASDFGHJKLZXCVBNM").map(String.init)
-                    + ["Space", "Enter", "Backspace", "Shift", "123/SYM", "Command", "Clicks", "special key 1", "special key 2", "special key 3"])
+                result[key] = choice(value, FactoryLayout.stockPhysicalKeys.map(\.physicalLabel))
             } else if key == "combination" {
-                result[key] = choice(value, ["single key", "Shift", "123/SYM", "Command", "cursor mode", "two keys", "three keys", "four keys", "long press", "rapid taps"])
+                result[key] = choice(value, StockTrialAction.allCases.map(\.rawValue))
             } else if ["heldInSource", "unresolvedPresses"].contains(key),
                       value.isEmpty || value.range(of: "^(GCKeyboard|UIPress):[0-9]{1,5}(,(GCKeyboard|UIPress):[0-9]{1,5})*$", options: .regularExpression) != nil {
                 result[key] = value
@@ -94,7 +95,7 @@ enum StockEvidencePrivacy {
             "appBuild": version(input.environment["appBuild"]), "source": choice(input.environment["source"] ?? "unknown", [
                 "physical iOS API observations; not a firmware-image fixture",
                 "simulator iOS callbacks; no physical accessory evidence", "host simulation"])]
-        var result = StockEvidenceBundle(schemaVersion: 1, sessionID: input.sessionID, startedAt: input.startedAt,
+        var result = StockEvidenceBundle(schemaVersion: 2, sessionID: input.sessionID, startedAt: input.startedAt,
                                          endedAt: input.endedAt, endReason: input.endReason.map(outcome), environment: environment)
         result.privacy = "shareable-v2: allowlisted fields; wall times and key codes retained; test text \(includeTestText ? "included by user" : "omitted")"
         var permittedRequests: [Int: [UInt8]] = [:]
@@ -137,8 +138,11 @@ enum StockEvidencePrivacy {
                     "background; callbacks may stop", "inactive", "read-error", "error", "session-state", "three-pass-baseline-completed",
                     "key-trial-start", "key-trial-end", "unobservable", "state-mark", "focus-gained", "replacement-proposed",
                     "text-changed", "selection-changed"]),
-                state: state(event.state), fields: details, bytes: bytes, byteCount: event.byteCount, readID: event.readID))
+                state: state(event.state), fields: details, bytes: bytes, byteCount: event.byteCount, readID: event.readID,
+                trialID: event.trialID.flatMap { StockTrialCatalog.find($0)?.id }, trialAttempt: event.trialAttempt))
         }
+        result.trials = (input.trials ?? []).filter { StockTrialCatalog.find($0.trialID) != nil }
+        result.coverage = StockTrialCoverage.build(events: result.events, trials: result.trials ?? [])
         return result
     }
 }

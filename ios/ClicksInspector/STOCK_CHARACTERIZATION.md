@@ -60,7 +60,7 @@ Historical `08` and unsupported `8f` evidence remains in the [command inventory]
 1. Select `each physical key` as the condition. Choose the key label and `single key` combination.
 2. Tap **Begin key trial**. Tap the test-text box to give it focus.
 3. Press and release that key once. Check the visible callback lines and character output.
-4. Release all keys. Tap **End key trial**. Repeat for every key on the case.
+4. Release all keys. End the active trial with completed, failed, ambiguous, or unobservable. Repeat for each identified cap and relevant action. Text alone or an incomplete down/up sequence becomes ambiguous, not a passed physical key.
 5. Repeat with Shift, 123/SYM, Command, and cursor mode. Test the special keys separately.
 6. Select `simultaneous keys`. Hold two, three, then four keys. Release them in a different order.
 7. Select `long press/repeat`. Hold a letter for two seconds. Repeat with Backspace and a cursor key.
@@ -100,7 +100,7 @@ Marks describe visible conditions. They do not change keyboard settings or measu
 Tap **Stop and save**, then **Create JSON and report**, then **Share evidence files**.
 Sharing opens Apple's share sheet. No upload occurs automatically.
 The default JSON omits test characters and unvalidated payload bytes. Enable **Include my test characters in JSON** only for intentional test text.
-The Markdown report always omits typed text.
+The Markdown report always omits typed text. JSON schema 2 includes the versioned matrix-aware trial catalog and complete `coverage`, including untested entries.
 The [complete export audit](REVIEW_EVIDENCE.md#field-by-field-export-audit) defines the `shareable-v2` field allowlist and retained metadata.
 Wall-clock times and key codes remain in exports. Unknown strings and raw errors do not.
 
@@ -117,7 +117,7 @@ This also clears the text box and on-screen session logs. Shared copies and syst
 
 ## JSON contract
 
-`schemaVersion: 1`, `commandInventory: "CK-5200-V122-H120-v1"`.
+`schemaVersion: 2`, `commandInventory: "CK-5200-V122-H120-v1"`, trial catalog `CK-5200-V122-H120-trials-v1`.
 JSON uses UTF-8, ISO-8601 UTC dates, integer byte arrays, and monotonic elapsed milliseconds.
 Wall-clock dates locate observations. Use `elapsedMS` for timing, because the wall clock can change.
 The random `sessionID` identifies an evidence session, not the keyboard.

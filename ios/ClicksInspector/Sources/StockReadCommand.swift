@@ -73,6 +73,7 @@ enum StockReadError: Error, Equatable, CustomStringConvertible {
     case unexpectedCommand(expected: UInt8, actual: UInt8)
     case rejected(status: UInt8)
     case unexpectedProbePayload
+    case versionMismatch
 
     var description: String {
         switch self {
@@ -88,6 +89,8 @@ enum StockReadError: Error, Equatable, CustomStringConvertible {
             "Unexpected device status 0x\(String(status, radix: 16))"
         case .unexpectedProbePayload:
             "Unsupported-command reply contained unexpected data"
+        case .versionMismatch:
+            "Version payload does not match the demonstrated stock revision"
         }
     }
 }
@@ -136,6 +139,9 @@ struct StockReadAccumulator {
             throw StockReadError.rejected(status: bytes[3])
         }
         guard bytes.count == command.expectedResponseLength else { return nil }
+        if command == .version, Array(bytes.dropFirst(4)) != [0x01, 0x20, 0x01, 0x22] {
+            throw StockReadError.versionMismatch
+        }
         if command == .newerUserKeyProbe, bytes.dropFirst(4).contains(where: { $0 != 0 }) {
             throw StockReadError.unexpectedProbePayload
         }

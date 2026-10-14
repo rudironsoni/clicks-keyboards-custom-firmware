@@ -6,10 +6,14 @@ on:
     paths:
       - "ios/ClicksInspector/**"
       - ".github/workflows/ios.yml"
+      - "**/*.md"
+      - "scripts/check-readiness.py"
   pull_request:
     paths:
       - "ios/ClicksInspector/**"
       - ".github/workflows/ios.yml"
+      - "**/*.md"
+      - "scripts/check-readiness.py"
 
 permissions:
   contents: read
@@ -20,16 +24,32 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install project generator
         run: brew install xcodegen
       - name: Record toolchain and revision
         run: |
           mkdir -p evidence
           { git rev-parse HEAD; xcodebuild -version; xcrun swiftc --version; xcodegen --version; } 2>&1 | tee evidence/toolchain.log
-      - name: Run all six Swift test programs
+      - name: Check readiness documentation
+        run: python3 scripts/check-readiness.py
+      - name: Reproduce red regressions on review target
+        run: |
+          set -o pipefail
+          python3 ios/ClicksInspector/Tests/reproduce_red.py 2>&1 | tee evidence/red-regressions.log
+      - name: Run Swift tests and recorder benchmark
         run: |
           set -o pipefail
           bash ios/ClicksInspector/test.sh 2>&1 | tee evidence/swift-tests.log
+      - name: Build unsigned diagnostics-only iPhone application
+        run: |
+          set -o pipefail
+          xcodegen generate --spec ios/ClicksInspector/project.yml
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration Debug \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/iphone-build.log
       - name: Build unsigned simulator application
         run: |
           set -o pipefail

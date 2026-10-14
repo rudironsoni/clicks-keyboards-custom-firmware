@@ -1,4 +1,8 @@
 name: ClicksInspector
+configs:
+  Debug: debug
+  Release: release
+  AuthorizedStockUpdate: release
 options:
   minimumXcodeGenVersion: 2.46.0
   deploymentTarget:
@@ -21,7 +25,10 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
+      configs:
+        AuthorizedStockUpdate:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_UPDATE_AUTHORIZED"
     dependencies:
       - sdk: ExternalAccessory.framework
       - sdk: GameController.framework
@@ -37,6 +44,18 @@ targets:
         SWIFT_VERSION: "5.0"
     dependencies:
       - target: ClicksInspector
+  ClicksInspectorAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - AppTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rudironsoni.clicks-inspector.apptests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+    dependencies:
+      - target: ClicksInspector
 schemes:
   ClicksInspector:
     build:
@@ -44,4 +63,5 @@ schemes:
         ClicksInspector: all
     test:
       targets:
+        - ClicksInspectorAppTests
         - ClicksInspectorUITests
