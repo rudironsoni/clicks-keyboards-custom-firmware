@@ -214,4 +214,5 @@ The machine-specific precheck could not run because `external-ssd-root` and `xco
 Normal `xcrun`/`xcodebuild` resolved the installed Xcode after setting `DEVELOPER_DIR`. No storage configuration changed.
 
 Not run: a signed installation, physical keyboard capture, firmware writes, or the unchanged firmware C/Python suite.
-The new native callbacks and repeated stock reads still need the guided physical baseline above.
+At that historical revision, native callbacks and repeated stock reads still needed a physical baseline.
+The stock diagnostics baseline is now complete. See the [current acceptance scope](../../keyboards/ck5200/docs/flash-readiness.md#baseline-acceptance-2026-10-14).

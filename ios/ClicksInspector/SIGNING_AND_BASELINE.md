@@ -1,6 +1,6 @@
 # Install and collect the CK-5200 baseline
 
-Status: **physical acceptance not collected**. This procedure installs the iOS app, not keyboard firmware.
+Status: **stock diagnostics baseline complete**, accepted on 2026-10-14. See the [acceptance scope](../../keyboards/ck5200/docs/flash-readiness.md#baseline-acceptance-2026-10-14) and [physical observations](../../keyboards/ck5200/docs/flash-readiness.md#physical-observations-2026-10-14). Comprehensive keyboard characterization remains incomplete. No further recording is required for this baseline. The installation procedure below is a reference for future sessions.
 
 ## Development signing in Xcode
 
@@ -61,12 +61,12 @@ An unsigned simulator build or generic unsigned iPhone build cannot substitute f
 4. Tap **Open stock session**. Wait for both streams to open.
 5. Select `baseline`. Mark visible backlight and charging state, then tap **Mark state before observation**.
 6. Tap **Read seven getters, three passes**. Preserve failures as failures. Do not substitute commands.
-7. Mark state after observation. Choose a catalog trial and tap **Begin key trial**. Focus the test box, follow the shown action, then end with completed, failed, ambiguous, or unobservable. Only one trial can run at once. Repeat for known keys and modifier/layer combinations.
+7. Mark state after observation. Focus the test box and collect continuous mixed typing, modifiers, symbols, and navigation. Catalog trials are optional. Analyse events individually and split observations at gaps. Do not assign mixed input to one matrix candidate. If using a catalog trial, release every key and end the trial **before tapping Done typing**. Leaving the text box during an active trial records a gap and makes a requested completed outcome ambiguous. Only one trial can run at once.
 8. Test ordinary detach/reconnect and foreground/background. Reopen manually, then request another getter pass.
 9. Tap **Stop and save**, then **Create JSON and report**. Review privacy choices before using **Share evidence files**.
 10. Record the commit, signing/install result, and the JSON session UUID with your observations.
 
-Use [the full baseline procedure](STOCK_CHARACTERIZATION.md#safe-operating-state-procedure) for idle/wake, backlight, sustained typing, and normal charging.
+For separately scoped follow-up observations, use [the operating-state procedure](STOCK_CHARACTERIZATION.md#safe-operating-state-procedure).
 The catalog covers 35 statically decoded non-spare crossings and an unmapped Shift entry. Printed labels and their matrix positions remain unverified. Q has a documented conflict between the decode and the custom keymap; do not infer its position from the custom HID value. Unknown consumer caps and unknown mode controls must remain unobservable until identified.
 The exported `coverage` array lists every trial, including `not-started` entries, with callback, applied-text, and gap event references. A completed trial means an observation was finished, not that a physical key passed validation. Compare the actual case with the evidence before accepting a mapping.
 The app cannot observe system-consumed shortcuts, raw HID packets, or events during suspension. Mark those cases as unobservable.
@@ -77,15 +77,15 @@ Keep this record with the actual exported files. Fill it from observations, not 
 
 | Field | Observation |
 | --- | --- |
-| Source commit, app version/build, iOS version | Not collected |
-| Signed install and launch | Not collected |
-| Actual accessory identity/protocols | Not collected |
-| 21-request baseline: completed/failed, latency, consistency | Not collected |
-| Every physical key: trial labels, callbacks, text, gaps | Not collected |
-| Detach/reconnect and foreground/background outcomes | Not collected |
+| Repository reference, app version/build, iOS version | `ef3a5b78bf43f30d17135a4339dd06c05e31c257`, 0.2.0 (4), iOS 27.0.1 |
+| Signed install and launch | Passed over Wi-Fi, 2026-10-14 |
+| Actual accessory identity/protocols | CK-5200, firmware 1.2.2, hardware 1.2.0, `com.clickscompanion.protocol` |
+| 21-request baseline: completed/failed, latency, consistency | 21/21 valid, 0 failures, 1.066–19.380 ms; replies identical across three passes |
+| Every physical key: trial labels, callbacks, text, gaps | Partial: letters, digits, symbols, arrows, Space, Return, Backspace, and left modifiers observed. Applied text includes all uppercase letters and digits. Code 430 and matrix positions remain unidentified. Held-key repeat remains unverified. |
+| Detach/reconnect and foreground/background outcomes | Session `FC7B9890-F897-4781-9CE9-373E8314371B`: 63/63 valid reads in three sweeps, identical replies across reconnect and app transitions with session reopening. Session was closed at detach. Open-session or pending-read interruption remains unverified. |
 | Idle/backlight/charging observations | Not collected |
-| Export session UUID and files | Not collected |
-| Unobservable combinations and remaining failures | Not collected |
+| Export session UUID and files | Five inspected sessions and JSON hashes recorded in the authoritative readiness record |
+| Unobservable combinations and remaining failures | One Command interval crosses an app-inactive gap. Physical layer-control attribution and systematic modifier coverage remain incomplete. |
 
 Do not select **Open firmware-control session**, firmware update, reset, erase, or recovery experiments during this procedure.
 Custom flashing stays disabled. **R3 independent recovery: UNMET.**
