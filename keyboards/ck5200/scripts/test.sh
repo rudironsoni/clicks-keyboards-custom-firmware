@@ -12,6 +12,7 @@ fi
 
 "$PYTHON" -m pytest -q tests/test_usb_protocol.py
 "$PYTHON" -m pytest -q tests/test_keymap_layout.py
+"$PYTHON" -m pytest -q tests/test_validate_image.py
 
 cc -std=c11 -Wall -Wextra   tests/update_protocol_test.c   firmware/platform/ch32x035/ck5200_update_protocol.c   -o /tmp/ck5200_update_protocol_test
 
@@ -131,7 +132,7 @@ cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/sh
   firmware/platform/ch32x035/ck5200_staging.c \
   firmware/platform/ch32x035/ck5200_update_protocol.c \
   $QCORE $QCK -o "$M2_BUILD/rescue_test"
-for mode in normal rescue early-failure; do
+for mode in normal rescue early-failure closed-session watchdog-jump watchdog-packet watchdog-ep3; do
   UBSAN_OPTIONS=halt_on_error=1 "$M2_BUILD/rescue_test" "$mode" .stock/iKeyboard_CK-5200_V122_120.bin
 done
 

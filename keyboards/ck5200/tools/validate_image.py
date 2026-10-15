@@ -102,16 +102,17 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
         raise ValueError(f"ELF entry must be 0x{APP_BASE:x}")
 
     section_pattern = re.compile(
-        r"^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+"
+        r"^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+"
         r"([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s+"
         r"[0-9a-fA-F]+\s+(\S*)",
         re.MULTILINE,
     )
+    section_rows = section_pattern.findall(output)
     sections = {
         name: (int(address, 16), int(size, 16), flags)
-        for name, address, size, flags in section_pattern.findall(output)
+        for name, _kind, address, size, flags in section_rows
     }
-    required_sections = (".init", ".vector", ".text", ".data", ".bss")
+    required_sections = (".init", ".vector", ".text", ".data", ".bss", ".noinit")
     if any(name not in sections for name in required_sections):
         raise ValueError("ELF is missing a required firmware section")
 
@@ -170,12 +171,16 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
     if not 0 < stack_size <= RAM_LIMIT - RAM_BASE or bss_end > RAM_LIMIT - stack_size:
         raise ValueError("startup stack size is outside RAM")
 
-    if ".noinit" in sections:
-        address, size, flags = sections[".noinit"]
-        if size != 8 or address < bss_end or address + size > RAM_LIMIT - stack_size or flags != "WA":
-            raise ValueError("rescue request must occupy eight RAM bytes outside BSS and stack")
-        if not re.search(r"\]\s+\.noinit\s+NOBITS\s", output):
-            raise ValueError("rescue request must not have a flash initializer")
+    noinit = [row for row in section_rows if row[0] == ".noinit"]
+    if len(noinit) != 1 or noinit[0][1] != "NOBITS":
+        raise ValueError("rescue request requires exactly one .noinit NOBITS section")
+    address, size, flags = sections[".noinit"]
+    if size != 8 or address % 4 or address < bss_end or address + size > RAM_LIMIT - stack_size or flags != "WA":
+        raise ValueError("rescue request must occupy eight aligned RAM bytes outside BSS and stack")
+    for name, _kind, other_address, other_size, other_flags in section_rows:
+        start, length = int(other_address, 16), int(other_size, 16)
+        if name != ".noinit" and "A" in other_flags and length and start < address + size and address < start + length:
+            raise ValueError(f"rescue request overlaps allocated section {name}")
 
     load_segments = []
     for line in output.splitlines():

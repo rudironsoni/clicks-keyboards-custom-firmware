@@ -91,6 +91,7 @@ void iap2_init(void) {}
 void iap2_set_connected(bool c) { (void)c; }
 bool iap2_session_active(void) { return stub_session_active; }
 void iap2_tick_1ms(void) {}
+void iap2_elapsed_ms(uint32_t elapsed) { (void)elapsed; }
 void iap2_task(void) {}
 void iap2_activity(void) {}
 void iap2_ep2_rx(const uint8_t *buf, uint32_t len) { (void)buf; (void)len; }

@@ -115,6 +115,7 @@ void ck5200_transport_setup(void) {
      * finding 1). */
     tud_init(0);
     iap2_init();
+    iap2_last_tick_ms = timer_read32();
 }
 
 static void apply_persisted_brightness_once(void) {
@@ -143,12 +144,16 @@ static void send_pending_update_response(void) {
     update_response_in_flight = true;
 }
 
-static void service_iap2(void) {
+static void account_iap2_elapsed_time(void) {
     const uint32_t now = timer_read32();
-    if (now != iap2_last_tick_ms) {
-        iap2_last_tick_ms = now;
-        iap2_tick_1ms();
-    }
+    const uint32_t elapsed = now - iap2_last_tick_ms; /* Also handles timer wrap. */
+    iap2_last_tick_ms = now;
+    iap2_elapsed_ms(elapsed);
+    cancel_rescue_if_disconnected();
+}
+
+static void service_iap2(void) {
+    account_iap2_elapsed_time();
     iap2_task();
 
     cancel_rescue_if_disconnected();
@@ -294,8 +299,8 @@ static void handle_dispatcher_packet(uint8_t itf, const uint8_t *buffer, uint32_
 
 void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
     if (!buffer || bufsize == 0) return;
-    /* Cancel before activity can revive an expired link watchdog. */
-    cancel_rescue_if_disconnected();
+    /* Account for silence before this packet can refresh the watchdog. */
+    account_iap2_elapsed_time();
 
     if (idx == 0) {
         /* EP2 is the iAP2 link. Outside a session, dispatcher-framed packets

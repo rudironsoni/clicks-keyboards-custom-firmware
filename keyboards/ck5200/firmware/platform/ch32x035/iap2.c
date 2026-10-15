@@ -10,6 +10,8 @@
 #include <string.h>
 
 iap2_ctx_t iap2_ctx;
+/* Rescue authority is separate from stock flags: EA01 leaves stock bit 11 set. */
+static bool rescue_ea_open, rescue_auth_accepted;
 
 /* Link parameters advertised in the sync request (stock ctx+0x8..0x16). */
 #define L_MAX_OUTGOING     5u
@@ -305,6 +307,7 @@ static bool op_bare_ack(void) { return send_payload(0); }
 /* Transport re-init (stock 0x5f18). Stock stores p0/p1 into flag bits 4/5. */
 static void transport_init(bool p0, bool p1) {
     iap2_ctx_t *c = &iap2_ctx;
+    rescue_ea_open = rescue_auth_accepted = false;
 
     c->flags = (uint16_t)((p0 ? 0x10u : 0u) | (p1 ? 0x20u : 0u));
     c->tstate = 1;
@@ -377,12 +380,15 @@ static void dispatch_msg(iap2_ctx_t *c, uint16_t type, const uint8_t *body,
         break;
     case 0xaa04: /* authentication accepted */
         c->flags |= 0x4u;
+        rescue_auth_accepted = true;
         break;
     case 0xea00: /* EA session open */
         c->flags = (uint16_t)((c->flags & (uint16_t)~0x1900u) | 0x800u);
+        rescue_ea_open = true;
         break;
     case 0xea01: /* session end */
         c->flags &= (uint16_t)~0x7ffu;
+        rescue_ea_open = rescue_auth_accepted = false;
         break;
     default:
         break;
@@ -590,6 +596,7 @@ static void step_inner(iap2_ctx_t *c) {
 
 void iap2_init(void) {
     memset(&iap2_ctx, 0, sizeof(iap2_ctx));
+    rescue_ea_open = rescue_auth_accepted = false;
     iap2_auth_init();
     iap2_ctx.session_id = L_SESSION_ID;
     iap2_ctx.auth_addr = 0x22;
@@ -597,6 +604,7 @@ void iap2_init(void) {
 
 void iap2_set_connected(bool connected) {
     iap2_ctx_t *c = &iap2_ctx;
+    rescue_ea_open = rescue_auth_accepted = false;
     c->connected = connected;
     if (connected) {
         /* Stock USB glue starts the session with params (0, 1). */
@@ -611,10 +619,15 @@ void iap2_set_connected(bool connected) {
 }
 
 void iap2_tick_1ms(void) {
+    iap2_elapsed_ms(1);
+}
+
+void iap2_elapsed_ms(uint32_t elapsed) {
     iap2_ctx_t *c = &iap2_ctx;
-    if (c->attach_backoff) c->attach_backoff--;
-    if (c->watchdog) c->watchdog--;
-    if (c->tretry) c->tretry--;
+    c->attach_backoff = elapsed < c->attach_backoff ? c->attach_backoff - elapsed : 0;
+    c->watchdog = elapsed < c->watchdog ? c->watchdog - elapsed : 0;
+    c->tretry = elapsed < c->tretry ? c->tretry - elapsed : 0;
+    if (!c->watchdog) rescue_ea_open = rescue_auth_accepted = false;
 }
 
 void iap2_task(void) {
@@ -665,5 +678,6 @@ bool iap2_session_active(void) {
 void iap2_activity(void) { iap2_ctx.watchdog = WATCHDOG_TICKS; }
 
 bool iap2_restore_authorized(void) {
-    return iap2_session_active() && (iap2_ctx.flags & 0x804u) == 0x804u;
+    return iap2_session_active() && rescue_ea_open && rescue_auth_accepted &&
+           (iap2_ctx.flags & 0x804u) == 0x804u;
 }

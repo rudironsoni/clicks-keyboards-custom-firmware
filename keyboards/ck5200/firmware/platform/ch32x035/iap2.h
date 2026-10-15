@@ -74,6 +74,9 @@ void iap2_set_connected(bool connected);
 /* 1 ms tick from the USB SOF interrupt (stock 0x61c6): retry timers. */
 void iap2_tick_1ms(void);
 
+/* Saturating timer update when the service loop misses one or more ticks. */
+void iap2_elapsed_ms(uint32_t elapsed);
+
 /* Periodic step (stock 0x6242): attach resend and the inner machine. */
 void iap2_task(void);
 
@@ -86,7 +89,8 @@ void iap2_ep2_rx(const uint8_t *buf, uint32_t len);
  * plus outer state 3, as used by the 0x629e/0x62cc gates). */
 bool iap2_session_active(void);
 
-/* Stricter rescue gate: live link, auth accepted, and EA session open. */
+/* Stricter rescue gate: live link, auth accepted, and explicit EA-open event
+ * since the last close, disconnect, transport reset, or watchdog expiry. */
 bool iap2_restore_authorized(void);
 
 /* Feed EP3 traffic into the watchdog (stock 0x629e resets it too). */

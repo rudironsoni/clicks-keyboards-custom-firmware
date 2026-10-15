@@ -160,6 +160,39 @@ int main(int argc, char **argv) {
     tud_vendor_rx_cb(0, raw_update, sizeof(raw_update));
     assert(writes == 0);
     connect_phone(); assert(usb_packets);
+    if (strcmp(argv[1], "closed-session") == 0 || strncmp(argv[1], "watchdog-", 9) == 0) {
+        assert(command(0xA1, 18648, NULL, 0) == 0);
+        unsigned writes_before = writes;
+        if (strcmp(argv[1], "closed-session") == 0) {
+            message(0xea01, NULL, 0);
+            message(0xaa04, NULL, 0);
+            /* Preserve the decoded stock flag behavior, but not rescue authority. */
+            assert((iap2_ctx.flags & 0x804u) == 0x804u);
+        } else {
+            advance_time(2600); /* One jump, not 2,600 calls to the service loop. */
+            if (strcmp(argv[1], "watchdog-packet") == 0) {
+                message(0xaa04, NULL, 0); /* RX arrives before the next service call. */
+            } else if (strcmp(argv[1], "watchdog-ep3") == 0) {
+                assert(command(0xA1, 18648, NULL, 0) == 255);
+            } else {
+                service(1);
+                assert(!iap2_session_active());
+            }
+        }
+        assert(!iap2_restore_authorized());
+        assert(command(0xA1, 18648, NULL, 0) == 255);
+        assert(writes == writes_before);
+        message(0xaa04, NULL, 0);
+        assert(!iap2_restore_authorized());
+        message(0xea00, NULL, 0);
+        assert(iap2_restore_authorized());
+        const uint8_t chunk[32] = {0};
+        assert(command(0xA2, 0, chunk, sizeof(chunk)) != 0);
+        assert(command(0xA3, 18648, NULL, 0) != 0); /* Old transaction was cancelled. */
+        assert(command(0xA1, 18648, NULL, 0) == 0);
+        puts(argv[1]);
+        return 0;
+    }
     tud_vendor_rx_cb(0, raw_update, sizeof(raw_update));
     assert(writes == 0); /* No EP2 bypass, including before authentication. */
     assert(command(0x03, 0, NULL, 0) == 0 && response[4] == 'R' && response[5] == 'S');
