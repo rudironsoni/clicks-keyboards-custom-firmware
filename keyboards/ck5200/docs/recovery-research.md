@@ -1,5 +1,9 @@
 # Recovery research: existing mechanisms only, evidence-cited
 
+Current decision: [independent iPhone recovery remains UNMET](adr/0001-independent-iphone-recovery.md), 2026-10-15.
+Supporting evidence: [2026-10-14 recovery audit](recovery-audit-2026-10-14.md).
+The investigation priorities below are historical, not authorization for device operations. See [current readiness](flash-readiness.md).
+
 Status: 2026-10-12. This report answers one question: can a broken custom
 application on the CK-5200 be recovered WITHOUT that application executing,
 under the constraints of no new hardware, no dev board, no PCB modification,
@@ -38,12 +42,12 @@ Consequences for the CK-5200:
 
 1. A plain `flash` with our application-only V122 image (linked at `0x2000`)
    would ERASE AND OVERWRITE the Clicks installer at `0x0..0x2000`. The
-   installer bytes exist nowhere except on the one chip: no artifact on any
-   machine contains them (verified by the 2026-10-11 review). The loss would
-   be irreversible.
+   inspected local artifacts contain no installer backup. [CORRECTION] The
+   earlier claim that no copy exists anywhere was unsupported. No available
+   restore source is established for a lost installer.
 2. The hoped-for "enter ISP, dump the installer" is not implementable with
-   these tools today: neither can read code flash. The remaining dump routes
-   are a WCH-Link/SDI probe or none.
+   these tools today: neither implements code-flash readback. This does not
+   prove that SDI is the only possible evidence source.
 3. Even an apparent identification run deserves transcript review: chprog's
    `detect()` can perform a protection-config write on some device states.
 
@@ -53,19 +57,19 @@ Consequences for the CK-5200:
 | --- | --- | --- |
 | 1 | Factory bootloader accessible after the app fails, CK-5200, no PCB access? | UNKNOWN, one live lead: the PC17 BOOT entry is family-verified. Whether the CK-5200's PC17 (USB D+) can be asserted safely at power-on without board modification is unanswered, and the presence of USB D+ is not permission to drive it externally. Software entry (`SystemReset_StartMode(Start_Mode_BOOT)` in the X035 SDK) requires a running application and is NOT independent recovery. |
 | 2 | Boot-entry mechanism without PCB modification? | UNKNOWN. Candidates: PC17 strap (board routing unknown), blank-flash auto-ISP (presupposes erasure), software flag (not independent). |
-| 3 | Clicks installer fallback independent of app/HID/iAP2? | UNKNOWN until the installer at `0x0..0x2000` is read. The A1/A2/A3/A0 dialect lives in the application (stock `0x3216`), not the installer, so the installer must contain separate, unseen code to be a fallback. |
-| 4 | Recovery channel reachable from the iPhone? | Factory ISP: NO (raw USB vendor device; Apple's External Accessory requires MFi, and the published raw-USB entitlement is macOS-only per Apple DTS, verified by the 2026-10-12 review). Installer fallback: unknown, nothing suggests iAP2. Working answer: recovery is Mac-only. |
-| 5 | Restore official stock without touching installer/config/serial/auth? | Via the Clicks dialect: YES by design (stock's own writer never writes below `0x2000`; staging is `0x8A00`+; serial `0xF600` and config `0xF700` are outside every write path). Via factory ISP: NO with default tools (offset-0 erase/write). |
+| 3 | Clicks installer fallback independent of app/HID/iAP2? | UNKNOWN. A dump, matching implementation, or vendor documentation could supply evidence. The demonstrated A1/A2/A3/A0 service lives in the application (stock `0x3216`). An independent service would need separate executable code. |
+| 4 | Recovery channel reachable from the iPhone? | No documented public API route was found for an ordinary iPhone app to the stated factory ISP. Installer fallback remains unknown. USBDriverKit supports macOS and M-series iPads, not iPhone in the documented hardware support. See [the 2026-10-14 Apple source check](iphone-recovery-transport.md). |
+| 5 | Restore official stock without touching installer/config/serial/auth? | UNKNOWN end to end. Inspected application staging paths have bounded writes. The unread installer's copy bounds and device-specific preservation are not proven. Default ISP tools erase/write from offset zero and are unsuitable. |
 
 ## 4. Recovery-channel matrix per failure scenario
 
 | Failure scenario | Clicks update dialect (needs a working app) | Factory USB ISP | SDI probe |
 | --- | --- | --- | --- |
-| Stock running, update interrupted | Recovers: fresh A1/A2/A3 rewrites staging (VERIFIED in the restore harness) | Would destroy the installer | Readback-verified restore possible |
-| Custom app runs, has a fault | Recovers: A1/A2/A3/A0 retained in the port; software `Start_Mode_BOOT` is an orderly exit, not rescue | Entry requires the app or a strap (unknown) | Yes |
-| Custom app does not boot | NO (protocol needs USB enumerating) | Only if PC17 entry is accessible on this board: UNKNOWN; no BOOT pad appears in the 2026-10-13 photos | Yes, if the labeled 3V3/SWD/GND/SWC pads beside U3 are the SDI pair: continuity and protection state UNVERIFIED (2026-10-13 photos) |
-| USB does not enumerate | NO | Only via PC17 entry: UNKNOWN; no BOOT pad appears in the 2026-10-13 photos | Yes, same conditions |
-| Installer region destroyed | Nothing recovers it: no artifact contains the installer bytes | Would brick the vendor update path permanently | Only a pre-existing dump could |
+| Stock running, staging interrupted | Host harness demonstrates fresh A1/A2/A3 rewriting simulated staging. Actual installation remains unverified. | Default tool writes threaten the installer. | UNVERIFIED on this board. Not iPhone-only. |
+| Custom app runs, has a fault | Available only if the application's USB and update service still execute. No physical custom restore is proven. | Entry and preservation remain UNKNOWN. | UNVERIFIED on this board. Not iPhone-only. |
+| Custom app does not boot | NO | Board entry UNKNOWN. No supported public iPhone transport found. | Pad continuity, protection, and restoration remain UNVERIFIED. Not iPhone-only. |
+| USB does not enumerate | NO | Board entry UNKNOWN. No supported public iPhone transport found. | Same unverified conditions. Not iPhone-only. |
+| Presumed installer region destroyed | No demonstrated route. No inspected backup. | Does not supply the missing proprietary bytes. | A matching restore source and verified access would be necessary. Neither is established. |
 
 ## 5. Non-eliminable risks under the current constraints
 
@@ -73,8 +77,9 @@ Consequences for the CK-5200:
   keyboard (the dev-board rehearsal was consciously removed, 2026-10-12).
 - The installer is unread until a dump route exists; every "what does the
   boot region do?" claim is about unread code.
-- The iPhone cannot reach the factory ISP; emergency recovery is Mac-only
-  even in the best case.
+- [CORRECTION] The earlier "recovery is Mac-only" conclusion was too broad.
+  No independent CK-5200 recovery is demonstrated on any host. Apple's public
+  USB driver support includes M-series iPads, but not a documented iPhone route.
 - 100 percent reliability is not claimable through software tests alone. The
   demand is explicit failure coverage, independently verified implementation,
   and demonstrated behavior under interrupted or corrupted updates.
@@ -93,10 +98,10 @@ investigation, in order:
 2. If PC17 is accessible: a read-only protocol transcript (wchisp-style
    identify/config-read only, no erase, no program, no config write) would
    establish chip identity and protection state without destruction. Code
-   flash still cannot be dumped over ISP, so this does NOT produce the
+   flash still cannot be dumped with these ISP tools, so this does NOT produce the
    installer backup.
 3. If PC17 is not accessible: report the recovery requirement as UNMET. The
-   SDI probe route remains as the only full-dump option and requires
+   SDI probe route was the historical full-dump lead and requires
    physical access decisions outside the current constraints. Photo
    update: labeled 3V3/SWD/GND/SWC pads beside U3 make this route
    concrete; continuity, pin assignment, and protection state remain

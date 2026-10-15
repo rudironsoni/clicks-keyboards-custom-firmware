@@ -17,12 +17,18 @@ The goals remain official stock installation, separately authorized custom trans
 preservation of the only keyboard, and reuse of maintained dependencies.
 
 The custom target is CH32X035. Custom keymap storage is transient RAM and loses edits on power loss.
-No flash-backed EEPROM partition is demonstrated. Preserve installer `0x0000–0x1FFF`, application `0x2000–0x89FF`,
+No flash-backed EEPROM partition is demonstrated. Preserve presumed installer `0x0000–0x1FFF`, application `0x2000–0x89FF`,
 staging `0x8A00+`, and upper reserved flash.
 
 An acknowledged transfer, an acknowledged commit, a session disconnect, functional typing, and verified installation
 are different observations. None proves independent recovery. A same-version reply cannot prove that installation occurred.
 The Mac dispatcher depends on an executable application. It is not a recovery backup for an unbootable image.
+
+The [2026-10-14 recovery audit](recovery-audit-2026-10-14.md) rechecked the application binaries, updater paths, and host restore harness.
+The [2026-10-15 decision](adr/0001-independent-iphone-recovery.md) retains NO-GO and rejects patched-stock installation as circular evidence acquisition.
+The missing evidence is an independent boot service with iPhone transport, validated stock restoration, preservation, and interruption safety.
+Installer readback could help but would not satisfy these requirements by itself.
+See [iPhone transport limits](iphone-recovery-transport.md) for the separate public-API constraint.
 
 Baseline collection is closed. Use the five recorded sessions as the stock diagnostics reference.
 Further physical characterization requires a specific need in a separately scoped task, not completion of every catalog trial.

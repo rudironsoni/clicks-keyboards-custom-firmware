@@ -2,6 +2,10 @@
 
 **Recovery is not verified. Do not flash custom firmware yet.**
 
+Current decision: [independent iPhone recovery is UNMET](adr/0001-independent-iphone-recovery.md), 2026-10-15.
+The procedures below are historical evidence, not authorization. No live writes, resets, ISP entry, protection changes, or debug-pad operations are permitted.
+The reserved first 8 KiB are a presumed installer region, not a proven immutable recovery service.
+
 > **SUPERSEDED HARDWARE FACTS (2026-10-12).** This document predates the
 > MCU-family correction. The keyboard is a CH32X035-class device, and the
 > following statements in this file are wrong for it:
@@ -40,7 +44,10 @@ sha256  8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8
 
 The ignored local copy is `.stock/iKeyboard_CK-5200_V122_120.bin`. The vendor publishes exactly one other CK-5200 image, `V121`, also archived in `.stock/`. Both are application images, not full backups of the boot component, option bytes, or device-specific data. The [vendor distribution check](USB_AND_IPHONE.md#vendor-firmware-distribution-2026-10-08) found no published bootloader or installer image anywhere reachable without the physical iPhone app.
 
-For Rudi's stated goal, restore after a broken flash, note the split: this project's custom image writes only the application region (base `0x2000`, limit `0x6a00`, enforced by the image validator), so a broken flash breaks only the application region. The stock installer in the boot region and the configuration pages are outside that region and cannot be damaged by it. The application region is restorable without any dump by staging the official V122 image through the update commands and rebooting, the same path the vendor's own app uses, provided the running image keeps the update protocol alive, as this project's firmware does. A full dump remains insurance for the unknowns: installer signature behavior on a non-vendor image, and the boot region's fallback when the application will not start or enumerate.
+[CORRECTION] The linker and image validator bound application bytes to base `0x2000` and size `0x6A00`.
+Those checks do not prove that the unread installer preserves itself or configuration during copying.
+The application's staging service requires executable application code. It cannot establish recovery from an application that fails to boot.
+Installer readback could clarify these unknowns, but a dump alone would not prove recovery.
 
 ## Stock still runs
 
@@ -62,7 +69,8 @@ The restore ladder for a flashed keyboard, strongest channel first:
 
 1. **Phone app over the EA session** (custom firmware running): the same A1/A2/A3 stock-update dialect stages and commits the bundled stock V122 image, then A0 reboots the keyboard into the stock installer. This is the same transport the official app uses for updates.
 2. **Mac over the EP2 dispatcher fallback** (custom firmware running, phone session not needed): `tools/ck5200_usb.py` routes on `bcdDevice 0x9001`, sends `02 03` for the "QM" identify, and runs the same A1/A2/A3/A0 cycle on the vendor bulk endpoint. This channel exists precisely so a broken Apple session stack cannot lock out recovery.
-3. **Stock installer boot region** (never touched): the custom image is limited to `0x2000..0x8a00` by the linker script and the image validator. The installer below `0x2000` and the staging area at `0x08008A00` are outside the image and are written only by the staging writer through A3.
+3. **Presumed stock installer region**: the custom image is bounded below `0x8A00` and starts at `0x2000`.
+   The staging writer writes staging pages, not the presumed installer below `0x2000`. Original installer copy behavior remains unknown.
 
 What is now **execution-verified offline** (`tests/ck5200_restore_test.c`, in the repo suite):
 
