@@ -1,8 +1,30 @@
 # M2: application-level rescue
 
-**M2 remains open pending independent review. Implemented and host-tested, not installed or physically tested. R3 remains UNMET. Custom flashing remains NO-GO.**
+**M2 COMPLETE, accepted at `ee45b6b` as a software-only secondary rescue mechanism. Not installed or physically tested. R3 remains UNMET. Custom flashing remains NO-GO.**
 Base: `a368e0d619e26dea770544f936874514b117bca8`. This is a secondary application service, not independent boot recovery.
 The [accepted recovery decision](adr/0001-independent-iphone-recovery.md) and [authorization record](flash-readiness.md) still apply.
+
+## Acceptance
+
+Rudi accepted and closed M2 at `ee45b6bbb2b544f19d44c036099c4af2c5aa7156` after independent review of all three corrections in production code.
+The review confirmed the four session/watchdog regressions and seven ELF validation cases, with both clean CI runs passing:
+
+- [Firmware build, tests, and image validation](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38729079210).
+- [iOS verification](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38729079255).
+
+Acceptance covers only the software-only, application-level secondary rescue mechanism. It does not establish physical compatibility, iPhone-operated restoration, or recovery from an unbootable application.
+The tests and current authorization gates remain in force.
+
+Excluded boundaries remain:
+
+- [UNVERIFIED] RAM rescue-token retention through an actual MCU reset and the proprietary Clicks boot stage.
+- [UNVERIFIED] Physical enumeration, authentication, and communication between replacement firmware and the iPhone.
+- The iOS app does not yet recognize `RS 00 01` or operate the rescue restoration workflow.
+- A valid image hash and successful staging commit do not prove restoration by the proprietary installer.
+- Only 1,124 bytes of application flash remain. Future firmware changes require explicit size-budget checks.
+
+R3 remains the next architectural priority: an independently executing stage that can restore official firmware through an iPhone when the application is unusable.
+M2 acceptance does not relax that requirement. No new implementation milestone, investigation, or physical experiment is authorized without a separate decision.
 
 ## Entry and scope
 
@@ -138,13 +160,13 @@ Relinking changes 23,186 of the original common byte offsets and adds 1,728 byte
 - Reproduction: `bash keyboards/ck5200/scripts/setup.sh`, `bash keyboards/ck5200/scripts/build.sh`, then `bash keyboards/ck5200/scripts/test.sh`.
 - CI checks these same firmware build/test/ELF paths on a clean runner. Delivery reports the exact commit's firmware and iOS run results separately.
 
-## Remaining decision
+## Physical limits and authorization
 
 No physical firmware write, reset experiment, ISP entry, protection change, debug-pad access, or installation occurred.
 Hardware-dependent items remain unverified: RAM retention through the original boot stage, custom USB enumeration/authentication, timing, physical flash programming, and installer behavior.
 Corrupt application vectors, erased application code, failure before rescue service entry, and a failed USB/iAP2 stack are outside this mechanism.
 
-M2 remains open until the corrections below pass independent review and receive acceptance.
+M2 is accepted and closed within its software-only scope.
 It does not resolve R3 and does not authorize the first custom flash.
 
 ## Corrections after review of `828627c`
@@ -178,4 +200,4 @@ Corrected firmware, same toolchain:
 - SHA-256: `520225e072a938e3a47cb2487add991fe8aec8a9af2496504b48b618dd3593c3`.
 - Linked RAM including stack reserve/alignment: **6,040 bytes**, unchanged. RAM limit: 20,480 bytes.
 - Reset target: `0x7D32`; image ends at `0x859B`. ELF, linker, and image checks pass.
-- Clean firmware and iOS CI run links are reported with the pushed correction commit. Local iOS builds and physical tests were not run for this firmware-only correction.
+- Clean firmware and iOS CI run links are recorded in [acceptance](#acceptance). Local iOS builds and physical tests were not run for this firmware-only correction.
