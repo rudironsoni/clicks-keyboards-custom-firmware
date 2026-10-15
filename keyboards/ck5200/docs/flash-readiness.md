@@ -7,6 +7,7 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock recorder software | Host/simulator checks and unsigned iPhone CI passed at `ef3a5b7`; signed diagnostics app installed and launched over Wi-Fi |
 | M1 stock diagnostics baseline | COMPLETE, accepted for the observed identity, stock getters, mixed-key recording, exports, and session reopening |
 | Comprehensive physical CK-5200 characterization | UNVERIFIED beyond the recorded observations; remaining gaps do not block the diagnostics baseline |
+| M2 application-level rescue | Implemented and host-tested, not installed or physically verified. See [implementation evidence](application-rescue.md). Does not satisfy R3. |
 | R3 iPhone-only independent recovery | UNMET, installer unread; no proven rescue from an unbootable application |
 | Custom firmware flashing | NO-GO, no custom image authorized |
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |

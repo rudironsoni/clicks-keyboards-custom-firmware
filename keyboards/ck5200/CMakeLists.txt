@@ -8,8 +8,10 @@ set(QMK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/qmk_firmware" CACHE PATH "QMK 
 set(TINYUSB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/tinyusb" CACHE PATH "TinyUSB source")
 set(WCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/ch32x035" CACHE PATH "OpenWCH CH32X035 SDK")
 set(WCH_SRC "${WCH_DIR}/EVT/EXAM/SRC")
+set(SHA256_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/sha-2")
 
 foreach(req IN ITEMS
+    "${SHA256_DIR}/sha-256.c"
     "${QMK_DIR}/quantum/main.c"
     "${TINYUSB_DIR}/src/tusb.c"
     "${WCH_SRC}/Startup/startup_ch32x035.S"
@@ -63,6 +65,8 @@ set(WCH_SOURCES
 )
 
 set(CK5200_SOURCES
+    "${SHA256_DIR}/sha-256.c"
+    firmware/platform/ch32x035/main.c
     firmware/keyboard/ck5200.c
     firmware/keyboard/matrix.c
     firmware/platform/ch32x035/family_gate.c
@@ -97,6 +101,7 @@ set_property(TARGET ck5200_qmk.elf APPEND PROPERTY LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/firmware/platform/ch32x035/linker.ld")
 
 target_include_directories(ck5200_qmk.elf PRIVATE
+    "${SHA256_DIR}"
     firmware/keyboard
     firmware/keyboard/keymaps/diagnostic
     firmware/platform/ch32x035

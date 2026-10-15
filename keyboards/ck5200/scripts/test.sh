@@ -44,10 +44,11 @@ cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
 # Full restore cycle: the real update handler and the real staging
 # writer against a mocked flash backend, pushing the complete stock and
 # custom images through A1/A2/A3/A0, plus bounds and failure injection.
-cc -std=c11 -Wall -Wextra -DCK5200_STAGING_HOST_TEST -I tests/stubs \
+cc -std=c11 -Wall -Wextra -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/sha-2 \
   tests/ck5200_restore_test.c \
   firmware/platform/ch32x035/ck5200_update_protocol.c \
   firmware/platform/ch32x035/ck5200_staging.c \
+  external/sha-2/sha-256.c \
   -o /tmp/ck5200_restore_test
 
 /tmp/ck5200_restore_test .stock/iKeyboard_CK-5200_V122_120.bin build/ck5200_qmk.bin
@@ -116,6 +117,23 @@ cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_protocol_task_test \
   firmware/platform/ch32x035/protocol.c $QCORE $QCK
 
 /tmp/ck5200_protocol_task_test
+
+# Real selected main, transport tasks, Apple session, and constrained staging.
+M2_BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ck5200-m2.XXXXXX")"
+trap 'rm -rf "$M2_BUILD"' EXIT
+cc $QFLAGS $QINC $QDEFS -Dmain=ck5200_main -DCK5200_RESCUE_HOST_TEST -c \
+  firmware/platform/ch32x035/main.c -o "$M2_BUILD/main.o"
+cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/sha-2 \
+  tests/ck5200_rescue_test.c "$M2_BUILD/main.o" \
+  firmware/platform/ch32x035/protocol.c \
+  firmware/platform/ch32x035/iap2.c \
+  external/sha-2/sha-256.c \
+  firmware/platform/ch32x035/ck5200_staging.c \
+  firmware/platform/ch32x035/ck5200_update_protocol.c \
+  $QCORE $QCK -o "$M2_BUILD/rescue_test"
+for mode in normal rescue early-failure; do
+  UBSAN_OPTIONS=halt_on_error=1 "$M2_BUILD/rescue_test" "$mode" .stock/iKeyboard_CK-5200_V122_120.bin
+done
 
 # Family-gate negative test (review 2026-10-12, finding 6): compiling the
 # real family_gate.c against a deliberately wrong-family stub MUST fail.

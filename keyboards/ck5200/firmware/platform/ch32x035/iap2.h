@@ -86,5 +86,8 @@ void iap2_ep2_rx(const uint8_t *buf, uint32_t len);
  * plus outer state 3, as used by the 0x629e/0x62cc gates). */
 bool iap2_session_active(void);
 
+/* Stricter rescue gate: live link, auth accepted, and EA session open. */
+bool iap2_restore_authorized(void);
+
 /* Feed EP3 traffic into the watchdog (stock 0x629e resets it too). */
 void iap2_activity(void);

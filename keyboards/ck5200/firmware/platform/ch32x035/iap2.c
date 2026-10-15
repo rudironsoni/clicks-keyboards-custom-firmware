@@ -663,3 +663,7 @@ bool iap2_session_active(void) {
 }
 
 void iap2_activity(void) { iap2_ctx.watchdog = WATCHDOG_TICKS; }
+
+bool iap2_restore_authorized(void) {
+    return iap2_session_active() && (iap2_ctx.flags & 0x804u) == 0x804u;
+}

@@ -82,6 +82,11 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
 
 /* ---------------- iAP2 / backlight / update stubs ----------------------- */
 static bool stub_session_active;
+bool ck5200_rescue_active(void) { return false; }
+void ck5200_request_rescue(void) { assert(false); }
+void ck5200_staging_abort(void) {}
+bool ck5200_staging_rescue_entry_allowed(void) { return false; }
+bool iap2_restore_authorized(void) { return false; }
 void iap2_init(void) {}
 void iap2_set_connected(bool c) { (void)c; }
 bool iap2_session_active(void) { return stub_session_active; }

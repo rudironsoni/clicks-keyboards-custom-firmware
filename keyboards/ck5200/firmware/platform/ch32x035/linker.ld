@@ -123,6 +123,12 @@ SECTIONS {
         PROVIDE(_ebss = .);
     } > RAM AT > FLASH
 
+    .noinit (NOLOAD) : {
+        . = ALIGN(4);
+        *(.noinit)
+        . = ALIGN(4);
+    } > RAM
+
     ._user_heap_stack : {
         . = ALIGN(8);
         PROVIDE(end = .);

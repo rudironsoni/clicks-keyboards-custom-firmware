@@ -38,6 +38,7 @@
 #include "ck5200_staging.h"
 
 #include <string.h>
+#include "sha-256.h"
 
 #ifdef CK5200_STAGING_HOST_TEST
 /* Harness provides the flash backend. */
@@ -51,6 +52,7 @@
 
 #define STAGING_IMAGE_BASE (STAGING_BASE + 4u)
 #define FLASH_PAGE_SIZE    256u
+#define STOCK_IMAGE_SIZE   18648u
 
 /* First page the maximum image can reach: 0x08008A04 + 0x6A00 rounds up to
  * a page write ending exactly at 0x0800F500. */
@@ -67,7 +69,19 @@ static uint32_t next_offset;
 static uint32_t page_base;
 static uint16_t page_fill;
 static staging_state_t staging_state;
+static bool stock_only, stock_committed;
 static uint8_t page[FLASH_PAGE_SIZE] __attribute__((aligned(4)));
+
+void ck5200_staging_abort(void) {
+    staging_state = STAGING_IDLE;
+    stock_committed = false;
+    expected_size = next_offset = page_fill = 0;
+}
+
+void ck5200_staging_require_stock(void) {
+    stock_only = true;
+    ck5200_staging_abort();
+}
 
 #ifdef CK5200_STAGING_HOST_TEST
 unsigned staging_host_reboots;
@@ -79,6 +93,7 @@ static void reset_page(uint32_t address);
 /* Simulated MCU power cycle for the harness: volatile state cleared, the
  * physical flash array untouched (review 2026-10-12, finding 3). */
 void ck5200_staging_test_power_cycle(void) {
+    stock_committed = false;
     expected_size = 0;
     next_offset = 0;
     page_fill = 0;
@@ -134,6 +149,15 @@ static bool staging_write_page(uint32_t address, const uint8_t data[FLASH_PAGE_S
 #endif
 }
 
+bool ck5200_staging_rescue_entry_allowed(void) {
+    if (staging_state != STAGING_IDLE) return false;
+    uint8_t stored[FLASH_PAGE_SIZE];
+    if (!staging_read_page(STAGING_BASE, stored)) return false;
+    uint32_t marker;
+    memcpy(&marker, stored, sizeof(marker));
+    return marker == 0 || marker == UINT32_MAX;
+}
+
 /* ---- length-marker transactions (page RMW) -------------------------- */
 
 /*
@@ -164,7 +188,9 @@ static void reset_page(uint32_t address) {
 }
 
 static bool staging_begin(uint32_t size, uint32_t *maximum) {
+    ck5200_staging_abort();
     if (!maximum || size == 0 || size > CK5200_UPDATE_MAX_IMAGE) return false;
+    if (stock_only && size != STOCK_IMAGE_SIZE) return false;
     /* Invalidate any previously committed length before accepting data: an
      * interrupted cycle must never leave a valid length pointing at a
      * partially rewritten staging area (review 2026-10-11, F-3). On the
@@ -238,6 +264,31 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
         }
     }
 
+    if (stock_only) {
+        /* Hash actual staged flash, not incoming packets. The exact length
+         * and digest pin the complete official V122, including its vectors.
+         * No host-supplied digest or image-type claim can authorize a commit. */
+        static const uint8_t stock_sha256[32] = {
+            0x8e,0xe8,0x69,0x35,0xf5,0xfb,0xd6,0x22,0x97,0x2f,0xa5,0x50,0x33,0xf2,0x9f,0xa5,
+            0x51,0xba,0x57,0x22,0x88,0x12,0x30,0x46,0xe2,0x1d,0x79,0x00,0x6f,0x3b,0x22,0xf8
+        };
+        struct Sha_256 sha;
+        uint8_t digest[32], stored[FLASH_PAGE_SIZE];
+        sha_256_init(&sha, digest);
+        uint32_t remaining = size;
+        for (uint32_t addr = STAGING_BASE; remaining; addr += FLASH_PAGE_SIZE) {
+            if (!staging_read_page(addr, stored)) { staging_state = STAGING_FAILED; return false; }
+            uint32_t skip = addr == STAGING_BASE ? 4u : 0u;
+            uint32_t n = remaining < FLASH_PAGE_SIZE-skip ? remaining : FLASH_PAGE_SIZE-skip;
+            sha_256_write(&sha, stored+skip, n);
+            remaining -= n;
+        }
+        if (memcmp(sha_256_close(&sha), stock_sha256, sizeof(stock_sha256)) != 0) {
+            staging_state = STAGING_FAILED;
+            return false;
+        }
+    }
+
     /* Commit the length over the first staging page (RMW preserving the
      * 252 staged payload bytes), then verify. */
     if (!marker_write(size)) {
@@ -246,6 +297,7 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
     }
 
     *committed_size = size;
+    stock_committed = stock_only;
     expected_size = 0;
     next_offset = 0;
     page_fill = 0;
@@ -254,6 +306,7 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
 }
 
 static void staging_reboot(void) {
+    if (stock_only && !stock_committed) return;
 #ifdef CK5200_STAGING_HOST_TEST
     ++staging_host_reboots;
     return;

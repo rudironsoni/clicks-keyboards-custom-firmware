@@ -170,6 +170,13 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
     if not 0 < stack_size <= RAM_LIMIT - RAM_BASE or bss_end > RAM_LIMIT - stack_size:
         raise ValueError("startup stack size is outside RAM")
 
+    if ".noinit" in sections:
+        address, size, flags = sections[".noinit"]
+        if size != 8 or address < bss_end or address + size > RAM_LIMIT - stack_size or flags != "WA":
+            raise ValueError("rescue request must occupy eight RAM bytes outside BSS and stack")
+        if not re.search(r"\]\s+\.noinit\s+NOBITS\s", output):
+            raise ValueError("rescue request must not have a flash initializer")
+
     load_segments = []
     for line in output.splitlines():
         fields = line.split()

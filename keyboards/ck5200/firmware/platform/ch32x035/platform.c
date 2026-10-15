@@ -54,7 +54,7 @@ void platform_setup(void) {
     systick_init_1khz();
 
     /* USB: the X035 USBFS block lives at 0x40023400 on the AHB bus (stock
-     * 0x3f3e region), the pins are PC16 (D+) / PC17 (D-), and the
+     * 0x3f3e region), the pins are PC16 (D-) / PC17 (D+/BOOT), and the
      * integrated PHY is enabled through AFIO->CTLR, exactly as TinyUSB's
      * ch32x035 BSP and the stock USB init (stock 0x41d0) do. The USBPD
      * block is powered down like stock does at boot (stock 0x3b04). */

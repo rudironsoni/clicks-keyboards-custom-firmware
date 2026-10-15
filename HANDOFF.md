@@ -10,7 +10,8 @@ Use the acceptance scope, evidence hashes, and deferred gaps in the authoritativ
 The [recovery decision](keyboards/ck5200/docs/adr/0001-independent-iphone-recovery.md) records NO-GO and the supporting offline audit.
 The presumed installer region is not a proven immutable recovery service. A patched-stock reader cannot justify its own installation.
 HTTPS inspection is stopped. The stock URL was already known. No phone settings changed, and the vendor inquiry remains unsent.
-The next safe implementation task is host-tested application-level rescue, explicitly unable to recover failed low-level startup or corrupt vectors.
+M2 [application-level rescue](keyboards/ck5200/docs/application-rescue.md) is implemented and host-tested.
+It cannot recover failed low-level startup or corrupt vectors. Stop for a new engineering decision after M2 delivery.
 
 - Comprehensive physical characterization remains UNVERIFIED beyond the recorded observations. Baseline collection is closed.
 - R3 independent recovery is UNMET. The Mac dispatcher depends on a running application and is not independent rescue.

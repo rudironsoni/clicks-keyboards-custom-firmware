@@ -45,6 +45,7 @@ verify_pin() {
 verify_pin external/qmk_firmware "$QMK_COMMIT"
 verify_pin external/tinyusb "$TINYUSB_COMMIT"
 verify_pin external/ch32x035 "$OPENWCH_X035_COMMIT"
+verify_pin external/sha-2 "$SHA256_COMMIT"
 
 cmake -S . -B build -G Ninja   -DCMAKE_TOOLCHAIN_FILE=cmake/riscv-gcc-toolchain.cmake   -DCMAKE_BUILD_TYPE=MinSizeRel
 
