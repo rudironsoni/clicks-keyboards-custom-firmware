@@ -88,9 +88,12 @@ final class QMKProfileUITests: XCTestCase {
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for direction in [true, false] {
             for _ in 0..<25 {
-                // A bottom row can be tappable without fitting inside an arbitrary
-                // screen inset. XCTest accounts for clipping and overlays here.
-                if element.exists && element.isHittable { return }
+                // Lazy rows can report hittable even when their tap point is at
+                // the home indicator. Check the center before querying hittability.
+                if element.exists, !element.frame.isEmpty,
+                   element.frame.midY > app.navigationBars.firstMatch.frame.maxY + 8,
+                   element.frame.midY < app.frame.maxY - 44,
+                   element.isHittable { return }
                 let up = element.exists && !element.frame.isEmpty ? element.frame.midY > app.frame.midY : direction
                 let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
                 let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.35 : 0.75))
