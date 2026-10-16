@@ -8,10 +8,13 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock diagnostics baseline | COMPLETE, accepted for the observed identity, stock getters, mixed-key recording, exports, and session reopening |
 | Comprehensive physical CK-5200 characterization | UNVERIFIED beyond the recorded observations; remaining gaps do not block the diagnostics baseline |
 | M2 application-level rescue | COMPLETE, accepted at `ee45b6b` after independent review as a software-only secondary mechanism. Not installed or physically verified. See [acceptance and evidence](application-rescue.md#acceptance). Does not satisfy R3. |
+| M3 first usable QMK release | Three software deliverables implemented and independently reviewed; firmware, Swift/C integration and simulator CI passed at the [recorded revisions](m3-verification.md). Candidate: 26,496 bytes, 640 bytes headroom. No physical boot or compatibility claim. |
+| M3 spare hardware path | [Procedure prepared](m3-spare-bring-up.md); no matching spare acquired or verified by this task. Restoration route not established. No physical operations authorized. |
 | R3 iPhone-only independent recovery | UNMET, installer unread; no proven rescue from an unbootable application |
 | Custom firmware flashing | NO-GO, no custom image authorized |
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
+| QMKKeymap iOS configuration | Separate RAM-keymap permission, limited to exact CK-5200 hardware 1.2.0 and QM 00 01 identity, with explicit per-session write consent. A0–A3 remain blocked. No physical use authorized by M3. |
 | AuthorizedStockUpdate configuration | Retained stock-only implementation for a later separately authorized milestone; not an M1 install configuration |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
