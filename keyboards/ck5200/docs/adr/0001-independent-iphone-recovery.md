@@ -109,3 +109,35 @@ No physical test, reboot experiment, firmware write, ISP entry, protection chang
 - **E4:** [Pinned WCH manual evidence](../recovery-audit-2026-10-14.md#hardware-boundary-evidence-2026-10-15), sections 1.2 and 20.1–20.2.2.
 - Implementation boundary: [pinned QMK main](https://github.com/qmk/qmk_firmware/blob/3d4da6de29c8635c9cd232ce456d8fec8d31921b/quantum/main.c), [protocol service](../../firmware/platform/ch32x035/protocol.c), and [staging writer](../../firmware/platform/ch32x035/ck5200_staging.c).
 - Authorization remains owned by [flash-readiness.md](../flash-readiness.md).
+
+## 2026-10-16 extension: external adapter research is in scope
+
+The [USB recovery feasibility report](../../../../reports/CK5200%20USB%20recovery%20feasibility.md) extends this decision through research and offline models.
+An iPhone-controlled BLE adapter with its own USB host is now within conceptual scope.
+This supersedes the no-adapter architecture constraint in section 1 for this investigation.
+It does not authorize hardware construction, purchase, keyboard access, reboot, probing, ISP, or protection changes.
+There is one keyboard and no spare-purchase plan.
+
+**PROVEN (chip documentation):** PC17/D+ high at power-up selects BOOT.
+**SUPPORTED HYPOTHESIS [INFERENCE]:** the inner male USB-C plug could provide independent entry if the early data and power paths permit it.
+**BLOCKED [UNVERIFIED]:** the actual connector routes, VDD timing, safe bias window, retained loader, and protection state remain unknown.
+WCH System FLASH is separate from the presumed Clicks installer, but it is mutable through supported debug tooling. It is not immutable ROM.
+
+The inspected `wchisp` programs from zero and provides no proven application-range erase.
+A6 compares supplied bytes rather than reading unknown main flash.
+The final stock page includes 40 unknown bytes outside the image. Their preservation remains required.
+Thus successful entry or enumeration would not establish a permissible restore or power-loss recovery.
+The report records exact source pins, a conditional circuit, alternatives, and eight falsifiable R3 criteria.
+
+**Section 5's next-M2 task is superseded.** M1 and M2 are closed in their accepted scopes.
+M3 is closed for the software scope of this investigation, with its existing review and CI evidence retained in
+[stock-manager-readiness.md](../stock-manager-readiness.md). This does not claim physical installation or independent recovery.
+The next step is model-matched vendor/source evidence and offline rejection of unsafe assumptions, not another application rescue implementation.
+The vendor inquiry remains unsent. The [offline lab](../../recovery_lab/README.md) passed 10 unit tests on local rerun.
+Its default CLI returned expected exit 2 (blocked). The hypothetical CLI returned 0 for an image/region model match.
+The model requires `tail_preserving_erase` before any mutation. This stronger hypothetical contract is not known CH32 page erase or a factory opcode.
+The restart fixture requires the original in-memory journal. No durable host journal or OEM normal-boot proof exists.
+A1 identity fixtures, A4 count decoding, A5 packet decoding, and A6 comparison fixtures exist. A3/A7 are not implemented.
+The final ISP/lab review closed all four findings with no actionable blockers. The electrical review found no P1/P2 blockers for conceptual scope.
+The [review summary](../../../../research_notes/CK5200%20USB%20recovery%20feasibility/review.md) records the reported checks and their limits. Neither review establishes physical recovery.
+**R3 remains UNMET and custom flashing remains NO-GO.** [flash-readiness.md](../flash-readiness.md) remains the sole readiness authority.
