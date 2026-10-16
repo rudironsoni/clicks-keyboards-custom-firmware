@@ -2,6 +2,7 @@ import XCTest
 
 final class StockCharacterizationUITests: XCTestCase {
     func testStockRecorderWithoutAccessory() throws {
+        continueAfterFailure = false
         // Simulator UI test. This proves neither physical key callbacks nor EA transport.
         let app = XCUIApplication()
         app.launch()
@@ -56,7 +57,8 @@ final class StockCharacterizationUITests: XCTestCase {
         start.tap()
         app.buttons["Start new session"].tap()
         reveal(text, in: app, up: true)
-        XCTAssertEqual(text.value as? String, "", "Replacement must reset UIKit's applied-edit buffer")
+        // An existing empty UITextView can expose nil rather than an empty AX value.
+        XCTAssertEqual(text.value as? String ?? "", "", "Replacement must reset UIKit's applied-edit buffer")
         reveal(stop, in: app, up: false)
         stop.tap()
         reveal(export, in: app, up: true)
@@ -78,7 +80,7 @@ final class StockCharacterizationUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [exportDisabled], timeout: 5), .completed)
         XCTAssertFalse(app.buttons["stock.share"].exists)
         reveal(app.textViews["stock.text"], in: app, up: false)
-        XCTAssertEqual(app.textViews["stock.text"].value as? String, "")
+        XCTAssertEqual(app.textViews["stock.text"].value as? String ?? "", "")
     }
 
     private func inspectExport(_ app: XCUIApplication) throws -> [String: Any] {
@@ -155,8 +157,10 @@ final class StockCharacterizationUITests: XCTestCase {
         // Search both directions rather than continuing into the same list boundary.
         for direction in [up, !up] {
             for _ in 0..<30 {
-                if element.exists && element.isHittable,
-                   app.frame.insetBy(dx: 0, dy: 100).contains(element.frame) { return }
+                if element.exists, !element.frame.isEmpty,
+                   element.frame.midY > app.navigationBars.firstMatch.frame.maxY + 8,
+                   element.frame.midY < app.frame.maxY - 44,
+                   element.isHittable { return }
                 var moveUp = direction
                 if element.exists, !element.frame.isEmpty, element.frame.minY.isFinite {
                     moveUp = element.frame.midY > app.frame.midY
@@ -167,7 +171,6 @@ final class StockCharacterizationUITests: XCTestCase {
                 start.press(forDuration: 0.05, thenDragTo: end)
             }
         }
-        XCTAssertTrue(element.isHittable && app.frame.insetBy(dx: 0, dy: 100).contains(element.frame),
-                      "Control must be fully inside the scrollable viewport before tapping")
+        XCTFail("Cannot reveal \(element) inside the scrollable viewport")
     }
 }
