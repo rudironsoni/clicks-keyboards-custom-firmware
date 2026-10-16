@@ -45,14 +45,14 @@ enum KeycodeNames {
 
     // MARK: QMK layer keycodes
 
-    /// MO(n): momentary layer. QMK encoding: 0x5120 | (n & 0xf).
+    /// MO(n): momentary layer. Pinned QMK encoding: 0x5220 | (n & 0x1f).
     static func isMomentaryLayer(_ keycode: UInt16) -> Bool {
-        (keycode & 0xfff0) == 0x5120
+        (keycode & 0xffe0) == 0x5220
     }
 
     static func momentaryLayerNumber(_ keycode: UInt16) -> Int? {
         guard isMomentaryLayer(keycode) else { return nil }
-        return Int(keycode & 0x0f)
+        return Int(keycode & 0x1f)
     }
 
     /// OSL(n): one-shot layer. QMK encoding: QK_ONE_SHOT_LAYER (0x5280)
@@ -80,9 +80,9 @@ enum KeycodeNames {
     // MARK: Custom keycodes (this project's firmware)
 
     static let customKeys: [UInt16: String] = [
-        0x5da1: "Cons-A",       // stock consumer usage 0x01AE
-        0x5da2: "Cons-B",       // stock consumer usage 0x029D
-        0x5da3: "iOS-KB",       // consumer Eject 0x00B8: iOS on-screen keyboard
+        0x7e40: "Cons-A",       // stock consumer usage 0x00CF
+        0x7e41: "Cons-B",       // stock consumer usage 0x029D
+        0x7e42: "iOS-KB",       // consumer Eject 0x00B8: iOS on-screen keyboard
     ]
 
     // MARK: Special values
@@ -98,6 +98,9 @@ enum KeycodeNames {
         if keycode == transparent { return "—" }
         if keycode == noKey { return "✕" }
         if let name = basicKeys[keycode] { return name }
+        if keycode & 0xff00 == 0x0200, let name = basicKeys[keycode & 0xff] {
+            return "S(\(name))"
+        }
         if let name = modifiers[keycode] { return name }
         if let name = customKeys[keycode] { return name }
         if let layer = momentaryLayerNumber(keycode) {
