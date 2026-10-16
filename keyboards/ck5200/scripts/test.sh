@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+TEST_BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ck5200-tests.XXXXXX")"
+trap 'rm -rf "$TEST_BUILD"' EXIT
 
 PYTHON="$ROOT/.venv/bin/python"
 if [[ ! -x "$PYTHON" ]]; then
@@ -14,33 +16,38 @@ fi
 "$PYTHON" -m pytest -q tests/test_keymap_layout.py
 "$PYTHON" -m pytest -q tests/test_validate_image.py
 
-cc -std=c11 -Wall -Wextra   tests/update_protocol_test.c   firmware/platform/ch32x035/ck5200_update_protocol.c   -o /tmp/ck5200_update_protocol_test
+cc -std=c11 -Wall -Wextra -DCK5200_IDENTITY_HOST_TEST \
+  -I external/tinyusb/src -I firmware/platform/ch32x035 -I firmware/keyboard \
+  tests/ck5200_descriptors_test.c -o "$TEST_BUILD/ck5200_descriptors_test"
+"$TEST_BUILD/ck5200_descriptors_test" .stock/iKeyboard_CK-5200_V122_120.bin
 
-/tmp/ck5200_update_protocol_test
+cc -std=c11 -Wall -Wextra   tests/update_protocol_test.c   firmware/platform/ch32x035/ck5200_update_protocol.c   -o "$TEST_BUILD/ck5200_update_protocol_test"
+
+"$TEST_BUILD/ck5200_update_protocol_test"
 
 # Backlight driver: real TIM1 register writes against the stock decode.
 cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmware/platform/ch32x035 \
   tests/ck5200_backlight_test.c \
   firmware/platform/ch32x035/ck5200_backlight.c \
-  -o /tmp/ck5200_backlight_test
+  -o "$TEST_BUILD/ck5200_backlight_test"
 
-/tmp/ck5200_backlight_test
+"$TEST_BUILD/ck5200_backlight_test"
 
 # Consumer-key state machine: press/release semantics and 10-byte
 # report packing against the descriptor contract.
 cc -std=c11 -Wall -Wextra -I firmware/platform/ch32x035 \
   tests/ck5200_consumer_test.c \
   firmware/platform/ch32x035/ck5200_consumer.c \
-  -o /tmp/ck5200_consumer_test
+  -o "$TEST_BUILD/ck5200_consumer_test"
 
-/tmp/ck5200_consumer_test
+"$TEST_BUILD/ck5200_consumer_test"
 
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \
   firmware/platform/ch32x035/ck5200_keymap.c \
-  -o /tmp/ck5200_keymap_test
+  -o "$TEST_BUILD/ck5200_keymap_test"
 
-/tmp/ck5200_keymap_test
+"$TEST_BUILD/ck5200_keymap_test"
 
 # Full restore cycle: the real update handler and the real staging
 # writer against a mocked flash backend, pushing the complete stock and
@@ -50,26 +57,26 @@ cc -std=c11 -Wall -Wextra -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/
   firmware/platform/ch32x035/ck5200_update_protocol.c \
   firmware/platform/ch32x035/ck5200_staging.c \
   external/sha-2/sha-256.c \
-  -o /tmp/ck5200_restore_test
+  -o "$TEST_BUILD/ck5200_restore_test"
 
-/tmp/ck5200_restore_test .stock/iKeyboard_CK-5200_V122_120.bin build/ck5200_qmk.bin
+"$TEST_BUILD/ck5200_restore_test" .stock/iKeyboard_CK-5200_V122_120.bin build/ck5200_qmk.bin
 
 # Apple session stack: real iap2.c against a scripted iPhone and a fake
 # auth chip; asserts every outgoing EP2 packet byte-for-byte.
-cc -std=c11 -Wall -Wextra -I tests/stubs -I firmware/platform/ch32x035 \
+cc -std=c11 -Wall -Wextra -DCK5200_IDENTITY_HOST_TEST -I tests/stubs -I firmware/platform/ch32x035 \
   tests/iap2_session_test.c \
   firmware/platform/ch32x035/iap2.c \
-  -o /tmp/ck5200_iap2_session_test
+  -o "$TEST_BUILD/ck5200_iap2_session_test"
 
-/tmp/ck5200_iap2_session_test
+"$TEST_BUILD/ck5200_iap2_session_test"
 
 # Auth I2C driver: real iap2_auth.c against a waveform-level chip model.
 cc -std=c11 -Wall -Wextra -DIAP2_AUTH_HOST_TEST -I tests/stubs -I firmware/platform/ch32x035 \
   tests/iap2_auth_test.c \
   firmware/platform/ch32x035/iap2_auth.c \
-  -o /tmp/ck5200_iap2_auth_test
+  -o "$TEST_BUILD/ck5200_iap2_auth_test"
 
-/tmp/ck5200_iap2_auth_test
+"$TEST_BUILD/ck5200_iap2_auth_test"
 
 # QMK core + protocol behavior harnesses: the REAL pinned QMK core, the
 # REAL CK-5200 modules, and (protocol) the REAL protocol.c against a
@@ -108,23 +115,22 @@ QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c
 QCK="$ROOT/firmware/platform/ch32x035/ck5200_consumer.c \
  $ROOT/firmware/platform/ch32x035/ck5200_keymap.c"
 
-cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_qmk_core_test \
+cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_qmk_core_test" \
   tests/ck5200_qmk_core_test.c $QCORE $QCK
 
-/tmp/ck5200_qmk_core_test
+"$TEST_BUILD/ck5200_qmk_core_test"
 
-cc $QFLAGS $QINC $QDEFS -o /tmp/ck5200_protocol_task_test \
+cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_protocol_task_test" \
   tests/ck5200_protocol_task_test.c \
-  firmware/platform/ch32x035/protocol.c $QCORE $QCK
+  firmware/platform/ch32x035/protocol.c firmware/keyboard/matrix.c $QCORE $QCK
 
-/tmp/ck5200_protocol_task_test
+"$TEST_BUILD/ck5200_protocol_task_test"
 
 # Real selected main, transport tasks, Apple session, and constrained staging.
-M2_BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ck5200-m2.XXXXXX")"
-trap 'rm -rf "$M2_BUILD"' EXIT
+M2_BUILD="$TEST_BUILD"
 cc $QFLAGS $QINC $QDEFS -Dmain=ck5200_main -DCK5200_RESCUE_HOST_TEST -c \
   firmware/platform/ch32x035/main.c -o "$M2_BUILD/main.o"
-cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/sha-2 \
+cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -DCK5200_IDENTITY_HOST_TEST -I tests/stubs -I external/sha-2 \
   tests/ck5200_rescue_test.c "$M2_BUILD/main.o" \
   firmware/platform/ch32x035/protocol.c \
   firmware/platform/ch32x035/iap2.c \

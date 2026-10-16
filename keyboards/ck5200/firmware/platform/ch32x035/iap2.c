@@ -6,6 +6,7 @@
 #include "iap2.h"
 #include "iap2_auth.h"
 #include "iap2_ident_data.h"
+#include "ck5200_identity.h"
 #include "tusb.h"
 #include <string.h>
 
@@ -178,9 +179,10 @@ static bool op_pump(void) {
             chunk = (uint16_t)(c->msg_total - (uint16_t)c->msg_cursor * CHUNK_SIZE);
         }
         if (!iap2_auth_read(c->auth_addr,IAP2_AUTH_SEL_CHUNK_BASE + c->msg_cursor, pkt + 9, chunk)) return false;
-        c->msg_cursor++;
         pkt[9 + chunk] = cksum8(pkt + 9, chunk);
-        return send_payload((uint16_t)(chunk + 1u));
+        if (!send_payload((uint16_t)(chunk + 1u))) return false;
+        c->msg_cursor++;
+        return true;
     }
 
     /* Previous message fully sent: peek for the next one (stock 0x62ea). */
@@ -204,9 +206,11 @@ static bool op_pump(void) {
     (void)build_msg(pkt + 9, (uint16_t)(IAP2_PKT_MAX - 9), 0xaa01,
                     (uint16_t)(c->msg_total + 4u));
     pkt[9 + 138] = cksum8(pkt + 9, 138);
+    /* A busy USB endpoint must not consume an unsent certificate chunk. */
+    if (!send_payload(139u)) return false;
     c->msg_cursor = 1;
     c->msg_chunks = (uint8_t)((c->msg_total + CHUNK_SIZE - 1u) / CHUNK_SIZE);
-    return send_payload(139u);
+    return true;
 }
 
 /* Shared tail: checksum the control message at pkt+9 and send it. */
@@ -262,9 +266,12 @@ static bool op_identify(void) {
 
     for (unsigned i = 0; i < IAP2_IDENT_PARAM_COUNT; ++i) {
         const iap2_ident_param_t *p = &iap2_ident_params[i];
+        char serial[11];
+        if (p->id == 3) ck5200_serial(serial);
         const uint16_t entry = build_param(pkt + 15 + used,
                                            (uint16_t)(IAP2_PKT_MAX - 15 - used),
-                                           p->id, p->data, p->len);
+                                           p->id, p->id == 3 ? (const uint8_t *)serial : p->data,
+                                           p->id == 3 ? sizeof(serial) : p->len);
         if (entry == 0) return false;
         used = (uint16_t)(used + entry);
     }

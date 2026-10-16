@@ -28,6 +28,7 @@ static struct {
 static int sent_count, sent_cursor;
 static int usb_write_attempts;
 static bool usb_write_fail;
+static uint16_t usb_reject_length_once;
 
 bool tud_mounted(void) { return true; }
 bool tud_suspended(void) { return false; }
@@ -36,6 +37,7 @@ uint32_t tud_vendor_n_write(uint8_t itf, const void *buf, uint32_t len) {
     (void)itf;
     usb_write_attempts++;
     if (usb_write_fail) return 0;
+    if (len == usb_reject_length_once) { usb_reject_length_once = 0; return 0; }
     assert(len <= SENT_BUF);
     assert(sent_count < SENT_MAX);
     memcpy(sent_log[sent_count].buf, buf, len);
@@ -346,6 +348,8 @@ static void test_sync_resend_budget(void) {
     assert(iap2_ctx.tstate == 0);
 }
 
+uint32_t ck5200_test_serial_word = 42000007u; /* synthetic, not a device serial */
+
 static void test_identify_reply(void) {
     start_session();
     settle(2);
@@ -377,7 +381,7 @@ static void test_identify_reply(void) {
     static const uint8_t ids[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
                                   0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
                                   0x10, 0x17, 0x22};
-    static const uint8_t lens[] = {24, 8, 26, 10, 6, 6, 8, 2, 1, 2, 49, 17,
+    static const uint8_t lens[] = {24, 8, 26, 11, 6, 6, 8, 2, 1, 2, 49, 11,
                                    3, 3, 21, 33, 17};
     uint16_t off = 6;
     for (size_t i = 0; i < sizeof(ids); ++i) {
@@ -391,19 +395,19 @@ static void test_identify_reply(void) {
     assert(off == frame_len - 1); /* exactly consumed the declared body */
 
     /* Spot-check the strings at their cumulative offsets (entries:
-     * 28, 12, 30, 14, 10, 10, ...). */
+     * 28, 12, 30, 15, 10, 10, ...). */
     const uint8_t *base = frame + 6;
     assert(memcmp(base + 0 + 4, "Clicks Creator Keyboard", 23) == 0);
     assert(base[0 + 4 + 23] == 0);
     assert(memcmp(base + 28 + 4, "CK-5200", 7) == 0);
     assert(memcmp(base + 40 + 4, "Clicks Technology Limited", 25) == 0);
-    assert(memcmp(base + 70 + 4, "2311000001", 10) == 0); /* no trailing NUL */
-    assert(memcmp(base + 84 + 4, "1.2.2", 5) == 0);
-    assert(memcmp(base + 94 + 4, "1.2.0", 5) == 0);
+    assert(memcmp(base + 70 + 4, "0042000007", 11) == 0); /* includes stock NUL */
+    assert(memcmp(base + 85 + 4, "1.2.2", 5) == 0);
+    assert(memcmp(base + 95 + 4, "1.2.0", 5) == 0);
     /* Param 0x0a (49 bytes) carries the EA protocol string. */
-    assert(memcmp(base + 133 + 4 + 9, "com.clickscompanion.protocol", 28) == 0);
+    assert(memcmp(base + 134 + 4 + 9, "com.clickscompanion.protocol", 28) == 0);
     /* Param 0x22 is the hex token from the image. */
-    assert(memcmp(base + 283 + 4, "020c3648d17f4624", 16) == 0);
+    assert(memcmp(base + 278 + 4, "020c3648d17f4624", 16) == 0);
 }
 
 static void test_ack_owed(void) {
@@ -418,16 +422,17 @@ static void test_ack_owed(void) {
                 0x38, 10, NULL, 0);
 }
 
-static void test_cert_stream(void) {
+static void cert_stream(uint16_t reject_length) {
     start_session();
     settle(2);
     sent_reset();
 
     for (unsigned i = 0; i < 200; ++i) chip.pending[i] = (uint8_t)i;
     chip.pending_len = 200;
+    usb_reject_length_once = reject_length;
 
     phone_msg(0xaa, 0x00, NULL, 0);
-    settle(8);
+    settle(40);
 
     expect_link("bare ACK for cert request", 0x40, 0x01, 0x38, 10, NULL, 0);
 
@@ -450,7 +455,13 @@ static void test_cert_stream(void) {
 
     settle(5);
     assert(sent_total() == 3); /* bare ACK + both chunks, then idle */
-    assert(chip.chunk_calls == 2);
+    assert(chip.chunk_calls == (reject_length ? 3u : 2u));
+}
+
+static void test_cert_stream(void) {
+    cert_stream(0);
+    cert_stream(148); /* first certificate packet rejected by busy USB */
+    cert_stream(82);  /* final certificate packet rejected by busy USB */
 }
 
 static void test_auth_challenge(void) {

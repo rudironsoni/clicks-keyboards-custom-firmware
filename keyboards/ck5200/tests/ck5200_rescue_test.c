@@ -1,6 +1,8 @@
 /* Actual production main + protocol + iAP2 + staging + pinned QMK core.
  * Only hardware boundaries (USB, auth chip, flash, matrix, reset) are modeled. */
 #include <assert.h>
+#include <stdint.h>
+uint32_t ck5200_test_serial_word = 42000007u; /* synthetic host fixture */
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
