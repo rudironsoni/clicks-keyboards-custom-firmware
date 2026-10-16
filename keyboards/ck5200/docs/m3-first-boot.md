@@ -1,6 +1,7 @@
 # M3 PR1: firmware first-boot hardening
 
 Date: 2026-10-16. Starting revision: `246f2b8`, branch `feat/m3-first-usable-qmk`.
+Review-fix baseline: `e172edd`. Fixes remain uncommitted in the shared checkout.
 
 **Offline checks pass. Custom flashing remains NO-GO. R3 is unmet.**
 M1 and M2 remain accepted. This work does not establish recovery independent of
@@ -57,6 +58,54 @@ run only against host models. Existing baseline evidence is unchanged.
    advanced its cursor before USB accepted the packet. Cursor advancement now
    follows successful submission. The byte-exact certificate test covers both
    first-packet and final-packet rejection, with retries and sequence checks.
+9. **Vendor transfer capacity:** non-buffered TinyUSB used 64-byte TX storage,
+   truncating the 148-byte certificate packet and 315-byte Identify packet.
+   `CFG_TUD_VENDOR_TX_EPSIZE` now equals `IAP2_PKT_MAX` (384). Descriptor endpoint
+   packet sizes stay 64. The session harness now compiles the pinned vendor
+   driver and production descriptors instead of an unlimited-write stub. It
+   checks exact Identify/certificate bytes, busy/rejected writes, preserved
+   transfer storage, six modeled USB packets for a 384-byte transfer, and final
+   completion. The USB controller and physical bus remain modeled.
+10. **Large certificate headers:** header builders rejected the declared full
+    message length when it exceeded the current packet buffer. Header-only
+    calls now check only the bytes they write; complete frames retain a packet
+    bound. A 512-byte certificate test checks the full 522-byte control-message
+    length, 516-byte KVP length, all four chunks, checksums, and sequence numbers.
+    Certificate lengths exceeding the one-byte auth selector range are rejected.
+    The physical device's certificate length is unknown.
+11. **A0 response and reset ordering:** allowed A0 now returns `04 02 A0 00`.
+    Parsing and submission cannot reset. Only a successful four-byte completion
+    on the reply interface can reset, with mount/session/stock-commit checks.
+    Failed or short completion, disconnect, and expired rescue authority cancel
+    reset. A small app-driver override delegates to the unchanged pinned vendor
+    driver and carries failed-transfer status into the dispatcher, because the
+    vendor callback otherwise discards that status. A1/A2/A3 remain eight bytes.
+    The stock-only rescue commit gate and ordinary iOS authorization policy are
+    unchanged. V122 `0x3954..0x396c` sets the deferred-reset flag and writes
+    `04 02 A0`; `0x3404` stores A0 and branches to `0x3456`, which writes zero
+    as the fourth byte. These addresses were checked in the offline disassembly.
+
+### Review regression evidence
+
+Before the production fixes, targeted host compilations failed as follows:
+
+- `build/m3-review-red-vendor.log`: real pinned vendor driver failed Identify's
+  `total == len` assertion after accepting only the first 64 bytes.
+- `build/m3-review-red-certificate.log`: a 512-byte certificate's first packet
+  retained stale header bytes instead of `40 40 02 0a aa 01 02 04 00 00`.
+- `build/m3-review-red-a0.log`: production update handler failed the assertion
+  that A0 returns four bytes. Its old implementation reset during parsing.
+
+The final full run passes in `build/m3-review-tests.log`. M2 production coverage
+also checks rejected submission, no reset before completion, failed full-length
+completion, short completion, disconnect, watchdog expiry at completion, wrong
+interface, and exactly one successful reset. The real vendor-driver harness
+checks the status adapter; the M2 harness checks the production dispatcher and
+staging gate. The USB controller itself is not emulated by the pinned DCD.
+An initial full-suite attempt overlapped a clean build and failed because its
+ELF input was temporarily absent. The completed build was followed by a separate
+full-suite run, which passed. Build evidence is `build/m3-review-build.log`.
+Independent re-review of these fixes remains for the parent session.
 
 ## Boot and transport inspection
 
@@ -226,24 +275,24 @@ same two-build comparison and uploads both maps plus `SHA256SUMS`.
 
 | Resource | Measured |
 | --- | --- |
-| Binary / flash load | 26,188 bytes (`0x664c`) of 27,136 |
-| Growth from starting image | 176 bytes (starting image 26,012) |
-| Flash headroom | 948 bytes; image ends at `0x864c`, before staging at `0x8a00` |
-| `.init` / `.vector` / `.text` | 4 / 252 / 25,788 bytes |
-| `.data` / `.bss` / `.noinit` | 144 / 3,988 / 8 bytes |
-| Static RAM before stack reservation | 4,140 bytes |
-| Stack reservation plus alignment | 2,052 bytes (2,048-byte configured stack) |
-| Total linked RAM reservation | 6,192 of 20,480 bytes; 14,288 bytes unreserved |
-| Reset jump | `0x5e50506f`, target `0x7de4` |
+| Binary / flash load | 26,496 bytes (`0x6780`) of 27,136 |
+| Growth from starting image | 484 bytes (starting image 26,012); 308 from `e172edd` |
+| Flash headroom | 640 bytes; image ends at `0x8780`, before staging at `0x8a00` |
+| `.init` / `.vector` / `.text` | 4 / 252 / 26,096 bytes |
+| `.data` / `.bss` / `.noinit` | 144 / 4,632 / 8 bytes |
+| Static RAM before stack reservation | 4,784 bytes |
+| Stack reservation plus alignment | 2,048 bytes (2,048-byte configured stack) |
+| Total linked RAM reservation | 6,832 of 20,480 bytes; 13,648 bytes unreserved |
+| Reset jump | `0x6f50506f`, target `0x7ef4` |
 
 SHA-256 of the final local artifacts under `build/`:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `ck5200_qmk.bin` | `d48a921c50d5af16b080aaf6d270e7c4a8a1e0a7f7a0cafbba1591e24601e316` |
-| `ck5200_qmk.elf` | `124f2d589e8ad77c496631062ad202b24ba3e1efa4613f5b52258658229b1916` |
-| `ck5200_qmk.map` | `fef9f8aa56656b49611f37a431131cf885b272c9d4974ba0c78acd507341be7f` |
-| `ck5200_qmk.map.normalized` | `d013d0fdfed66ce4b19bdafc0356b1f6ebef6bddd38f3477e9f9371032610af9` |
+| `ck5200_qmk.bin` | `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4` |
+| `ck5200_qmk.elf` | `0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298` |
+| `ck5200_qmk.map` | `122f132f6c96e87e4aa424732fd1837329c618b228461e9744540b639fbbdbc9` |
+| `ck5200_qmk.map.normalized` | `fededfa0420433a3f40b4f728288c531494c6364e9a18c2a44ecc5be23336f19` |
 
 Artifacts and logs remain ignored. Raw map hashes vary with GCC temporary names;
 the normalized map is reproducible in the checked two-build run. Cross-host

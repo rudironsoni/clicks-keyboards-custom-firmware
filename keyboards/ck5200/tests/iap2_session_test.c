@@ -15,8 +15,11 @@
 
 #include "iap2.h"
 #include "iap2_auth.h"
+#include "tusb.h"
+#include "device/usbd_pvt.h"
 
-/* ---- fake USB ---------------------------------------------------- */
+/* Real pinned vendor driver. Only the endpoint/controller boundary is modeled:
+ * transfer bytes are copied in 64-byte packets, then completion releases busy. */
 
 #define SENT_MAX 512
 #define SENT_BUF 400
@@ -29,25 +32,69 @@ static int sent_count, sent_cursor;
 static int usb_write_attempts;
 static bool usb_write_fail;
 static uint16_t usb_reject_length_once;
+static bool ep_busy[256], hold_usb;
+static uint8_t *ep_tx_buffer;
+static uint16_t ep_tx_length;
+static unsigned usb_packets, tx_completions;
+static unsigned failed_completions;
+static const usbd_class_driver_t *vendor_driver;
+const usbd_class_driver_t *usbd_app_driver_get_cb(uint8_t *count);
+void ck5200_vendor_tx_failed(uint8_t idx) { assert(idx < 2); ++failed_completions; }
 
 bool tud_mounted(void) { return true; }
 bool tud_suspended(void) { return false; }
 
-uint32_t tud_vendor_n_write(uint8_t itf, const void *buf, uint32_t len) {
-    (void)itf;
-    usb_write_attempts++;
-    if (usb_write_fail) return 0;
-    if (len == usb_reject_length_once) { usb_reject_length_once = 0; return 0; }
-    assert(len <= SENT_BUF);
+bool usbd_edpt_claim(uint8_t port, uint8_t ep) {
+    assert(port == 0);
+    if (ep == 0x82) { ++usb_write_attempts; if (usb_write_fail) return false; }
+    if (ep_busy[ep]) return false;
+    ep_busy[ep] = true;
+    return true;
+}
+bool usbd_edpt_busy(uint8_t port, uint8_t ep) { assert(port == 0); return ep_busy[ep]; }
+bool usbd_edpt_xfer(uint8_t port, uint8_t ep, uint8_t *buf, uint16_t len, bool is_isr) {
+    assert(port == 0 && !is_isr);
+    if (!(ep & 0x80)) return true;
+    assert(ep == 0x82 && ep_busy[ep] && len <= SENT_BUF);
+    if (len == usb_reject_length_once) {
+        usb_reject_length_once = 0; ep_busy[ep] = false; return false;
+    }
+    ep_tx_buffer = buf; ep_tx_length = len;
+    return true;
+}
+bool usbd_edpt_open(uint8_t port, const tusb_desc_endpoint_t *ep) {
+    assert(port == 0 && tu_edpt_packet_size(ep) == 64); return true;
+}
+void usbd_edpt_clear_stall(uint8_t port, uint8_t ep) { assert(port == 0); ep_busy[ep] = false; }
+void usbd_edpt_stall(uint8_t port, uint8_t ep) { assert(port == 0); ep_busy[ep] = true; }
+void usbd_edpt_rx_consume(uint8_t port, uint8_t ep) { (void)port; (void)ep; }
+bool tud_control_status(uint8_t port, const tusb_control_request_t *req) { (void)port; (void)req; return true; }
+bool tud_control_xfer(uint8_t port, const tusb_control_request_t *req, void *buf, uint16_t len) {
+    (void)port; (void)req; (void)buf; (void)len; return true;
+}
+bool tud_vendor_control_xfer_cb(uint8_t port, uint8_t stage, const tusb_control_request_t *req) {
+    (void)port; (void)stage; (void)req; return false;
+}
+void tud_vendor_tx_cb(uint8_t idx, uint32_t n) { assert(idx == 0 && n == ep_tx_length); ++tx_completions; }
+
+static void usb_complete(void) {
+    if (!ep_tx_buffer || hold_usb) return;
     assert(sent_count < SENT_MAX);
-    memcpy(sent_log[sent_count].buf, buf, len);
-    sent_log[sent_count].len = (uint16_t)len;
+    for (unsigned offset = 0; offset < ep_tx_length; offset += 64) {
+        unsigned n = ep_tx_length - offset < 64 ? ep_tx_length - offset : 64;
+        memcpy(sent_log[sent_count].buf + offset, ep_tx_buffer + offset, n);
+        ++usb_packets;
+        assert(ep_busy[0x82]); /* no early release between packets */
+    }
+    sent_log[sent_count].len = ep_tx_length;
     sent_count++;
-    return len;
+    ep_tx_buffer = NULL;
+    ep_busy[0x82] = false;
+    assert(vendor_driver->xfer_cb(0, 0x82, XFER_RESULT_SUCCESS, ep_tx_length));
 }
 
 static int sent_total(void) { return sent_count; }
-static void sent_reset(void) { sent_count = sent_cursor = 0; }
+static void sent_reset(void) { usb_complete(); sent_count = sent_cursor = 0; }
 
 static const uint8_t *sent_next(uint16_t *len) {
     if (sent_cursor >= sent_count) {
@@ -142,6 +189,7 @@ static void settle(unsigned ticks) {
     for (unsigned i = 0; i < ticks; ++i) {
         iap2_tick_1ms();
         iap2_task();
+        usb_complete();
     }
 }
 
@@ -422,13 +470,13 @@ static void test_ack_owed(void) {
                 0x38, 10, NULL, 0);
 }
 
-static void cert_stream(uint16_t reject_length) {
+static void cert_stream(uint16_t reject_length, uint16_t certificate_size) {
     start_session();
     settle(2);
     sent_reset();
 
-    for (unsigned i = 0; i < 200; ++i) chip.pending[i] = (uint8_t)i;
-    chip.pending_len = 200;
+    for (unsigned i = 0; i < certificate_size; ++i) chip.pending[i] = (uint8_t)i;
+    chip.pending_len = certificate_size;
     usb_reject_length_once = reject_length;
 
     phone_msg(0xaa, 0x00, NULL, 0);
@@ -439,29 +487,34 @@ static void cert_stream(uint16_t reject_length) {
     /* First chunk: message header + KVP header + 128 bytes + checksum. */
     uint8_t first[139];
     first[0] = 0x40; first[1] = 0x40;
-    first[2] = 0x00; first[3] = 0xd2; /* body 204 + 6 */
+    first[2] = (certificate_size + 10) >> 8; first[3] = certificate_size + 10;
     first[4] = 0xaa; first[5] = 0x01;
-    first[6] = 0x00; first[7] = 0xcc; /* entry 200 + 4 */
+    first[6] = (certificate_size + 4) >> 8; first[7] = certificate_size + 4;
     first[8] = 0x00; first[9] = 0x00; /* param id 0 */
     for (unsigned i = 0; i < 128; ++i) first[10 + i] = (uint8_t)i;
     first[138] = cksum8(first, 138);
     expect_link("cert first chunk", 0x40, 0x02, 0x38, 10, first, sizeof(first));
 
-    /* Second chunk: the remaining 72 bytes, raw. */
-    uint8_t second[73];
-    for (unsigned i = 0; i < 72; ++i) second[i] = (uint8_t)(128 + i);
-    second[72] = cksum8(second, 72);
-    expect_link("cert second chunk", 0x40, 0x03, 0x38, 10, second, sizeof(second));
+    unsigned chunks = 1;
+    for (unsigned offset = 128; offset < certificate_size; offset += 128) {
+        uint8_t next[129];
+        unsigned n = certificate_size - offset < 128 ? certificate_size - offset : 128;
+        for (unsigned i = 0; i < n; ++i) next[i] = (uint8_t)(offset + i);
+        next[n] = cksum8(next, n);
+        expect_link("cert continuation", 0x40, 0x02 + chunks, 0x38, 10, next, n + 1);
+        ++chunks;
+    }
 
     settle(5);
-    assert(sent_total() == 3); /* bare ACK + both chunks, then idle */
-    assert(chip.chunk_calls == (reject_length ? 3u : 2u));
+    assert(sent_total() == (int)(1 + chunks));
+    assert(chip.chunk_calls == chunks + (reject_length ? 1u : 0u));
 }
 
 static void test_cert_stream(void) {
-    cert_stream(0);
-    cert_stream(148); /* first certificate packet rejected by busy USB */
-    cert_stream(82);  /* final certificate packet rejected by busy USB */
+    cert_stream(0, 200);
+    cert_stream(148, 200); /* first certificate packet rejected by busy USB */
+    cert_stream(82, 200);  /* final certificate packet rejected by busy USB */
+    cert_stream(0, 512);  /* declared message exceeds the 384-byte packet buffer */
 }
 
 static void test_auth_challenge(void) {
@@ -698,6 +751,28 @@ static void test_challenge_overread_clamped(void) {
 }
 
 int main(void) {
+    uint8_t count;
+    vendor_driver = usbd_app_driver_get_cb(&count);
+    assert(count == 1);
+    vendor_driver->init();
+    const uint8_t *config = tud_descriptor_configuration_cb(0);
+    assert(vendor_driver->open(0, (const tusb_desc_interface_t *)(config + 41), 55) == 23);
+    /* Real non-buffered vendor storage holds a full packet until completion.
+     * A second write must not overwrite it, even with a changed source buffer. */
+    uint8_t packet[IAP2_PKT_MAX];
+    memset(packet, 0x5a, sizeof(packet));
+    assert(tud_vendor_n_write(0, packet, sizeof(packet)) == sizeof(packet));
+    memset(packet, 0xa5, sizeof(packet));
+    assert(tud_vendor_n_write(0, packet, sizeof(packet)) == 0);
+    hold_usb = true; usb_complete(); assert(tx_completions == 0);
+    hold_usb = false; usb_complete();
+    assert(usb_packets == 6 && tx_completions == 1);
+    for (unsigned i = 0; i < sizeof(packet); ++i) assert(sent_log[0].buf[i] == 0x5a);
+    sent_reset();
+    assert(tud_vendor_n_write(0, packet, 4) == 4);
+    ep_tx_buffer = NULL; ep_busy[0x82] = false;
+    assert(vendor_driver->xfer_cb(0, 0x82, XFER_RESULT_FAILED, 4));
+    assert(failed_completions == 1 && tx_completions == 2);
     /* The sync payload's checksum is deterministic; compute it once. */
     ((uint8_t *)sync_payload)[13] = cksum8(sync_payload, 13);
 

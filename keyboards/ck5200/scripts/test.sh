@@ -63,9 +63,12 @@ cc -std=c11 -Wall -Wextra -DCK5200_STAGING_HOST_TEST -I tests/stubs -I external/
 
 # Apple session stack: real iap2.c against a scripted iPhone and a fake
 # auth chip; asserts every outgoing EP2 packet byte-for-byte.
-cc -std=c11 -Wall -Wextra -DCK5200_IDENTITY_HOST_TEST -I tests/stubs -I firmware/platform/ch32x035 \
+cc -std=c11 -Wall -Wextra -DCK5200_IDENTITY_HOST_TEST \
+  -I external/tinyusb/src -I firmware/platform/ch32x035 -I firmware/keyboard \
   tests/iap2_session_test.c \
   firmware/platform/ch32x035/iap2.c \
+  firmware/usb/usb_descriptors.c firmware/usb/vendor_driver.c \
+  external/tinyusb/src/class/vendor/vendor_device.c \
   -o "$TEST_BUILD/ck5200_iap2_session_test"
 
 "$TEST_BUILD/ck5200_iap2_session_test"

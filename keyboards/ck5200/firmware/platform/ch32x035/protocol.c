@@ -333,6 +333,21 @@ void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
 
 void tud_vendor_tx_cb(uint8_t idx, uint32_t sent_bytes) {
     if (idx != pending_update_response_itf || !update_response_in_flight) return;
+    account_iap2_elapsed_time();
+    if (!update_response_in_flight) return; /* Rescue authority expired. */
     update_response_in_flight = false;
+    if (pending_update_response_len == 4 && pending_update_response[2] == 0xA0) {
+        pending_update_response_len = 0; /* Never retry a failed/short A0 ACK. */
+        if (sent_bytes == 4 && tud_mounted() && !tud_suspended() &&
+            (!ck5200_rescue_active() || iap2_restore_authorized())) ck5200_staging_ops.reboot();
+        return;
+    }
     if (sent_bytes == pending_update_response_len) pending_update_response_len = 0;
+}
+
+/* The pinned vendor driver otherwise reports bytes without transfer status. */
+void ck5200_vendor_tx_failed(uint8_t idx) {
+    if (idx != pending_update_response_itf) return;
+    pending_update_response_len = 0;
+    update_response_in_flight = false;
 }

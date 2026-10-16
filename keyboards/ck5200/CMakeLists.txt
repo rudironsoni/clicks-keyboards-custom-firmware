@@ -82,6 +82,7 @@ set(CK5200_SOURCES
     firmware/platform/ch32x035/iap2.c
     firmware/platform/ch32x035/iap2_auth.c
     firmware/usb/usb_descriptors.c
+    firmware/usb/vendor_driver.c
     "${QMK_DIR}/quantum/dynamic_keymap.c"
     "${QMK_DIR}/drivers/eeprom/eeprom_driver.c"
     "${QMK_DIR}/drivers/eeprom/eeprom_transient.c"
