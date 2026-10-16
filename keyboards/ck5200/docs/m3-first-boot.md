@@ -1,7 +1,7 @@
 # M3 PR1: firmware first-boot hardening
 
 Date: 2026-10-16. Starting revision: `246f2b8`, branch `feat/m3-first-usable-qmk`.
-Review-fix baseline: `e172edd`. Fixes remain uncommitted in the shared checkout.
+Review-fix baseline: `e172edd`. Production fixes: `d0f824d00b467ac5af13f18c0f4ff4abc5561064`.
 
 **Offline checks pass. Custom flashing remains NO-GO. R3 is unmet.**
 M1 and M2 remain accepted. This work does not establish recovery independent of
@@ -105,7 +105,13 @@ staging gate. The USB controller itself is not emulated by the pinned DCD.
 An initial full-suite attempt overlapped a clean build and failed because its
 ELF input was temporarily absent. The completed build was followed by a separate
 full-suite run, which passed. Build evidence is `build/m3-review-build.log`.
-Independent re-review of these fixes remains for the parent session.
+Independent read-only re-review of `d0f824d` confirmed all three findings resolved:
+vendor transfer capacity, large-certificate headers, and A0 ACK/reset ordering.
+The reviewer also checked TinyUSB application-driver dispatch and failure status,
+reply-interface matching, duplicate/short callbacks, and rescue expiry. No new
+blocking defect was identified. The reviewer did not rerun the suite; the local
+execution evidence above belongs to the implementation run. Physical behavior
+remains unverified.
 
 ## Boot and transport inspection
 
