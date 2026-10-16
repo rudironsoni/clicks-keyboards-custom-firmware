@@ -8,12 +8,18 @@ on:
       - ".github/workflows/ios.yml"
       - "**/*.md"
       - "scripts/check-readiness.py"
+      - "keyboards/ck5200/firmware/**"
+      - "keyboards/ck5200/scripts/pins.env"
+      - "keyboards/ck5200/tests/qmk_shim/**"
   pull_request:
     paths:
       - "ios/ClicksInspector/**"
       - ".github/workflows/ios.yml"
       - "**/*.md"
       - "scripts/check-readiness.py"
+      - "keyboards/ck5200/firmware/**"
+      - "keyboards/ck5200/scripts/pins.env"
+      - "keyboards/ck5200/tests/qmk_shim/**"
 
 permissions:
   contents: read
@@ -21,13 +27,22 @@ permissions:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Install project generator
         run: brew install xcodegen
+      - name: Fetch pinned C integration dependencies
+        run: |
+          source keyboards/ck5200/scripts/pins.env
+          git init keyboards/ck5200/external/qmk_firmware
+          git -C keyboards/ck5200/external/qmk_firmware fetch --depth 1 https://github.com/qmk/qmk_firmware.git "$QMK_COMMIT"
+          git -C keyboards/ck5200/external/qmk_firmware checkout --detach FETCH_HEAD
+          git init keyboards/ck5200/external/sha-2
+          git -C keyboards/ck5200/external/sha-2 fetch --depth 1 https://github.com/amosnier/sha-2.git "$SHA256_COMMIT"
+          git -C keyboards/ck5200/external/sha-2 checkout --detach FETCH_HEAD
       - name: Record toolchain and revision
         run: |
           mkdir -p evidence
@@ -66,7 +81,22 @@ jobs:
             -scheme ClicksInspector -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+      - name: Build and package the write-disabled stock manager
+        run: |
+          set -o pipefail
+          for PLATFORM in 'iOS' 'iOS Simulator'; do
+            xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+              -scheme ClicksInspector -configuration StockFirmwareManager \
+              -destination "generic/platform=$PLATFORM" -derivedDataPath "$RUNNER_TEMP/stock-manager" \
+              CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "evidence/stock-manager-$PLATFORM-build.log"
+          done
+          for SDK in iphoneos iphonesimulator; do
+            ditto -c -k --sequesterRsrc --keepParent \
+              "$RUNNER_TEMP/stock-manager/Build/Products/StockFirmwareManager-$SDK/ClicksInspector.app" \
+              "evidence/ClicksInspector-StockFirmwareManager-$SDK.zip"
+          done
+          shasum -a 256 evidence/ClicksInspector-StockFirmwareManager-*.zip > evidence/app-SHA256SUMS
       - name: Publish complete verification logs
         if: always()
         uses: actions/upload-artifact@v4

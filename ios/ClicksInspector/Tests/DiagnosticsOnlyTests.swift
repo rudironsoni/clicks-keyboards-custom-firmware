@@ -14,7 +14,6 @@ private final class CaptureLink: KeyboardPacketLink {
 @main
 struct DiagnosticsOnlyTests {
     @MainActor static func main() async throws {
-        CustomFirmwareController.resetPendingUpdateForTesting()
         let controller = CustomFirmwareController()
         let link = CaptureLink()
         controller.connectedTarget = .init(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
