@@ -96,3 +96,30 @@ This was documentation research only. No device operations, settings changes,
 code execution from downloads, firmware writes, resets, ISP commands,
 protection changes, or SDI investigation occurred. Hardware and runtime
 checks were not performed.
+
+## BLE bridge distinction, 2026-10-16
+
+**An external BLE-to-USB host changes which device owns USB.**
+The iPhone would use [Core Bluetooth](https://developer.apple.com/documentation/corebluetooth) to communicate with the adapter.
+The adapter would enumerate the keyboard and perform factory-ISP bulk transfers through its own USB host controller.
+The iPhone would not need raw access to the keyboard's USB endpoints.
+Modern iOS apps that use Bluetooth require [`NSBluetoothAlwaysUsageDescription`](https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription).
+Bluetooth access does not grant USB access or create a keyboard recovery service.
+
+**SUPPORTED HYPOTHESIS [INFERENCE]:** this could avoid the direct iPhone raw-USB API limit above.
+It requires a real USB host, independent adapter power, Type-C source/CC handling, controlled VBUS, and safe data/bias isolation.
+A BLE-only controller, passive cable, or device-only USB bridge does not supply the host role.
+The iPhone would communicate wirelessly while a female adapter receptacle mates with the keyboard's inner male plug.
+
+**BLOCKED [UNVERIFIED]:** CK-5200 early data/CC paths, VDD and PC17 timing, retained factory loader, protection, and preservation-safe restoration remain unknown.
+The [USB recovery feasibility report](../../../reports/CK5200%20USB%20recovery%20feasibility.md) separates those gates from the Apple API question.
+Its circuit and candidate parts are conceptual, not approved for fabrication or connection.
+No BLE bridge or physical recovery was demonstrated. [flash-readiness.md](flash-readiness.md) retains R3 UNMET and NO-GO.
+
+The [offline recovery lab](../recovery_lab/README.md) passed 10 unit tests and both expected CLI outcomes on local rerun.
+It implements no iPhone, BLE, or USB transport. Default execution remains blocked, and hypothetical success is only an image/region model match.
+Its stronger tail-preserving erase and original-journal assumptions do not establish a real factory operation or durable recovery.
+A3 session-key and A7 configuration protocols are not implemented.
+Both scoped agent reviews are closed, with all four ISP/lab findings resolved and no actionable blockers remaining.
+The electrical review found no P1/P2 blockers for conceptual scope. The [review summary](../../../research_notes/CK5200%20USB%20recovery%20feasibility/review.md) records the limits.
+Review closure establishes neither an implemented iPhone/BLE bridge nor physical recovery.
