@@ -62,6 +62,14 @@ targets:
     dependencies:
       - target: ClicksInspector
 schemes:
+  StockFirmwareManager:
+    build:
+      targets:
+        ClicksInspector: all
+    test:
+      config: StockFirmwareManager
+      targets:
+        - ClicksInspectorUITests
   ClicksInspector:
     build:
       targets:
