@@ -169,6 +169,18 @@ struct QMKProfileTests {
         precondition(relaunched.profileMessage.contains("readback does not match"))
         print("PASS mismatched readback cannot report write success")
 
+        // Self-test must retain the first confirmed write if restoration loses the link.
+        qmk_bridge_boot()
+        link = try await connect(relaunched)
+        relaunched.ramWritesAllowed = true
+        link.closeWriteNumber = 2
+        relaunched.runSelfTest()
+        try await wait(relaunched)
+        precondition(relaunched.verifiedWrites == 1 && !relaunched.keymapIsVerified)
+        precondition(relaunched.profileMessage.contains("1/2"))
+        precondition(link.writes == 2)
+        print("PASS self-test retains confirmed progress when restoration loses its reply")
+
         for identity: [UInt8] in [[1, 0x20, 1, 0x22], [0x52, 0x53, 0, 1], [0x51, 0x4d, 0, 2]] {
             let wrong = CKeyboardLink()
             wrong.identity = identity

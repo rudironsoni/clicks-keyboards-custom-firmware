@@ -405,14 +405,10 @@ final class CustomFirmwareController: ObservableObject {
 
                 // 4. Temporarily remap Left Shift at (2,3), then restore its read value.
                 let original = keymap[0][2][3]
-                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: 0x0014))
-                let readBackPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
-                let readBack = readBackPayload.count == 2 ? UInt16(readBackPayload[0]) << 8 | UInt16(readBackPayload[1]) : 0
-                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: original))
-                let restoredPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
-                let restored = restoredPayload.count == 2 ? UInt16(restoredPayload[0]) << 8 | UInt16(restoredPayload[1]) : 0
-                guard readBack == 0x0014, restored == original else { throw CustomKeyboardError.readbackMismatch }
-                verifiedWrites = 2
+                try await writeAndVerify(layer: 0, row: 2, column: 3, keycode: 0x0014)
+                let readBack = keymap[0][2][3]
+                try await writeAndVerify(layer: 0, row: 2, column: 3, keycode: original)
+                let restored = keymap[0][2][3]
                 report.checks.append(KeyboardSelfTest.verifyRoundTrip(
                     written: 0x0014, readBack: readBack, restored: restored, original: original))
                 keymap[0][2][3] = restored
