@@ -1,6 +1,6 @@
 # Verified stock firmware manager
 
-Status: software verification in progress. Physical installation remains disabled. R3 is UNMET.
+Status: software checks complete, independently reviewed and ready for human review. Physical installation remains disabled. R3 is UNMET.
 The [authoritative readiness record](flash-readiness.md) owns authorization.
 
 ## Scope and capability boundaries
@@ -76,4 +76,22 @@ Two independent reviews inspected code safety and test/evidence quality. Both cl
 The first CI attempt `38881900846` failed on the original incorrect commit-marker assertion. The correction tests the actual marker failure and expects an invalid `0xffffffff` marker, rather than weakening the production behavior.
 Run `38882500615` passed the complete host suite, Debug iPhone/simulator builds and Debug UI tests. The manager test build then failed because the shared scheme also compiled Debug-only `@testable` unit tests in release mode. A dedicated manager UI-test scheme fixes the target selection without changing release testability or write permissions.
 
-Passing revision, CI links and app hashes will be recorded here after verification. CI artifacts expire after 30 days.
+## Verified delivery, 2026-10-16
+
+Tested software revision: `a7cf3f7d19ae063ee64467537634c13c29cb374d`. The later evidence-only closeout does not change app code, tests or build settings.
+
+- [iOS CI 38883669172](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38883669172): PASS. Complete Swift host suite, production Swift/C fault cases, diagnostics boundaries, red regressions, Debug iPhone/simulator builds, receiver unit test, recorder UI test, preparation UI test, dedicated release-mode manager UI test, and both manager app builds.
+- [Firmware CI 38883668796](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38883668796): PASS. Existing accepted firmware build and tests. This is not authorization to install its custom image.
+- Toolchain: Xcode 16.4 (`16F6`), Swift 6.1.2, XcodeGen 2.46.0.
+- [Download verification artifact 12039617780](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/38883669172/artifacts/12039617780), named `ios-verification-a7cf3f7d19ae063ee64467537634c13c29cb374d`. Contains both app archives, `app-SHA256SUMS`, logs, `ui-tests.xcresult`, and `StockManagerUITests.xcresult` with the preparation screenshot attachment. CI artifacts expire after 30 days.
+
+| Archive | SHA-256 |
+| --- | --- |
+| `ClicksInspector-StockFirmwareManager-iphoneos.zip` | `e95c2ca596e38f260bd594a7d15798bf23ca3669e1ce02102a39e6a737a02c93` |
+| `ClicksInspector-StockFirmwareManager-iphonesimulator.zip` | `ad961e63521574b661b35b4fa595fd0532149ef585fc354de4b310a18c318ddb` |
+
+Both archives were downloaded and independently rehashed. Their bundled V122 resource matches the official digest above; neither archive contains `ck5200_qmk.bin`. They retain bundle version `0.2.0 (4)`, so use the revision and archive hashes to distinguish this build from the historical M1 build. The iPhone archive is unsigned, not directly installable on a physical iPhone. No signing, phone deployment or keyboard installation was attempted.
+
+Local evidence is retained under `ios/ClicksInspector/build/stock-manager-ci-38883669172/ios-verification-a7cf3f7d19ae063ee64467537634c13c29cb374d/` (ignored build output). The local official-app verifier passed for the pinned decrypted executable and rejected the encrypted/unpinned IPA. No IPA archive was added to Git.
+
+Local Xcode/simulator checks remain skipped for the machine configuration failure described above; hosted checks passed. The evidence-only closeout runs `scripts/check-readiness.py` and `git diff --check` locally and skips redundant CI rebuilds. No changes are merged. Next: human review and a separate merge decision. Physical work still requires independent recovery evidence and explicit authorization.

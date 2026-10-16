@@ -13,7 +13,7 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
-| M3 verified stock firmware manager | Implementation under verification; [readiness and evidence](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
+| M3 verified stock firmware manager | Software checks and independent review complete at `a7cf3f7`; ready for human review, unmerged. [Readiness, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
