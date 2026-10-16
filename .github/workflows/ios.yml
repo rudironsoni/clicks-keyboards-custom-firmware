@@ -85,6 +85,14 @@ jobs:
       - name: Build and package the write-disabled stock manager
         run: |
           set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration StockFirmwareManager \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/stock-manager" \
+            -resultBundlePath evidence/StockManagerUITests.xcresult \
+            -only-testing:ClicksInspectorUITests/StockManagerUITests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/stock-manager-ui-tests.log
           for PLATFORM in 'iOS' 'iOS Simulator'; do
             xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
               -scheme ClicksInspector -configuration StockFirmwareManager \

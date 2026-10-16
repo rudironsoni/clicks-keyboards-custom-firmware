@@ -2,10 +2,8 @@ import CryptoKit
 import Foundation
 import OSLog
 
-/// Drives the custom-firmware feature set over a KeyboardPacketLink:
-/// identity check, runtime-only keymap editing, keymap reset,
-/// flashing an image (works against both stock and custom firmware, which
-/// share the A1/A2/A3/A0 update dialect), and restoring stock.
+/// Read-only identity and official stock image preparation on iOS.
+/// Host tests exercise stock, QM and RS transactions with physical writes disabled.
 @MainActor
 final class CustomFirmwareController: ObservableObject {
     // No shipped iOS configuration can enable writes, including the legacy flag.
@@ -83,8 +81,7 @@ final class CustomFirmwareController: ObservableObject {
         case busy(String)
         case failed(String)
         /// An update was sent but its installation was never verified.
-        /// Retained across reconnects and relaunches until the user
-        /// explicitly reconciles it (review 2026-10-12).
+        /// Retained across reconnects and relaunches. No manual success override.
         case updateUnverified(String)
     }
 
@@ -97,10 +94,8 @@ final class CustomFirmwareController: ObservableObject {
         let hardwareRevision: String
     }
 
-    /// An update whose outcome has not been verified yet. Persisted in
-    /// UserDefaults so relaunching the app cannot silently turn an
-    /// unresolved transaction into an ordinary idle state (review
-    /// 2026-10-12).
+    /// An unresolved update, stored atomically before A3. Legacy UserDefaults
+    /// records remain readable. No record is cleared by reconnection or relaunch.
     ///
     /// Review 2026-10-13 (P0): the uncertain record is written BEFORE A3
     /// is dispatched. From that moment until a validated acknowledgment
@@ -115,7 +110,7 @@ final class CustomFirmwareController: ObservableObject {
             /// A3 was dispatched or its reply was lost/rejected: the image
             /// may already be committed.
             case commitUnknown
-            /// A3 committed and A0 was sent; installation not yet verified.
+            /// A3 acknowledged. The separate rebootRequested field records A0 intent.
             case sentRebootPending
         }
         let imageSHA256: String
@@ -243,10 +238,6 @@ final class CustomFirmwareController: ObservableObject {
         phase = .updateUnverified("Installation cannot be marked verified manually. The transaction record is retained.")
     }
 
-    private static func sha256Hex(_ bytes: [UInt8]) -> String {
-        SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
-    }
-
     var layers: Int { info?.layers ?? 0 }
     var rows: Int { info?.rows ?? 0 }
     var columns: Int { info?.columns ?? 0 }
@@ -262,40 +253,27 @@ final class CustomFirmwareController: ObservableObject {
         }
         link.onClosed = { [weak self] reason in
             guard let self, generation == self.sessionGeneration else { return }
-            self.sessionNeedsReconnect = true
-            self.transaction = nil
-            self.dispatchPermit = nil
-            self.stockMode = nil
-            self.lastVersionPayload = nil
-            self.link = nil
-            self.timeoutTask?.cancel()
-            self.timeoutTask = nil
-            self.rebootTask?.cancel()
-            self.rebootTask = nil
-            if self.awaitingReboot {
-                /* Expected: the keyboard reboots to install after A0, which
-                 * kills the session. A lost session proves the reboot, not
-                 * the installation: retain the unverified state until the
-                 * user reconnects and verifies (review 2026-10-12). */
-                self.awaitingReboot = false
-                self.resumePending(with: CustomKeyboardError.transportUnavailable)
+            let rebootRequested = self.awaitingReboot
+            let wasBusy = self.flashInFlight
+            self.invalidateSession(with: CustomKeyboardError.transportUnavailable)
+            if rebootRequested {
                 self.phase = .updateUnverified("Session closed after reboot request. Reboot, installer execution and installation remain unproven.")
-                return
-            }
-            /* Resume whatever exchange was in flight so the UI fails
-             * cleanly instead of hanging in .busy forever (review
-             * 2026-10-11, F-7). */
-            self.resumePending(with: CustomKeyboardError.transportUnavailable)
-            guard case .busy = self.phase else {
+            } else if wasBusy {
+                self.phase = .failed("Link closed: \(reason)")
+            } else {
                 self.phase = .idle
-                return
             }
-            self.phase = .failed("Link closed: \(reason)")
         }
         identify()
     }
 
     func detach() {
+        invalidateSession(with: CustomKeyboardError.transportUnavailable)
+        phase = .idle
+    }
+
+    /// Drop all queued output before an old operation can continue.
+    private func invalidateSession(with error: Error) {
         sessionGeneration += 1
         operationTask?.cancel()
         operationTask = nil
@@ -305,6 +283,8 @@ final class CustomFirmwareController: ObservableObject {
         lastVersionPayload = nil
         flashInFlight = false
         sessionNeedsReconnect = true
+        link?.onFragment = nil
+        link?.onClosed = nil
         link?.close()
         link = nil
         timeoutTask?.cancel()
@@ -312,8 +292,7 @@ final class CustomFirmwareController: ObservableObject {
         rebootTask?.cancel()
         rebootTask = nil
         awaitingReboot = false
-        resumePending(with: CustomKeyboardError.transportUnavailable)
-        phase = .idle
+        resumePending(with: error)
     }
 
     private func resumePending(with error: Error) {
@@ -405,12 +384,7 @@ final class CustomFirmwareController: ObservableObject {
         }
     }
 
-    /// Post-flash verification: after A0 reboot the keyboard re-enumerates.
-    /// Call this from the UI when the user re-opens the session; it
-    /// re-identifies and reports whether the expected firmware is running.
-    /// Post-flash verification (review 2026-10-12): re-identify after a
-    /// reboot; the unresolved-update state persists until the user
-    /// explicitly marks it verified.
+    /// Observe identity after reconnect. This cannot prove application replacement.
     func verifyAfterReboot() {
         identify()
     }
@@ -421,6 +395,8 @@ final class CustomFirmwareController: ObservableObject {
         let generation = sessionGeneration
         operationTask = Task {
             do {
+                try Task.checkCancellation()
+                guard generation == sessionGeneration else { return }
                 let payload = try await perform(.version())
                 guard generation == sessionGeneration, !sessionNeedsReconnect else { return }
                 lastVersionPayload = payload
@@ -509,14 +485,8 @@ final class CustomFirmwareController: ObservableObject {
         }
     }
 
-    /// Stages an image with A1/A2/A3, then optionally reboots (A0) to install.
-    /// Works against stock firmware (first flash) and custom firmware
-    /// (updates and restore-to-stock): the update dialect is identical.
-    ///
-    /// Authorization (review 2026-10-12): while the custom-flashing gate is
-    /// closed, the ONLY image this build may stage is the exact authorized
-    /// stock V122 artifact (SHA-256 pinned), and only onto a target that
-    /// identifies as the expected CK-5200 stock unit.
+    /// Host-only stock transaction. Every iOS build refuses physical writes.
+    /// Exact CK-5200 hardware, recognized stock/QM/RS identity and V122 hash required.
     func flash(image: [UInt8], rebootToInstall: Bool) {
         guard !Self.diagnosticsOnly else {
             fail(CustomKeyboardError.diagnosticsOnly.description)
@@ -578,8 +548,10 @@ final class CustomFirmwareController: ObservableObject {
                 }
             }
             do {
+                try requireTransaction(generation)
                 flashingProgress = 0
                 let beginReply = try await perform(.beginUpdate(size: image.count))
+                try requireTransaction(generation)
                 /* A1 payload: the advertised maximum image size (review
                  * 2026-10-12: the app previously ignored it). */
                 guard beginReply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
@@ -592,6 +564,7 @@ final class CustomFirmwareController: ObservableObject {
                 while let next = chunker.nextExchange() {
                     phase = .busy("Writing \(chunker.offset)/\(image.count) bytes")
                     let reply = try await perform(next)
+                    try requireTransaction(generation)
                     guard reply.count == 4 else { throw CustomKeyboardError.rejected(status: 0xff) }
                     try chunker.applyAcceptedOffset(reply.reduce(0) { ($0 << 8) | UInt32($1) })
                     try transaction?.accept(reply)
@@ -609,9 +582,9 @@ final class CustomFirmwareController: ObservableObject {
                 do {
                     finishReply = try await perform(.finishUpdate(size: image.count))
                 } catch CustomKeyboardError.timedOut {
-                    fail("The final step's outcome is UNKNOWN: the update may already be committed and its reply was lost. Do not assume nothing was written. The image installs on the next keyboard reboot; reconnect and verify before doing anything else.")
                     return
                 }
+                try requireTransaction(generation)
                 /* A3 payload: the committed size must equal the intended
                  * image size exactly (review 2026-10-12). A malformed or
                  * short acknowledgment leaves the pre-dispatch commit-unknown
@@ -638,12 +611,14 @@ final class CustomFirmwareController: ObservableObject {
                     if mode == .stock {
                         // V122 replies 04 02 A0 00. An ACK still proves no copying.
                         let payload = try await perform(.reboot())
+                        try requireTransaction(generation)
                         try transaction?.accept(payload)
                     } else {
                         // Accepted M2 at 246f2b8 resets synchronously without an A0
                         // ACK. Record only a request, never successful installation.
                         dispatchPermit = CustomKeyboardCommand.rebootRequest
                         try dispatch(CustomKeyboardCommand.rebootRequest)
+                        try requireTransaction(generation)
                     }
                     phase = .updateUnverified("Commit acknowledged; reboot requested. Installer execution and application replacement are unproven.")
                     rebootTask = Task { [weak self] in
@@ -654,28 +629,35 @@ final class CustomFirmwareController: ObservableObject {
                         self.rebootNotConfirmed()
                     }
                 } else {
-                    phase = .updateUnverified("Update staged; it installs on the next keyboard reboot. Verify after it restarts.")
+                    phase = .updateUnverified("Commit acknowledged. Reboot was not requested. Installer execution and application replacement remain unproven.")
                 }
             } catch {
                 guard generation == sessionGeneration else { return }
                 /* onClosed already reported the real cause (link closed);
                  * do not overwrite it with the generic transport error. */
-                sessionNeedsReconnect = true
+                let offset = transaction?.offset ?? 0
+                let rebootRequested = awaitingReboot
+                invalidateSession(with: error)
                 if case .updateUnverified = phase { return }
                 if case .failed = phase { return }
-                if awaitingReboot, pendingUpdate != nil {
+                if rebootRequested, pendingUpdate != nil {
                     phase = .updateUnverified("Update outcome retained after \(error). Reconnect for observations; installation remains unproven.")
                 } else {
-                    fail("Staging interrupted at \(transaction?.offset ?? 0) acknowledged bytes; \(error). Reconnect before a new attempt.")
+                    fail("Staging interrupted at \(offset) acknowledged bytes; \(error). Reconnect before a new attempt.")
                 }
             }
         }
     }
 
-    /// The session did not die within the confirmation window after A0:
-    /// the image is staged (A3 committed), so it installs on the next
-    /// power cycle, but the reboot may not have been delivered. The
-    /// installation stays unverified either way (review 2026-10-12).
+    private func requireTransaction(_ generation: Int) throws {
+        try Task.checkCancellation()
+        guard generation == sessionGeneration, !sessionNeedsReconnect,
+              let transaction, transaction.generation == generation else {
+            throw CustomKeyboardError.transportUnavailable
+        }
+    }
+
+    /// Session closure is an observation, not evidence of installer execution.
     private func rebootNotConfirmed() {
         guard awaitingReboot else { return }
         awaitingReboot = false
@@ -707,13 +689,11 @@ final class CustomFirmwareController: ObservableObject {
     /// A lost reply must fail the exchange cleanly instead of hanging the
     /// UI in .busy forever (review 2026-10-11, F-7).
     private func exchangeTimedOut() {
-        guard let pending = continuation else { return }
-        exchange = nil
-        continuation = nil
-        timeoutTask = nil
-        sessionNeedsReconnect = true
-        dispatchPermit = nil
-        pending.resume(throwing: CustomKeyboardError.timedOut)
+        guard continuation != nil else { return }
+        invalidateSession(with: CustomKeyboardError.timedOut)
+        fail(pendingUpdate == nil
+             ? CustomKeyboardError.timedOut.description
+             : "Update outcome is UNKNOWN after timeout. Installation remains unproven; the transaction record is retained.")
     }
 
     private func receive(_ fragment: [UInt8]) {
@@ -730,13 +710,7 @@ final class CustomFirmwareController: ObservableObject {
                 exchange = current
             }
         } catch {
-            sessionNeedsReconnect = true
-            dispatchPermit = nil
-            timeoutTask?.cancel()
-            timeoutTask = nil
-            exchange = nil
-            continuation = nil
-            pendingContinuation.resume(throwing: error)
+            invalidateSession(with: error)
             fail("Invalid response; \(error)")
         }
     }

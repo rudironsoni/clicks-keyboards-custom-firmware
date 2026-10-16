@@ -155,6 +155,52 @@ struct StreamCheck {
             }
         }
 
+        // A buffered A3 must never leave after timeout or a malformed response.
+        for invalidReply in [false, true] {
+            CustomFirmwareController.resetPendingUpdateForTesting()
+            let image = [UInt8](try! Data(contentsOf: URL(fileURLWithPath: "Resources/iKeyboard_CK-5200_V122_120.bin")))
+            let link = StreamLink(output: nil)
+            var sent: [UInt8] = []
+            var blocked = true
+            link.write = { buffer, count in
+                let bytes = Array(UnsafeBufferPointer(start: buffer, count: count))
+                if bytes[1] == 0xa3 && blocked { return 0 }
+                sent.append(bytes[1])
+                let reply: [UInt8]
+                if bytes[1] == 3 {
+                    reply = [8, 2, 3, 0, 1, 0x20, 1, 0x22]
+                } else {
+                    let value = bytes[1] == 0xa1 ? CustomKeyboardCommand.maximumImageSize :
+                        bytes[2..<6].reduce(0) { ($0 << 8) | Int($1) } + count - 6
+                    reply = [8, 2, bytes[1], 0, UInt8((value >> 24) & 255),
+                             UInt8((value >> 16) & 255), UInt8((value >> 8) & 255), UInt8(value & 255)]
+                }
+                Task { link.handleBytes(reply) }
+                return count
+            }
+            let controller = CustomFirmwareController()
+            controller.exchangeTimeoutNanos = 500_000_000
+            controller.connectedTarget = .init(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+            controller.attach(link)
+            await waitUntil("stream fault test identifies stock") { controller.stockMode == .stock }
+            controller.flash(image: image, rebootToInstall: true)
+            await waitUntil("A3 is buffered with a durable uncertain record") {
+                link.outboxCount == 6 && controller.pendingUpdate?.outcome == .commitUnknown
+            }
+            if invalidReply { link.handleBytes([8, 2, 0xa2, 0, 0, 0, 0, 0]) }
+            await waitUntil("blocked transaction fails") {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            blocked = false
+            link.drain()
+            link.send([2, 0xa0])
+            expect(link.outboxCount == 0 && !sent.contains(0xa3) && !sent.contains(0xa0),
+                   "timeout/invalid response permanently drops queued A3 and later output")
+            expect(CustomFirmwareController().pendingUpdate?.outcome == .commitUnknown,
+                   "blocked A3 retains the conservative journal across relaunch")
+        }
+
         print(checkFailures == 0 ? "ok" : "==== \(checkFailures) failure(s) ====")
         exit(checkFailures == 0 ? 0 : 1)
     }

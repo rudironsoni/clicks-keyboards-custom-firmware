@@ -8,14 +8,16 @@ private final class ProductionLink: KeyboardPacketLink {
     var injected = false
     var closed = false
     var checkBoundary: (() -> Void)?
+    var afterLastDataACK: (() -> Void)?
     init(_ fault: String) { self.fault = fault }
     func close() { closed = true; onFragment = nil; onClosed = nil }
     func send(_ bytes: [UInt8]) {
         precondition(!closed)
         packets.append(bytes)
         if bytes[1] == 0xa1 { checkBoundary?() }
-        if bytes[1] == 0xa3 && fault == "commit-failure" { sm_fail_write(1) }
-        if bytes[1] == 0xa2 && fault == "interrupted" {
+        // A3 first flushes the final data page, then writes the length marker.
+        if bytes[1] == 0xa3 && fault == "commit-failure" { sm_fail_write(2) }
+        if bytes[1] == 0xa2 && fault == "interrupted" && sm_write_count() >= 2 {
             sm_disconnect(); onClosed?("modeled staging disconnect"); return
         }
         if bytes[1] == 0xa2 && fault == "expired" { sm_advance_time(2_600) }
@@ -35,6 +37,9 @@ private final class ProductionLink: KeyboardPacketLink {
             onClosed?("modeled reset request closed the link"); return
         }
         if count > 0 { onFragment?(Array(reply.prefix(count))) }
+        if bytes[1] == 0xa2 && Array(reply[4..<8]) == [0, 0, 0x48, 0xd8] {
+            afterLastDataACK?()
+        }
     }
 }
 
@@ -93,6 +98,15 @@ struct StockManagerTests {
                 catch {}
             }
         }
+        if fault == "session-swap" {
+            link.afterLastDataACK = {
+                // The continuation has already succeeded, but its Task has not resumed.
+                c.detach()
+                sm_disconnect()
+                precondition(sm_authenticate())
+                c.attach(ProductionLink("read-only"))
+            }
+        }
         c.flash(image: image, rebootToInstall: true)
         try await settle(c)
         precondition(sm_protected_intact())
@@ -109,17 +123,22 @@ struct StockManagerTests {
             precondition(c.pendingUpdate?.outcome == .commitUnknown)
             precondition(link.packets.filter { $0[1] == 0xa3 }.count == 1)
         } else if fault == "commit-failure" {
-            precondition(sm_marker() == 0 && sm_reboot_count() == 0)
+            precondition(sm_marker() == UInt32.max && sm_reboot_count() == 0)
+            precondition(sm_write_count() == 75 && sm_staged_matches(image, image.count))
             precondition(c.pendingUpdate?.outcome == .commitUnknown)
         } else {
-            precondition(sm_marker() == 0 && sm_reboot_count() == 0 && c.pendingUpdate == nil)
+            precondition((sm_marker() == 0 || sm_marker() == UInt32.max) && sm_reboot_count() == 0 && c.pendingUpdate == nil)
             precondition(!link.packets.contains { $0[1] == 0xa3 || $0[1] == 0xa0 })
+            if fault == "interrupted" || fault == "session-swap" {
+                precondition(sm_write_count() >= 2 && sm_staged_matches(image, 252))
+                precondition(!sm_staged_matches(image, image.count))
+            }
         }
         let writes = sm_write_count()
         let requests = link.packets.count
         // No continuation after timeout, no automatic retry, no late reply revival.
         link.onFragment?([8, 2, 0xa2, 0, 0, 0, 0, 32])
-        c.flash(image: image, rebootToInstall: true)
+        if fault != "session-swap" { c.flash(image: image, rebootToInstall: true) }
         precondition(link.packets.count == requests && sm_write_count() == writes)
         if let record = c.pendingUpdate {
             let fresh = CustomFirmwareController()
@@ -127,7 +146,13 @@ struct StockManagerTests {
             fresh.markPendingUpdateVerified()
             precondition(fresh.pendingUpdate == record)
             if fault == "ok" {
+                sm_disconnect()
                 fresh.connectedTarget = .init(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
+                fresh.exchangeTimeoutNanos = 50_000_000
+                fresh.attach(ProductionLink("read-only"))
+                try await settle(fresh)
+                precondition(fresh.stockMode == nil && sm_write_count() == writes)
+                precondition(sm_authenticate())
                 fresh.attach(ProductionLink("read-only"))
                 try await settle(fresh)
                 precondition(fresh.stockMode == .stock)

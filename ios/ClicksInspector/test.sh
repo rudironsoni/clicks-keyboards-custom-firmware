@@ -45,6 +45,6 @@ for MODE in 0 1 2; do
     "$BUILD/stock-manager" "$MODE" ok Resources/iKeyboard_CK-5200_V122_120.bin
     "$BUILD/stock-manager" "$MODE" unauthenticated Resources/iKeyboard_CK-5200_V122_120.bin
 done
-for FAULT in wrong-model interrupted expired commit-failure lost-a1 lost-a2 lost-a3 partial; do
+for FAULT in wrong-model interrupted expired commit-failure lost-a1 lost-a2 lost-a3 partial session-swap; do
     "$BUILD/stock-manager" 2 "$FAULT" Resources/iKeyboard_CK-5200_V122_120.bin
 done
