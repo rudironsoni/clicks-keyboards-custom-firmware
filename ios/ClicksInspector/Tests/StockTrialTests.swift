@@ -38,6 +38,9 @@ struct StockTrialTests {
         precondition(!keys.contains { $0.row == 2 && $0.column == 3 })
         precondition(keys.first!.labelEvidence == .conflictingSources)
         precondition(keys.first { $0.id == "r5c2" }!.cursor == "Left")
+        // Historical v1 definitions must not follow M3's corrected QMK map.
+        precondition(keys.first { $0.id == "r1c2" }!.sym == ";" && FactoryLayout.layer1[8] == 0x0233)
+        precondition(keys.contains { $0.id == "unmapped-shift" } && FactoryLayout.layer0[15] == 0x00e1)
         precondition(Set(StockTrialCatalog.all.map(\.id)).count == StockTrialCatalog.all.count)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

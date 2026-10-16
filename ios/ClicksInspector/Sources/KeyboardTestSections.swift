@@ -68,11 +68,11 @@ struct SelfTestSection: View {
                     }
                 }
             } else {
-                Text("Runs identify, info, all-layer keymap verification against the decoded stock layout, and a write round-trip.")
+                Text("Checks all layers, temporarily remaps Left Shift (2,3), then restores its read value. Enable RAM writes for this session first.")
                     .font(.caption)
             }
             Button("Run self-test") { custom.runSelfTest() }
-                .disabled(!custom.phaseIsCustomFirmware || custom.selfTestRunning)
+                .disabled(!custom.canEditKeymap)
         }
     }
 }
@@ -114,7 +114,7 @@ struct LayoutPreviewSection: View {
                         }
                     }
                 }
-                Text("Each cell shows the decoded key at that matrix crossing. Tap cells in the Keymap section below to edit.")
+                Text("Each cell shows the decoded key at that matrix crossing. Open Edit QMK keymap and phone profiles to edit.")
                     .font(.caption)
             } else {
                 Text("Connect the custom firmware to preview the layout.")
