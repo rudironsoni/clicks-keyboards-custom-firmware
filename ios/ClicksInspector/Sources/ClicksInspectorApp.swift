@@ -25,12 +25,6 @@ struct ClicksInspectorApp: App {
                         Button("Close session") { inspector.closeSession() }
                     }
                     CustomFirmwareSection(inspector: inspector)
-                    if inspector.customFirmware.phaseIsCustomFirmware {
-                        KeyTestSection()
-                        SelfTestSection(inspector: inspector)
-                        LayoutPreviewSection(inspector: inspector)
-                    }
-                    KeymapSection(inspector: inspector)
                     Section("Read-only stock query") {
                         Picker("Command", selection: $inspector.selectedReadCommand) {
                             ForEach(StockReadPolicy.demonstrated) { command in
@@ -68,7 +62,7 @@ struct ClicksInspectorApp: App {
                                 }
                                 Button("Open session") { inspector.openSession(for: accessory) }
                                     .disabled(!accessory.isConnected || !accessory.protocolStrings.contains(AccessoryInspector.supportedProtocol))
-                                Button("Open firmware-control session") {
+                                Button("Identify stock-manager session (read-only)") {
                                     inspector.openSession(for: accessory, firmwareControls: true)
                                 }
                                 .disabled(inspector.stockEvidence.isRecording || inspector.customFirmware.phaseIsBusy || !accessory.isConnected)
@@ -139,7 +133,16 @@ private struct CustomFirmwareSection: View {
     }
 
     var body: some View {
-        Section("Firmware") {
+        Section("Verified stock firmware manager") {
+            Button("Prepare official CK-5200 V122") {
+                if let image = Self.stockImage() { custom.prepareStock(image) }
+            }
+            .accessibilityIdentifier("stockManager.prepare")
+            Text(custom.stockPreparation).accessibilityIdentifier("stockManager.preparation")
+            Text("Stock to stock: functioning updater required. QM/RS to stock: functioning authenticated application service required. Unbootable to stock: R3 unmet.")
+                .font(.caption)
+            Text("Physical installation is disabled in every iPhone build. A separate explicit authorization and recovery decision are required.")
+                .font(.caption)
             switch custom.phase {
             case .idle: Text("No session.")
             case .identifying: Text("Identifying firmware...")
@@ -152,11 +155,8 @@ private struct CustomFirmwareSection: View {
             case .updateUnverified(let message):
                 Text(message)
                 .font(.callout)
-                Button("Mark update verified") {
-                    custom.markPendingUpdateVerified()
-                }
-                .disabled(custom.pendingUpdate == nil)
-                Text("The update is only verified when the keyboard works: type on it, run the self-test, then mark it verified.")
+                Text(custom.stockObservation)
+                Text("A version reply or typing test cannot prove application replacement. The record cannot be cleared by marking it verified.")
                     .font(.caption)
             }
 
@@ -167,23 +167,24 @@ private struct CustomFirmwareSection: View {
                 // (review 2026-10-13, P1): the controller's gate requires
                 // stock 1.2.2, so offering the button while custom QMK runs
                 // would promise an operation the controller rejects.
-                if custom.phaseIsStockFirmware {
+                if custom.stockMode != nil {
                     if let image = Self.stockImage() {
-                        Button("Re-flash stock firmware (V122)") {
+                        Button("Install official stock V122 (disabled)") {
                             confirmation = .restoreStock(image)
                         }
+                        .disabled(true)
                     } else {
                         Text("Bundled stock image missing from the app bundle.")
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
                 } else {
-                    Text("Restoring stock from custom firmware is not available in this build: it needs its own authorization and verification path. The controller refuses the operation.")
+                    Text("Unknown firmware mode. Installation is refused.")
                         .font(.caption)
                 }
-                Text("Custom firmware flashing is disabled in this build: no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized until a separately reviewed image is approved; the controller refuses it. Only the bundled stock V122 artifact can be staged, and only onto a stock CK-5200.")
+                Text("Only the exact official CK-5200 V122 image is accepted for preparation. QMK installation is out of scope.")
                     .font(.caption)
-                Text("Flashing stages the image and reboots the keyboard to install it. Do not detach the case while this runs. After the reboot, re-open the session and verify before relying on the keyboard.")
+                Text("Transfer, commit acknowledgement, reboot request, stock observed, and installation proven are separate states. This app cannot prove the original installer's copy operation.")
                     .font(.caption)
             }
         }

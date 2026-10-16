@@ -5,6 +5,8 @@ BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ck5200-ios-tests.XXXXXX")"
 trap 'rm -rf "$BUILD"' EXIT
 cd "$ROOT"
 COMMON=(Sources/KeycodeNames.swift Sources/FactoryLayout.swift Sources/KeyboardSelfTest.swift Sources/CustomKeyboardProtocol.swift Sources/StockReadCommand.swift)
+CONTROLLER=(Sources/CustomFirmwareController.swift Sources/StockFirmwareTransaction.swift)
+export STOCK_MANAGER_TEST_STORAGE="$BUILD/StockUpdate.json"
 run() {
     local name="$1"
     shift
@@ -20,11 +22,29 @@ run StockTrialTests "${EVIDENCE[@]}"
 run RecorderBenchmark "${EVIDENCE[@]}"
 run ck5200_protocol_check Sources/CustomKeyboardProtocol.swift
 run ck5200_layout_check "${COMMON[@]}"
-run ck5200_stream_check -D STOCK_UPDATE_AUTHORIZED "${COMMON[@]}" Sources/CustomFirmwareController.swift Sources/StreamLink.swift
+run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
 echo "RUN DiagnosticsOnlyTests (default build)"
-xcrun swiftc -D DIAGNOSTICS_BOUNDARY_TEST "${COMMON[@]}" Sources/CustomFirmwareController.swift Tests/DiagnosticsOnlyTests.swift -o "$BUILD/diagnostics"
+xcrun swiftc -D DIAGNOSTICS_BOUNDARY_TEST "${COMMON[@]}" "${CONTROLLER[@]}" Tests/DiagnosticsOnlyTests.swift -o "$BUILD/diagnostics"
 "$BUILD/diagnostics" Resources/iKeyboard_CK-5200_V122_120.bin
 echo "RUN ck5200_flash_check"
-xcrun swiftc -D STOCK_UPDATE_AUTHORIZED -module-cache-path "$BUILD/cache" "${COMMON[@]}" Sources/CustomFirmwareController.swift \
+xcrun swiftc -D STOCK_MANAGER_OFFLINE_TESTING -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" \
     Tests/ck5200_flash_check.swift -o "$BUILD/flash"
 "$BUILD/flash" Resources/iKeyboard_CK-5200_V122_120.bin Resources/ck5200_qmk.bin
+
+# Even the old write flag and the new manager configuration cannot write.
+for FLAGS in STOCK_UPDATE_AUTHORIZED STOCK_FIRMWARE_MANAGER; do
+    xcrun swiftc -D "$FLAGS" -D DIAGNOSTICS_BOUNDARY_TEST -module-cache-path "$BUILD/cache" \
+        "${COMMON[@]}" "${CONTROLLER[@]}" Tests/DiagnosticsOnlyTests.swift -o "$BUILD/boundary-$FLAGS"
+    "$BUILD/boundary-$FLAGS" Resources/iKeyboard_CK-5200_V122_120.bin
+done
+bash Tests/build-stock-manager-bridge.sh "$BUILD/libStockManagerBridge.a"
+xcrun swiftc -D STOCK_MANAGER_OFFLINE_TESTING -module-cache-path "$BUILD/cache" \
+    -import-objc-header Tests/StockManagerBridge.h "${COMMON[@]}" "${CONTROLLER[@]}" \
+    Tests/StockManagerTests.swift "$BUILD/libStockManagerBridge.a" -o "$BUILD/stock-manager"
+for MODE in 0 1 2; do
+    "$BUILD/stock-manager" "$MODE" ok Resources/iKeyboard_CK-5200_V122_120.bin
+    "$BUILD/stock-manager" "$MODE" unauthenticated Resources/iKeyboard_CK-5200_V122_120.bin
+done
+for FAULT in wrong-model interrupted expired commit-failure lost-a1 lost-a2 lost-a3 partial session-swap; do
+    "$BUILD/stock-manager" 2 "$FAULT" Resources/iKeyboard_CK-5200_V122_120.bin
+done

@@ -260,6 +260,10 @@ struct CustomKeyboardExchange {
         CustomKeyboardExchange(request: CustomKeyboardCommand.finishUpdateRequest(size: size), command: 0xa3, expectedLength: 8)
     }
 
+    static func reboot() -> CustomKeyboardExchange {
+        CustomKeyboardExchange(request: CustomKeyboardCommand.rebootRequest, command: 0xa0, expectedLength: 4)
+    }
+
     private init(request: [UInt8], command: UInt8, expectedLength: Int, existing: CustomKeyboardAccumulator? = nil) {
         self.request = request
         self.command = command
