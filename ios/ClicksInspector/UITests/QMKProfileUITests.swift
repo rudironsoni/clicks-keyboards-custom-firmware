@@ -2,6 +2,7 @@ import XCTest
 
 final class QMKProfileUITests: XCTestCase {
     func testEditSaveReconnectReapplyAndRestore() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["QMK_PROFILE_TEST_ID"] = UUID().uuidString
         app.launch()
@@ -87,8 +88,9 @@ final class QMKProfileUITests: XCTestCase {
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for direction in [true, false] {
             for _ in 0..<25 {
-                if element.exists && element.isHittable,
-                   app.frame.insetBy(dx: 0, dy: 100).contains(element.frame) { return }
+                // A bottom row can be tappable without fitting inside an arbitrary
+                // screen inset. XCTest accounts for clipping and overlays here.
+                if element.exists && element.isHittable { return }
                 let up = element.exists && !element.frame.isEmpty ? element.frame.midY > app.frame.midY : direction
                 let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.55))
                 let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.35 : 0.75))
