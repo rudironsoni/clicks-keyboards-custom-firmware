@@ -1,6 +1,7 @@
 #include <string.h>
 #include "tusb.h"
 #include "config.h"
+#include "ck5200_identity.h"
 
 /*
  * USB topology matches the stock CK-5200 V122 image (linked 0x6500..0x6560)
@@ -77,23 +78,35 @@ static uint8_t const hid_report_descriptor[] = {
     0x75, 0x08,       /*   Report Size (8) */
     0x95, 0x01,       /*   Report Count (1) */
     0x81, 0x03,       /*   Input (Const): reserved byte */
+    0x05, 0x08,       /*   Usage Page (LEDs) */
+    0x19, 0x01, 0x29, 0x05,
+    0x75, 0x01, 0x95, 0x05,
+    0x91, 0x02,       /*   Output: five keyboard LEDs */
+    0x75, 0x03, 0x95, 0x01,
+    0x91, 0x03,       /*   Output: three padding bits */
+    0x05, 0x07,       /*   Usage Page (Key Codes) */
+    0x19, 0x00,       /*   Usage Min (0), not the modifier range */
+    0x2A, 0xFF, 0x00, /*   Usage Max (255) */
     0x15, 0x00,       /*   Logical Min (0) */
     0x26, 0xFF, 0x00, /*   Logical Max (255) */
     0x75, 0x08,       /*   Report Size (8) */
     0x95, 0x06,       /*   Report Count (6) */
     0x81, 0x00,       /*   Input (Data, Array): keys */
+    0xC0,            /* End keyboard collection */
     0x05, 0x0C,       /*   Usage Page (Consumer) */
+    0x09, 0x01, 0xA1, 0x01, /* Consumer Control application */
     0x15, 0x00,       /*   Logical Min (0) */
-    0x26, 0xFF, 0x01, /*   Logical Max (511) */
+    0x26, 0x9D, 0x02, /*   Logical Max (0x029D, highest mapped usage) */
+    0x19, 0x00, 0x2A, 0x9D, 0x02, /* Usage range (0..0x029D) */
     0x75, 0x10,       /*   Report Size (16) */
     0x95, 0x01,       /*   Report Count (1) */
-    0x81, 0x02,       /*   Input (Data, Var, Abs): consumer usage */
+    0x81, 0x00,       /*   Input (Data, Array): consumer usage selector */
     0xC0              /* End Collection */
 };
 
-#define HID_REPORT_LEN ((uint8_t)sizeof(hid_report_descriptor)) /* 45 */
+#define HID_REPORT_LEN ((uint8_t)sizeof(hid_report_descriptor))
 
-/* 96 bytes, byte-exact with stock image 0x6500..0x6560. */
+/* Stock topology, 96 bytes; HID version and report length differ. */
 static uint8_t const configuration_descriptor[] = {
     /* Configuration: 3 interfaces, bus powered + remote wakeup, 100 mA. */
     0x09, TUSB_DESC_CONFIGURATION, 0x60, 0x00, ITF_NUM_TOTAL, 0x01, 0x00, 0xA0, 0x32,
@@ -102,7 +115,7 @@ static uint8_t const configuration_descriptor[] = {
     0x09, TUSB_DESC_INTERFACE, ITF_NUM_HID, 0x00, 0x02,
     0x03, 0x01, 0x01, 0x00,
     0x09, 0x21 /* HID */, 0x11, 0x01, 0x00, 0x01, 0x22 /* report */,
-    U16_TO_U8S_LE(HID_REPORT_LEN), 0x00,
+    U16_TO_U8S_LE(HID_REPORT_LEN),
     0x07, TUSB_DESC_ENDPOINT, EPNUM_HID_IN, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(64), 0x01,
     0x07, TUSB_DESC_ENDPOINT, EPNUM_HID_OUT, TUSB_XFER_INTERRUPT, U16_TO_U8S_LE(64), 0x01,
 
@@ -122,6 +135,8 @@ static uint8_t const configuration_descriptor[] = {
     0x07, TUSB_DESC_ENDPOINT, EPNUM_EA_OUT, TUSB_XFER_BULK, U16_TO_U8S_LE(64), 0x00,
 };
 
+_Static_assert(sizeof(configuration_descriptor) == 96, "USB configuration length");
+
 uint8_t const *tud_descriptor_device_cb(void) {
     return (uint8_t const *)&device_descriptor;
 }
@@ -140,7 +155,7 @@ static char const *string_desc_arr[] = {
     (const char[]){0x09, 0x04},           /* 0: LANGID US English */
     "Clicks Technology Limited",          /* 1: stock image 0x663b */
     "Clicks Creator Keyboard",            /* 2: stock image 0x6671 */
-    "190200001",                          /* 3: stock image 0x66a0 serial */
+    NULL,                                /* 3: read-only device serial */
     "iAP2 Interface",                     /* 4: stock image 0x65e3 */
     "com.clickscompanion.protocol",       /* 5: stock image 0x6600 */
 };
@@ -150,6 +165,7 @@ static uint16_t string_desc[32];
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     (void)langid;
     uint8_t count;
+    char serial[11];
 
     if (index == STRID_LANGID) {
         memcpy(&string_desc[1], string_desc_arr[0], 2);
@@ -157,6 +173,10 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
     } else {
         if (index >= sizeof(string_desc_arr) / sizeof(string_desc_arr[0])) return NULL;
         const char *str = string_desc_arr[index];
+        if (index == STRID_SERIAL) {
+            ck5200_serial(serial);
+            str = serial;
+        }
         count = (uint8_t)strlen(str);
         if (count > 31) count = 31;
         for (uint8_t i = 0; i < count; ++i) string_desc[1 + i] = (uint8_t)str[i];

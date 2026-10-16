@@ -6,6 +6,7 @@
 #include "iap2.h"
 #include "iap2_auth.h"
 #include "iap2_ident_data.h"
+#include "ck5200_identity.h"
 #include "tusb.h"
 #include <string.h>
 
@@ -75,12 +76,12 @@ static uint16_t link_header(uint8_t *buf, uint16_t max, uint8_t control,
     return total;
 }
 
-/* KVP entry (stock 0x53e4). src NULL writes only the header; the value is
- * expected to already sit at dst+4. */
+/* KVP entry (stock 0x53e4). src NULL writes only the header; the value
+ * may already sit at dst+4 or span subsequent certificate packets. */
 static uint16_t build_param(uint8_t *dst, uint16_t max, uint8_t id,
                            const uint8_t *src, uint16_t len) {
     const uint16_t entry = (uint16_t)(len + 4u);
-    if (!dst || max < entry) return 0;
+    if (!dst || max < 4u || (src && max < entry)) return 0;
     dst[0] = (uint8_t)(entry >> 8);
     dst[1] = (uint8_t)entry;
     dst[2] = 0;
@@ -89,11 +90,12 @@ static uint16_t build_param(uint8_t *dst, uint16_t max, uint8_t id,
     return entry;
 }
 
-/* Control message envelope (stock 0x53b0): 40 40 <len> <type>. */
+/* Control message header (stock 0x53b0): 40 40 <len> <type>.
+ * Declared length may span certificate packets; only six bytes are written. */
 static uint16_t build_msg(uint8_t *dst, uint16_t max, uint16_t type,
                           uint16_t body_len) {
     const uint16_t frame = (uint16_t)(body_len + 7u);
-    if (!dst || max < frame) return 0;
+    if (!dst || max < 6u) return 0;
     dst[0] = 0x40;
     dst[1] = 0x40;
     dst[2] = (uint8_t)((body_len + 6u) >> 8);
@@ -178,9 +180,10 @@ static bool op_pump(void) {
             chunk = (uint16_t)(c->msg_total - (uint16_t)c->msg_cursor * CHUNK_SIZE);
         }
         if (!iap2_auth_read(c->auth_addr,IAP2_AUTH_SEL_CHUNK_BASE + c->msg_cursor, pkt + 9, chunk)) return false;
-        c->msg_cursor++;
         pkt[9 + chunk] = cksum8(pkt + 9, chunk);
-        return send_payload((uint16_t)(chunk + 1u));
+        if (!send_payload((uint16_t)(chunk + 1u))) return false;
+        c->msg_cursor++;
+        return true;
     }
 
     /* Previous message fully sent: peek for the next one (stock 0x62ea). */
@@ -195,7 +198,7 @@ static bool op_pump(void) {
         return false; /* stock retries after the failure backoff */
     }
     c->msg_total = (uint16_t)((peek[0] << 8) | peek[1]);
-    if (c->msg_total == 0) return false;
+    if (c->msg_total == 0 || c->msg_total > (256u - IAP2_AUTH_SEL_CHUNK_BASE) * CHUNK_SIZE) return false;
 
     /* First chunk: message header + KVP header + 128 bytes (stock always
      * reads 128 for the first chunk) + checksum = 139 payload bytes. */
@@ -204,15 +207,17 @@ static bool op_pump(void) {
     (void)build_msg(pkt + 9, (uint16_t)(IAP2_PKT_MAX - 9), 0xaa01,
                     (uint16_t)(c->msg_total + 4u));
     pkt[9 + 138] = cksum8(pkt + 9, 138);
+    /* A busy USB endpoint must not consume an unsent certificate chunk. */
+    if (!send_payload(139u)) return false;
     c->msg_cursor = 1;
     c->msg_chunks = (uint8_t)((c->msg_total + CHUNK_SIZE - 1u) / CHUNK_SIZE);
-    return send_payload(139u);
+    return true;
 }
 
 /* Shared tail: checksum the control message at pkt+9 and send it. */
 static bool finish_frame(uint16_t frame) {
     iap2_ctx_t *c = &iap2_ctx;
-    if (frame == 0) return false;
+    if (frame == 0 || frame > IAP2_PKT_MAX - 9u) return false;
     c->pkt[9 + frame - 1] = cksum8(c->pkt + 9, frame - 1);
     return send_payload(frame);
 }
@@ -262,9 +267,12 @@ static bool op_identify(void) {
 
     for (unsigned i = 0; i < IAP2_IDENT_PARAM_COUNT; ++i) {
         const iap2_ident_param_t *p = &iap2_ident_params[i];
+        char serial[11];
+        if (p->id == 3) ck5200_serial(serial);
         const uint16_t entry = build_param(pkt + 15 + used,
                                            (uint16_t)(IAP2_PKT_MAX - 15 - used),
-                                           p->id, p->data, p->len);
+                                           p->id, p->id == 3 ? (const uint8_t *)serial : p->data,
+                                           p->id == 3 ? sizeof(serial) : p->len);
         if (entry == 0) return false;
         used = (uint16_t)(used + entry);
     }

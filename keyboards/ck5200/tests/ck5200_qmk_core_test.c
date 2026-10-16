@@ -154,9 +154,9 @@ static void t_first_boot_defaults(void) {
     CHECK(dynamic_keymap_get_keycode(0, 0, 0) == KC_Q, "L0(0,0)=KC_Q");
     CHECK(dynamic_keymap_get_keycode(0, 3, 0) == KC_R, "L0(3,0)=KC_R");
     CHECK(dynamic_keymap_get_keycode(1, 0, 0) == KC_1, "L1(0,0)=KC_1");
-    CHECK(dynamic_keymap_get_keycode(1, 2, 4) == KC_1, "L1(2,4)=KC_1");
+    CHECK(dynamic_keymap_get_keycode(1, 2, 4) == S(KC_1), "L1(2,4)=S(KC_1)");
     CHECK(dynamic_keymap_get_keycode(2, 1, 2) == KC_RIGHT, "L2(1,2)=KC_RIGHT");
-    CHECK(dynamic_keymap_get_keycode(0, 2, 3) == KC_NO, "spare L0(2,3)=KC_NO");
+    CHECK(dynamic_keymap_get_keycode(0, 2, 3) == KC_LSFT, "L0(2,3)=KC_LSFT (stock 0x2ae6)");
     CHECK(dynamic_keymap_get_keycode(3, 5, 5) == KC_TRNS, "L3(5,5)=KC_TRNS");
     CHECK(eeconfig_is_enabled(), "eeconfig enabled after first boot");
 }
@@ -408,9 +408,9 @@ static void t_consumer_encoding(void) {
     settle(12);
     CHECK(ck5200_consumer_usage() == 0, "consumer released");
 
-    set_key(0, 5, true); /* CK_CONS_A -> 0x01AE */
+    set_key(0, 5, true); /* CK_CONS_A -> stock bit 2 = 0x00CF */
     settle(12);
-    CHECK(ck5200_consumer_usage() == 0x01AE, "CK_CONS_A latched 0x01AE (got 0x%04x)", ck5200_consumer_usage());
+    CHECK(ck5200_consumer_usage() == 0x00CF, "CK_CONS_A latched 0x00CF (got 0x%04x)", ck5200_consumer_usage());
     set_key(0, 5, false);
     settle(12);
 }

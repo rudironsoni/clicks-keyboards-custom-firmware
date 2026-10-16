@@ -12,11 +12,13 @@ typedef struct {
     bool (*write)(uint32_t offset, const uint8_t *data, uint8_t length, uint32_t *accepted_offset);
     bool (*finish)(uint32_t size, uint32_t *committed_size);
     void (*reboot)(void);
+    bool (*reboot_allowed)(void);
 } ck5200_update_ops_t;
 
 /*
  * Handles one complete request from the stock CK-5200 updater protocol.
- * A1/A2/A3 return an 8-byte response in response[]. A0 returns zero bytes.
+ * A1/A2/A3 return eight bytes. Allowed A0 returns 04 02 A0 00 without
+ * resetting. The transport may call reboot only after successful ACK delivery.
  */
 size_t ck5200_update_handle(
     const uint8_t *request,
