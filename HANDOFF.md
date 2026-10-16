@@ -12,8 +12,8 @@ The presumed installer region is not a proven immutable recovery service. A patc
 HTTPS inspection is stopped. The stock URL was already known. No phone settings changed, and the vendor inquiry remains unsent.
 M2 [application-level rescue](keyboards/ck5200/docs/application-rescue.md) is COMPLETE, accepted by Rudi at `ee45b6bbb2b544f19d44c036099c4af2c5aa7156` after independent review.
 Acceptance covers the software-only secondary mechanism, not physical compatibility, iPhone-operated restoration, or recovery from an unbootable application.
-M3 is authorized for software work only: freeze the existing QMK candidate, complete iPhone RAM-keymap profiles, and prepare a spare-only bring-up procedure.
-See [first-boot evidence](keyboards/ck5200/docs/m3-first-boot.md) and [spare procedure](keyboards/ck5200/docs/m3-spare-bring-up.md).
+M3's three software deliverables are implemented and independently reviewed: frozen QMK candidate, iPhone RAM-keymap profiles, and spare-only bring-up procedure.
+See [passing CI, artifact hashes and screenshots](keyboards/ck5200/docs/m3-verification.md), [first-boot evidence](keyboards/ck5200/docs/m3-first-boot.md) and [spare procedure](keyboards/ck5200/docs/m3-spare-bring-up.md).
 Stop after these deliverables and independent review. Acquisition and any physical work require a separate decision; R3 remains unmet.
 
 - Comprehensive physical characterization remains UNVERIFIED beyond the recorded observations. Baseline collection is closed.
