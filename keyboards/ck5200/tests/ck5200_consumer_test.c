@@ -14,10 +14,19 @@
 #include <string.h>
 
 #include "ck5200_consumer.h"
+#include "action_util.h"
+#include "host.h"
+
+static report_keyboard_t test_report;
+report_keyboard_t *keyboard_report = &test_report;
+static unsigned send_count;
+void host_keyboard_send(report_keyboard_t *report) {
+    assert(report == keyboard_report);
+    ++send_count;
+}
 
 static void check_idle(void) {
     assert(ck5200_consumer_usage() == 0);
-    assert(!ck5200_consumer_dirty());
 }
 
 static void check_pack(uint16_t usage) {
@@ -33,58 +42,51 @@ int main(void) {
     check_idle();
     check_pack(0);
 
-    /* Press sets the usage and marks the report dirty. */
+    /* Each real state change sends the current keyboard report. */
     ck5200_consumer_key(0x00B8, true); /* Eject: iOS on-screen keyboard */
     assert(ck5200_consumer_usage() == 0x00B8);
-    assert(ck5200_consumer_dirty());
-    check_pack(0x00B8);
-
-    /* Clearing dirty is explicit; the usage survives it. */
-    ck5200_consumer_clear_dirty();
-    assert(!ck5200_consumer_dirty());
-    assert(ck5200_consumer_usage() == 0x00B8);
+    assert(send_count == 1);
     check_pack(0x00B8);
 
     /* Re-press of the active key (key repeat) changes nothing: no
      * redundant resend, usage unchanged. */
     ck5200_consumer_key(0x00B8, true);
     assert(ck5200_consumer_usage() == 0x00B8);
-    assert(!ck5200_consumer_dirty());
+    assert(send_count == 1);
 
     /* Pressing a different consumer key replaces the active one. */
     ck5200_consumer_key(0x01AE, true);
     assert(ck5200_consumer_usage() == 0x01AE);
-    assert(ck5200_consumer_dirty());
-    ck5200_consumer_clear_dirty();
+    assert(send_count == 2);
     check_pack(0x01AE);
 
     /* Releasing a key that is not active changes nothing. */
     ck5200_consumer_key(0x029D, false);
     assert(ck5200_consumer_usage() == 0x01AE);
-    assert(!ck5200_consumer_dirty());
+    assert(send_count == 2);
 
-    /* Releasing the active key clears the field and marks dirty. */
+    /* Releasing the active key clears the field and sends a report. */
     ck5200_consumer_key(0x01AE, false);
     assert(ck5200_consumer_usage() == 0);
-    assert(ck5200_consumer_dirty());
-    ck5200_consumer_clear_dirty();
+    assert(send_count == 3);
     check_pack(0);
 
     /* Release of an already-clear field is a no-op. */
     ck5200_consumer_key(0x00B8, false);
     assert(ck5200_consumer_usage() == 0);
-    assert(!ck5200_consumer_dirty());
+    assert(send_count == 3);
 
     /* All three stock usages plus Eject fit the 16-bit field. */
     const uint16_t usages[] = {0x00B8, 0x01AE, 0x029D, 0x00CF};
+    unsigned before = send_count;
     for (size_t i = 0; i < sizeof(usages) / sizeof(usages[0]); ++i) {
         ck5200_consumer_key(usages[i], true);
         assert(ck5200_consumer_usage() == usages[i]);
         check_pack(usages[i]);
         ck5200_consumer_key(usages[i], false);
         assert(ck5200_consumer_usage() == 0);
-        ck5200_consumer_clear_dirty();
     }
+    assert(send_count == before + 8);
 
     puts("ok 7");
     return 0;

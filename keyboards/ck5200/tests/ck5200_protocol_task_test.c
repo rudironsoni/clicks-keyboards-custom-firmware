@@ -440,7 +440,7 @@ static void p8_report_recovery(void) {
     before = stub_submit_count;
     reject_report = false; settle_ticks(12);
     CHECK(stub_submit_count > before && stub_epin_buf[8] == 0x9d && stub_epin_buf[9] == 2,
-          "rejected consumer submission retains dirty state");
+          "rejected consumer submission stays queued for retry");
     set_key(1, 5, false); settle_ticks(12);
     CHECK(wire_empty(), "consumer release reaches wire");
 
@@ -534,6 +534,7 @@ static void p10_consumer_tap_during_busy_endpoint(void) {
     CHECK(wire_count == 1 && wire_history[0][2] == KC_Q,
           "Q press owns the endpoint before consumer tap");
 
+    /* Q press, consumer press, and consumer release use three of 16 slots. */
     stub_hid_ready = false;
     long scans_before = scan_calls;
     set_key(5, 5, true);

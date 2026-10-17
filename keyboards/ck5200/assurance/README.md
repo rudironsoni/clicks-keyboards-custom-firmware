@@ -21,9 +21,10 @@ artifact identity and is an assurance entry point.
 
 This profile accepts only the reviewed release:
 
-- BIN: `4f30569f0e439137e18899dbec268eacfee0af54f7e55334fb82b86e6842f394`, 26644 bytes.
-- ELF contract: `0d0a7a722563f5c15ea927d24241d61bca3652e647fa5918d9987b5001f1b8c2`.
-- Reference hosted ELF provenance: `362efbe227ed3a0a908659efdec4acdd7fc5eaa1d85d6e1beb2342aa6a85d714` (run `39068934989`).
+- BIN: `322f227997d5ea8c291a06dc2e5c210be31f1a97c00816c18ffcf161e7326c00`, 26620 bytes.
+- ELF contract: `de296b6d1ed8b342e07c2426f51d672f3d34990104ec340d2d73e42cc31296d2`.
+- Local ELF provenance: `872501f24dc185ea7ca78b9053b5d4799b93a273195b24cbf7af5f7fcbef7bbd`.
+- Application bytes end at `0x87fc`, leaving 516 bytes before `0x8a00`.
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
 - OpenWCH register reference: `c6253942b29ff2a3f5e2829182a874afffa45881`.
 
@@ -46,12 +47,21 @@ Hosted run `39050140084` failed the original whole-ELF hash check.
 Diagnostic run `39051670366` retained the exact same hosted ELF for comparison.
 Its compiler comment says `x86_64` instead of `arm64`, moving the attribute-section
 file offset by one byte. Runtime symbols, attributes, load segments, and BIN match.
-Both historical artifacts shared the *previous* profile contract. The liveness
-revision is a new exact-BIN profile, manually reviewed using the actual
-hosted ELF and disassembly; accepting a new hash alone is insufficient.
-For its disconnected USB case, the main loop calls QMK at `0x7ef6`, returns
-at `0x7efa`, and branches back at `0x7f4a`. GPIO row read `0x6118`
-indexes using `a5` (x15), with the six-row bound at `0x6130`.
+Both historical artifacts shared an earlier profile contract. The consumer
+recovery correction has a new exact-BIN profile, reviewed against the rebuilt
+baseline and corrected ELF disassembly before updating any identity.
+The consumer setter stores the new usage then jumps through the existing
+`host_keyboard_send` at `0x266a`. The same FIFO owns consumer and keyboard states.
+For disconnected USB, the main loop calls QMK at `0x7ef8`, returns at `0x7efc`,
+and branches from `0x7f4a` to loop head `0x7ea8`. GPIO row read `0x6116`
+uses `a5` (x15), with the six-row bound at `0x612e` and scan completion at `0x6132`.
+`SystemInit` returns at `0x7ff0`, startup MRET is `0x7ffc`, and SysTick MRET
+is `0x7806`. Rescue consumption `0x7bcc`, transport return `0x7cc0`, and
+rescue loop `0x7c8a` to `0x7caa` retain their meanings.
+The preceding `e477c26` BIN was
+`4f30569f0e439137e18899dbec268eacfee0af54f7e55334fb82b86e6842f394`,
+with contract `0d0a7a722563f5c15ea927d24241d61bca3652e647fa5918d9987b5001f1b8c2`.
+See the [consumer correction record](../docs/firmware-assurance.md#consumer-transition-recovery-correction-2026-10-18).
 The old `6a29277` profile had BIN hash
 `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`
 and ELF contract

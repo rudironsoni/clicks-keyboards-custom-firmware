@@ -217,3 +217,124 @@ requires re-review of this contract.
 - No physical device operation, software flashing, hardware modification,
   peripheral accessory, or vendor communication occurred.
   **R3 is UNMET. Physical flashing remains NO-GO.**
+
+
+## Consumer-transition recovery correction, 2026-10-18
+
+The reviewed `e477c2645e8de357c3a542f514a6e8817acb0df4` firmware lost consumer taps
+while an outstanding HID transfer blocked queue insertion. QMK processed the
+press and release, but the release replaced the unqueued consumer usage.
+The defect occurred with spare capacity in the sixteen-report FIFO.
+
+The permanent regressions first landed without production changes in
+[`b9abd91f52745cb0c970ba01fe6fcdbd0a176505`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/b9abd91f52745cb0c970ba01fe6fcdbd0a176505).
+The ASan/UBSan protocol harness returned exit 1 for each new scenario:
+
+```text
+FAIL missing consumer usage 0x00B8 after recovery
+FAIL retry keeps exact Q/0000, Q/00B8, Q/0000 reports (count=3)
+FAIL same-scan 0x00CF, 0x00B8, release reach wire in order (count=1)
+```
+
+P10 confirms that QMK processed both consumer edges while scans continued and
+TinyUSB remained busy. Its three pending states fit below the sixteen-report
+limit. After endpoint recovery, the corrected code submits the uncertain Q
+report again, then distinct Q/00B8 and Q/0000 reports. The test compares all ten
+bytes, checks the final keyboard release, and rejects idle replay.
+P11 changes two consumer crossings in one matrix pass and requires three ordered
+reports, 00CF, 00B8, and 0000. This excludes a fix that captures only after the scan.
+Both tests pass unchanged in their assertions after the correction.
+
+`ck5200_consumer_key()` now calls the existing `host_keyboard_send()` for each
+actual state change. That path snapshots the current keyboard and consumer state
+through `send_keyboard_impl()` and the existing FIFO before another event runs.
+The old dirty flag and end-of-task polling are removed. The necessary scope
+extension is `firmware/platform/ch32x035/ck5200_consumer.h`, whose obsolete API
+declarations and contract must match the changed implementation.
+The consumer unit test retains replacement, repeated-press, inactive-release,
+final-release, and little-endian packing checks through synchronous send counts.
+Its existing test-script entry now uses the common QMK headers and sanitizer flags.
+
+The FIFO depth, overload coalescing, missing-callback grace, endpoint readiness
+checks, connection policies, and eight-byte boot format remain unchanged.
+An uncertain in-flight retry can duplicate a report. This is ordered delivery
+under resumed transfer progress, not exactly-once delivery.
+
+### Exact artifact and executable review
+
+The pinned local build reproduced the old BIN and ELF contract before the fix.
+The corrected build and image validator returned exit 0 with these identities:
+
+| Property | Corrected artifact |
+| --- | --- |
+| BIN size | 26,620 bytes, 24 fewer than the preceding image |
+| BIN SHA-256 | `322f227997d5ea8c291a06dc2e5c210be31f1a97c00816c18ffcf161e7326c00` |
+| Local ELF SHA-256 | `872501f24dc185ea7ca78b9053b5d4799b93a273195b24cbf7af5f7fcbef7bbd` |
+| ELF runtime contract SHA-256 | `de296b6d1ed8b342e07c2426f51d672f3d34990104ec340d2d73e42cc31296d2` |
+| Application image | `[0x2000,0x87fc)`, 516 bytes below the unchanged `0x8a00` limit |
+| Executable sections | `.init [0x2000,0x2004)`, `.vector [0x2004,0x2100)`, `.text [0x2100,0x876c)` |
+| Initialized data | Flash `[0x876c,0x87fc)`, RAM `[0x20000000,0x20000090)` |
+| BSS and retained data | BSS `[0x20000090,0x200012d8)`, `.noinit [0x200012d8,0x200012e0)` |
+| Stack contract | `_estack=0x20005000`, `__stack_size=0x800`, `gp=0x20000828` |
+
+The setter at `0x2ea6` stores a changed usage at `0x2eb0` or clears it at `0x2ec0`,
+then passes the static keyboard report at `0x20000094` to `host_keyboard_send`
+at `0x266a`. `send_keyboard_impl` at `0x4bde` queues the snapshot before attempting
+submission. The queue still packs eight keyboard bytes plus the consumer halfword.
+The compiler now shares `host_keyboard_send` with `send_6kro_report` and expands
+main's stack frame from 64 to 80 bytes within the unchanged 2,048-byte budget.
+
+The reviewed profile binds QMK's disconnected call `0x7ef8` and return `0x7efc`,
+normal loop `0x7ea8` and back edge `0x7f4a`, GPIO read `0x6116`, and completed
+six-row scan `0x6132`. Row index remains `a5`/x15 with the six-row bound at `0x612e`.
+Startup return `0x7ff0`, startup MRET `0x7ffc`, and SysTick MRET `0x7806` moved.
+Rescue consumption `0x7bcc`, transport setup return `0x7cc0`, rescue loop `0x7c8a`,
+and rescue back edge `0x7caa` retain their meanings.
+No execution obligation, memory limit, progress deadline, or rejection check changed.
+
+### Verification evidence
+
+The following local commands returned exit 0 against the corrected source:
+
+```sh
+bash scripts/build.sh
+bash scripts/test.sh
+python3 assurance/run.py --image build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
+```
+
+The full firmware test script passed. Its QMK, protocol, consumer, and production
+entry harnesses use ASan/UBSan. Existing tests retain coverage for per-key debounce,
+scan progress, modifiers, combined reports, rejected and failed transfers, FIFO
+overload, suspend, unmount, resume, reconnect, and boot protocol.
+The initial full-script attempt stopped at its missing Python environment.
+The successful run used an isolated worktree environment with the existing package
+versions and a copy of the existing hash-verified stock fixture. No shared dependency
+or source configuration changed to make tests pass.
+
+The strict report records all four successful cases. Cold, retained warm, and
+invalid-rescue entry each complete 896 scans and loops. Valid rescue completes
+6,464 transport loops with zero QMK scans. Each case validates 99 SysTick returns.
+All 193 cached and uncached instruction fixtures, 21 rejected operations, six
+execution-boundary cases, two initial stalls, and two late-stall controls pass.
+Artifact controls reject BIN mismatch and runtime symbol, ABI, entry, and segment
+permission mutations while accepting non-loadable compiler-comment changes.
+
+Local evidence is retained under `build/consumer-fix-evidence/`, including the
+red and green logs, compiler commands, baseline and corrected executable inspection,
+and full test output. `build/assurance/report.json` and its adjacent traces bind
+the exact executed BIN and ELF identities.
+
+Independent review found no unresolved in-scope correctness blocker. The reviewer
+rebuilt and passed all protocol scenarios with sanitizers, reran both preserved red
+cases with exit 1, and independently passed the strict gate with all controls.
+Fresh disassembly confirmed the capture path, FIFO bounds, transfer guards,
+tracepoints, register choices, and memory layout. The review record and independent
+strict report are `build/consumer-fix-evidence/independent-review.md` and
+`build/consumer-fix-evidence/independent-assurance.json`.
+Hosted verification of the final implementation revision is pending publication.
+
+The model remains disconnected USB with direct application entry. It does not
+prove connected USB behavior, installation safety, protected-byte preservation,
+interruption recovery, or independent iPhone-only recovery. Watchdog supervision
+and connected-USB emulation remain separate workstreams.
+**R3 remains UNMET. Physical flashing remains NO-GO.**

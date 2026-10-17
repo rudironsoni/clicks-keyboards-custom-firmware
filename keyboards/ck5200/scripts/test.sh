@@ -33,15 +33,6 @@ cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmwar
 
 "$TEST_BUILD/ck5200_backlight_test"
 
-# Consumer-key state machine: press/release semantics and 10-byte
-# report packing against the descriptor contract.
-cc -std=c11 -Wall -Wextra -I firmware/platform/ch32x035 \
-  tests/ck5200_consumer_test.c \
-  firmware/platform/ch32x035/ck5200_consumer.c \
-  -o "$TEST_BUILD/ck5200_consumer_test"
-
-"$TEST_BUILD/ck5200_consumer_test"
-
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \
   firmware/platform/ch32x035/ck5200_keymap.c \
@@ -117,6 +108,11 @@ QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c
  $Q/tmk_core/protocol/usb_device_state.c $Q/platforms/test/timer.c"
 QCK="$ROOT/firmware/platform/ch32x035/ck5200_consumer.c \
  $ROOT/firmware/platform/ch32x035/ck5200_keymap.c"
+
+# Consumer-key state changes send through QMK's host interface.
+cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_consumer_test" \
+  tests/ck5200_consumer_test.c firmware/platform/ch32x035/ck5200_consumer.c
+"$TEST_BUILD/ck5200_consumer_test"
 
 cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_qmk_core_test" \
   tests/ck5200_qmk_core_test.c $QCORE $QCK

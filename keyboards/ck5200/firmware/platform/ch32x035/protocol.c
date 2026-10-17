@@ -66,7 +66,6 @@ static void queue_keyboard_report(const report_keyboard_t *report) {
     if (hid_count < HID_QUEUE_DEPTH) ++hid_count;
     uint8_t tail = (uint8_t)((hid_head + hid_count - 1u) % HID_QUEUE_DEPTH);
     ck5200_consumer_pack(hid_queue[tail], (const uint8_t *)report);
-    ck5200_consumer_clear_dirty();
 }
 
 static void send_keyboard_impl(report_keyboard_t *report) {
@@ -96,13 +95,6 @@ void protocol_keyboard_task(void) {
 
     if (!connected || keyboard_report_in_flight || !tud_hid_ready()) return;
     if (hid_count) { (void)submit_hid_report(); return; }
-
-    /* A consumer-only change still needs a fresh report on the wire. */
-    if (ck5200_consumer_dirty()) {
-        if (keyboard_report) queue_keyboard_report(keyboard_report);
-        else if (last_keyboard_report_valid) queue_keyboard_report(&last_keyboard_report);
-        if (submit_hid_report()) return;
-    }
 
     if (keyboard_idle != 0 && last_keyboard_report_valid &&
         timer_elapsed32(last_keyboard_report_sent_at) >= (uint32_t)keyboard_idle * 4u) {
