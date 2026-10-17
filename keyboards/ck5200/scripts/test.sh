@@ -121,13 +121,18 @@ QCK="$ROOT/firmware/platform/ch32x035/ck5200_consumer.c \
 cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_qmk_core_test" \
   tests/ck5200_qmk_core_test.c $QCORE $QCK
 
-"$TEST_BUILD/ck5200_qmk_core_test"
+liveness_failures=0
+"$TEST_BUILD/ck5200_qmk_core_test" || liveness_failures=$((liveness_failures + 1))
 
 cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_protocol_task_test" \
   tests/ck5200_protocol_task_test.c \
   firmware/platform/ch32x035/protocol.c firmware/keyboard/matrix.c $QCORE $QCK
 
-"$TEST_BUILD/ck5200_protocol_task_test"
+"$TEST_BUILD/ck5200_protocol_task_test" || liveness_failures=$((liveness_failures + 1))
+if (( liveness_failures > 0 )); then
+  echo "Both liveness harnesses ran; $liveness_failures failure(s)" >&2
+  exit 1
+fi
 
 # Real selected main, transport tasks, Apple session, and constrained staging.
 M2_BUILD="$TEST_BUILD"
