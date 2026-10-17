@@ -237,7 +237,9 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         g.scan_stage=2; g.rows=g.row_mask=0; event(m,"keyboard-task-enter");
     }
     if (pc == P_ROW_READ) {
-        require(g.scan_stage==2 && m->cpu.x[12]==g.rows && g.rows<6,"matrix-row-order",pc);
+        /* Exact BIN: row index a5 (x15), not earlier a2 (x12);
+         * 0x6118 reads GPIO, 0x6130 bounds index against six. */
+        require(g.scan_stage==2 && m->cpu.x[15]==g.rows && g.rows<6,"matrix-row-order",pc);
         require((m->gpio[1].outdr&63)==(1u<<g.rows),"matrix-row-drive",pc);
         g.row_mask |= 1u << g.rows; g.rows++;
     }
