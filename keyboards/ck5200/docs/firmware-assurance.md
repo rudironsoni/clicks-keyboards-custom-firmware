@@ -142,7 +142,10 @@ Changing the expected raw ELF hash to the CI value is not the fix.
 Both actual local and hosted inputs passed the corrected gate locally under ASan/UBSan.
 The compiler-comment regression failed before the correction and passes afterward.
 Runtime symbol, segment-permission, entry, ABI, and BIN changes still fail before execution.
-Hosted verification of the correction remains pending.
+Independent review verified the section-level cause and found no runtime-contract normalization bypass.
+[Hosted run 39052293311](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39052293311) passed at `3ae82074aa4df310b7310533d7856e879172b05a`.
+The build, existing firmware tests, strict gate, final inspection, and firmware artifact upload all succeeded.
+Its report confirms ASan/UBSan, four passing startup cases, the pinned contract hash, and all rejection controls.
 
 The diagnostic workflow passed the existing firmware suite with the unchanged candidate.
 No physical tests ran. R3 remains UNMET and physical flashing remains NO-GO.
