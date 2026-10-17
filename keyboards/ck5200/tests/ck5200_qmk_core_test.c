@@ -3,7 +3,7 @@
  * wear-leveling backing store, on a host CH32-flash model with manual time.
  *
  * Everything below the matrix hardware and above the USB stack is the
- * production code path: matrix_common -> sym_defer_g debounce ->
+ * production code path: matrix_common -> CK-5200 per-key debounce ->
  * keyboard_task -> action_* -> layer switching -> keymap lookup ->
  * dynamic_keymap over real wear leveling -> host driver report capture.
  *
@@ -206,7 +206,7 @@ static void t_lt_tap(void) {
         printf(" [%02x %02x %02x %02x %02x %02x %02x]", cap_hist[h].mods, cap_hist[h].keys[0], cap_hist[h].keys[1], cap_hist[h].keys[2], cap_hist[h].keys[3], cap_hist[h].keys[4], cap_hist[h].keys[5]);
     printf("\n");
 
-    /* An event shorter than DEBOUNCE vanishes under sym_defer_g. */
+    /* An event shorter than DEBOUNCE vanishes under deferred per-key debounce. */
     printf("   -- sub-debounce tap (2 ms, shorter than DEBOUNCE 5) --\n");
     long before = cap_count;
     cap_reset_hist();

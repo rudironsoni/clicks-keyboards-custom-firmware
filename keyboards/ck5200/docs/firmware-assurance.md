@@ -62,7 +62,7 @@ These are bounded observations under explicit model assumptions. They are not ex
 - No original Clicks installer executes. Starting at `0x2000` assumes the missing handoff.
 - The first gate does not establish USB enumeration, MFi authentication, HID delivery, or physical matrix wiring.
 - The first gate checks the firmware artifact uploaded by firmware CI. It does not add a QMK image to the iPhone app or validate a new phone package.
-- Global debounce starvation, mounted HID completion loss, progress-aware watchdog supervision, and formal proofs remain separate work.
+- Historical note: the original binary profile preceded the liveness fixes. Host tests now cover debounce starvation and one lost-HID-callback recovery; progress-aware watchdog, connected-USB emulation, and formal proofs remain separate.
 - A watchdog can reset a stalled executable application. It cannot repair invalid flash or establish independent recovery.
 - The candidate spans the unknown stock tail `[0x68D8,0x6900)`. Executing it in synthetic memory does not authorize overwriting that region.
 - The plausible-marker/partial-payload installation hazard remains unresolved. No successful startup model closes it.
@@ -149,3 +149,71 @@ Its report confirms ASan/UBSan, four passing startup cases, the pinned contract 
 
 The diagnostic workflow passed the existing firmware suite with the unchanged candidate.
 No physical tests ran. R3 remains UNMET and physical flashing remains NO-GO.
+
+## Runtime-liveness gate (2026-10-17)
+
+This section adds results for the **new candidate**, not a retrospective change
+to the first-gate evidence above. R3 remains UNMET; physical flashing NO-GO.
+
+### Red-first and implemented fix
+
+- Branch: `feat/ck5200-runtime-liveness`, based on verified `6a29277`.
+- Red-first commit `9af647f`, then standalone dual-regression runner `1456de8`.
+  [Red CI run 39065223970](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39065223970)
+  proved both failures against the original production paths:
+  `sym_defer_g` suppressed a stable `KC_M` under independent chatter;
+  a lost HID completion froze matrix scanning (`delta=0`) and blocked
+  the pending release even after the endpoint became ready.
+- Fix commit `90c29cc`: static 6x6 per-key deferred debounce without
+  allocation; scanning is independent of HID backpressure; the in-flight
+  queue head is retained during a callback loss and is only resubmitted
+  after the endpoint reports ready and a 20-millisecond grace window.
+  A busy endpoint is never resubmitted into. The queue preserves its
+  bounded-overload policy; no change was made to rescue/installer writes.
+- [Host regression CI 39068934989](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39068934989)
+  passed both new checks and the prior host suite. Its exact-binary
+  gate correctly rejected the new artifact under the old hash.
+
+### New exact-binary execution profile and evidence
+
+The strict profile was deliberately re-reviewed using the compiled artifact,
+not automatically widened to accept any build. The [passing hosted gate
+39069270426](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39069270426)
+produced this evidence:
+
+| Property | Verified result |
+| --- | --- |
+| New BIN | 26,644 bytes; SHA-256 `4f30569f0e439137e18899dbec268eacfee0af54f7e55334fb82b86e6842f394` |
+| Hosted ELF | SHA-256 `362efbe227ed3a0a908659efdec4acdd7fc5eaa1d85d6e1beb2342aa6a85d714` |
+| Strict ELF runtime contract | `0d0a7a722563f5c15ea927d24241d61bca3652e647fa5918d9987b5001f1b8c2` |
+| Application flash | `[0x2000,0x8814)` inside `[0x2000,0x8a00)`; only 492 bytes remain |
+| RAM sections | 144-byte initialized data, 4,680-byte BSS; stack budget unchanged |
+| Normal cases | Cold, warm-retained, and warm-invalid rescue: 913 complete scans and normal loops each, 99 validated SysTick returns |
+| Valid rescue | 6,227 transport loops, zero QMK scans, 99 validated SysTick returns |
+| Model and failure tests | 193 XW fixtures; 21 rejected operations, six execution bounds, two initial and two late-stall controls |
+| Artifact controls | Compiler metadata change accepted; BIN mismatch and mutated runtime symbol, ABI, entry, or segment permissions rejected |
+
+Tracepoint meanings and disassembly were checked individually:
+`SystemInit` return `0x8006`, startup MRET `0x8012`, rescue consumption
+`0x7bcc`, normal-loop head `0x7ea6`; disconnected USB chooses the
+`keyboard_task` call at `0x7ef6` with return `0x7efa`, then normal
+loop-back at `0x7f4a`. Matrix GPIO read `0x6118` indexes the row in
+`a5` (x15) and completes all six rows at `0x6134`.
+SysTick MRET is `0x7808`; rescue loop `0x7c8a` to `0x7caa`.
+All PCs and register choices are artifact-specific, and changing the BIN
+requires re-review of this contract.
+
+### Claims explicitly excluded
+
+- The model's USB remains **disconnected**, so it does not test actual
+  USB enumeration, iAP2/MFi, real endpoint behavior, or on-device typing.
+  The host protocol test exercises a scripted callback loss but not every
+  interrupt ordering or a permanently busy USB endpoint.
+- Watchdog supervision is absent; progress in this 100-ms modeled
+  execution is not a proof of perpetual forward progress.
+- The model starts directly at application address `0x2000`, not through
+  the installed OEM boot stage. It cannot prove actual installer behavior,
+  protected tail preservation, or recovery from interrupted flashing.
+- No physical device operation, software flashing, hardware modification,
+  peripheral accessory, or vendor communication occurred.
+  **R3 is UNMET. Physical flashing remains NO-GO.**

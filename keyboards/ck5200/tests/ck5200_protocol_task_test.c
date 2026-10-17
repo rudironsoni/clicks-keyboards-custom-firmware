@@ -479,7 +479,7 @@ static void p8_report_recovery(void) {
 }
 
 static void p9_missing_hid_completion(void) {
-    printf("== P9 lost HID callback must not freeze matrix or trap final release ==\\n");
+    printf("== P9 lost HID callback must not freeze matrix or trap final release ==\n");
     extern bool tud_hid_set_idle_cb(uint8_t, uint8_t);
     (void)tud_hid_set_idle_cb(0, 0); /* Do not confuse the result with SET_IDLE retransmits. */
     settle_ticks(15);
