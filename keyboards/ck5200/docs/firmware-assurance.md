@@ -331,7 +331,17 @@ Fresh disassembly confirmed the capture path, FIFO bounds, transfer guards,
 tracepoints, register choices, and memory layout. The review record and independent
 strict report are `build/consumer-fix-evidence/independent-review.md` and
 `build/consumer-fix-evidence/independent-assurance.json`.
-Hosted verification of the final implementation revision is pending publication.
+[Firmware run 39073570304](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39073570304)
+passed on implementation commit
+[`3ac32b0e4b491b1009a80870a7ae36ed751230fb`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/3ac32b0e4b491b1009a80870a7ae36ed751230fb).
+Its build, complete tests, strict binary gate, firmware inspection, and artifact
+retention steps all passed. Both `ck5200-assurance` and `ck5200-firmware` artifacts
+were retained. The downloaded BIN matches the reviewed hash, and the hosted ELF
+has the same reviewed runtime contract. Hosted ELF provenance is
+`5d218a1003267773230d5beac041e6ba386fcf13eb3f6ed3c567645465d8a610`.
+All four downloaded trace hashes match the successful hosted assurance report.
+The local hosted verification record is
+`build/consumer-fix-evidence/hosted-implementation-verified.json`.
 
 The model remains disconnected USB with direct application entry. It does not
 prove connected USB behavior, installation safety, protected-byte preservation,

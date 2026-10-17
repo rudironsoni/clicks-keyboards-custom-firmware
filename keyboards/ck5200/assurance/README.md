@@ -23,6 +23,7 @@ This profile accepts only the reviewed release:
 
 - BIN: `322f227997d5ea8c291a06dc2e5c210be31f1a97c00816c18ffcf161e7326c00`, 26620 bytes.
 - ELF contract: `de296b6d1ed8b342e07c2426f51d672f3d34990104ec340d2d73e42cc31296d2`.
+- Hosted ELF provenance: `5d218a1003267773230d5beac041e6ba386fcf13eb3f6ed3c567645465d8a610` (run `39073570304`).
 - Local ELF provenance: `872501f24dc185ea7ca78b9053b5d4799b93a273195b24cbf7af5f7fcbef7bbd`.
 - Application bytes end at `0x87fc`, leaving 516 bytes before `0x8a00`.
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
