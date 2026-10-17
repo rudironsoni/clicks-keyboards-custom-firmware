@@ -478,6 +478,50 @@ static void p8_report_recovery(void) {
           "bounded queue overload retains in-flight head and final release");
 }
 
+static void p9_missing_hid_completion(void) {
+    printf("== P9 lost HID callback must not freeze matrix or trap final release ==\\n");
+    extern bool tud_hid_set_idle_cb(uint8_t, uint8_t);
+    (void)tud_hid_set_idle_cb(0, 0); /* Do not confuse the result with SET_IDLE retransmits. */
+    settle_ticks(15);
+
+    const long before = stub_submit_count;
+    set_key(0, 0, true); /* KC_Q press goes to the endpoint. */
+    for (int i = 0; i < 12; ++i) loop_tick(); /* Deliberately omit USB completion callback. */
+    CHECK(stub_submit_count == before + 1 && report_wire_has(KC_Q),
+          "press accepted before the missing completion");
+
+    /* The endpoint is genuinely busy. We MUST NOT resend while it is busy,
+     * but scanning must continue so that the final release is recorded. */
+    stub_hid_ready = false;
+    const long scans_before = scan_calls;
+    set_key(0, 0, false);
+    for (int i = 0; i < 80; ++i) loop_tick();
+    CHECK(scan_calls - scans_before >= 75,
+          "matrix remains live through 80 ms without a HID completion (delta=%ld)",
+          scan_calls - scans_before);
+    CHECK(stub_submit_count == before + 1,
+          "never resend to a busy endpoint");
+
+    /* TinyUSB's busy bit clears but the completion callback was lost.
+     * The queue must recover without assuming that the original report
+     * reached the host; retry the press, then transmit its queued release. */
+    stub_hid_ready = true;
+    long observed = stub_submit_count;
+    bool retried_press = false, delivered_release = false;
+    for (int i = 0; i < 150; ++i) {
+        loop_tick();
+        if (stub_submit_count > observed) {
+            if (report_wire_has(KC_Q)) retried_press = true;
+            if (wire_empty()) delivered_release = true;
+            usb_complete_hid(); /* Only newly submitted transfers get callbacks. */
+            observed = stub_submit_count;
+        }
+    }
+    CHECK(retried_press, "endpoint ready without callback triggers bounded retry");
+    CHECK(delivered_release && wire_empty(),
+          "final key release follows the retried report and reaches the host");
+}
+
 int main(int argc, char **argv) {
     set_time(0);
     setup_firmware();
@@ -490,6 +534,7 @@ int main(int argc, char **argv) {
     if (strcmp(which, "p6") == 0 || strcmp(which, "all") == 0) p6_root_port_init();
     if (strcmp(which, "p7") == 0 || strcmp(which, "all") == 0) p7_all_crossings();
     if (strcmp(which, "p8") == 0 || strcmp(which, "all") == 0) p8_report_recovery();
+    if (strcmp(which, "p9") == 0 || strcmp(which, "all") == 0) p9_missing_hid_completion();
     printf("==== %d failure(s) ====\n", failures);
     if (!failures) printf("ok\n");
     return failures ? 1 : 0;

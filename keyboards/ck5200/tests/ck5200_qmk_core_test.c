@@ -417,7 +417,7 @@ static void t_consumer_encoding(void) {
 
 static void t_chatter_starvation(void) {
     idle();
-    printf("\n== T9 sym_defer_g global debounce: chatter starvation ==\n");
+    printf("\n== T9 isolation: unrelated chatter must not starve stable key ==\n");
     set_key(1, 1, true); /* KC_I stable press */
     settle(12);
     CHECK(report_has(KC_I), "stable press KC_I visible before chatter");
@@ -428,7 +428,7 @@ static void t_chatter_starvation(void) {
         set_key(0, 1, t % 4 == 0); /* chattering crossing (0,1) */
         settle(2);
     }
-    CHECK(!report_has(KC_M), "KC_M held 60 ms during chatter NEVER appeared (global debounce starved)");
+    CHECK(report_has(KC_M), "stable KC_M must register despite unrelated chatter");
     set_key(0, 1, false);
     set_key(4, 4, false);
     set_key(1, 1, false);
