@@ -21,9 +21,9 @@ artifact identity and is an assurance entry point.
 
 This profile accepts only the reviewed release:
 
-- BIN: `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`, 26496 bytes.
-- ELF contract: `85e38624332094e6e06d9b9c9e0d150a0dc8729b9c0fce57782a325077aaf5b8`.
-- Original local ELF provenance: `0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298`.
+- BIN: `4f30569f0e439137e18899dbec268eacfee0af54f7e55334fb82b86e6842f394`, 26644 bytes.
+- ELF contract: `0d0a7a722563f5c15ea927d24241d61bca3652e647fa5918d9987b5001f1b8c2`.
+- Reference hosted ELF provenance: `362efbe227ed3a0a908659efdec4acdd7fc5eaa1d85d6e1beb2342aa6a85d714` (run `39068934989`).
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
 - OpenWCH register reference: `c6253942b29ff2a3f5e2829182a874afffa45881`.
 
@@ -46,8 +46,17 @@ Hosted run `39050140084` failed the original whole-ELF hash check.
 Diagnostic run `39051670366` retained the exact same hosted ELF for comparison.
 Its compiler comment says `x86_64` instead of `arm64`, moving the attribute-section
 file offset by one byte. Runtime symbols, attributes, load segments, and BIN match.
-Both artifacts have the contract hash above. The reference contract comes from
-the originally reviewed local ELF, not a replacement CI artifact hash.
+Both historical artifacts shared the *previous* profile contract. The liveness
+revision is a new exact-BIN profile, manually reviewed using the actual
+hosted ELF and disassembly; accepting a new hash alone is insufficient.
+For its disconnected USB case, the main loop calls QMK at `0x7ef6`, returns
+at `0x7efa`, and branches back at `0x7f4a`. GPIO row read `0x6118`
+indexes using `a5` (x15), with the six-row bound at `0x6130`.
+The old `6a29277` profile had BIN hash
+`94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`
+and ELF contract
+`85e38624332094e6e06d9b9c9e0d150a0dc8729b9c0fce57782a325077aaf5b8`.
+The emulator still does not model connected USB.
 
 The driver copies six required CHGame core sources and their headers into
 ignored `build/assurance/src`, applies `upstream.patch` with zero fuzz, and builds
@@ -75,7 +84,7 @@ only while both deadlines remain satisfied.
 3. Warm entry with the valid two-word retained rescue request.
 4. Warm entry with only the first request word valid.
 
-At `SystemInit`, the runner checks all 144 data bytes against flash, all 4632 BSS
+At `SystemInit`, the runner checks all 144 data bytes against flash, all 4680 BSS
 bytes for zero, the ELF-derived GP/SP, and the unchanged eight `.noinit` bytes.
 It observes the `SystemInit` return, startup MRET, main entry, and request
 consumption. Normal cases require at least three ordered six-row matrix scans,
