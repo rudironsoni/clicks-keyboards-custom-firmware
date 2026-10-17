@@ -1,3 +1,4 @@
+import CryptoKit
 import GameController
 import SwiftUI
 import UIKit
@@ -171,10 +172,18 @@ private struct StockExportPreview: View {
     @State private var pages: [String] = []
     @State private var page = 0
 
+    private var pageMetadata: String {
+        let bytes = Data(pages[page].utf8)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        return "\(page + 1):\(pages.count):\(bytes.count):\(digest)"
+    }
+
     var body: some View {
         VStack {
             if !pages.isEmpty {
                 Text("Page \(page + 1) of \(pages.count)")
+                    .accessibilityIdentifier("stock.export.page")
+                    .accessibilityValue(pageMetadata)
                 HStack {
                     Button("Previous JSON page") { page -= 1 }.disabled(page == 0)
                     Button("Next JSON page") { page += 1 }

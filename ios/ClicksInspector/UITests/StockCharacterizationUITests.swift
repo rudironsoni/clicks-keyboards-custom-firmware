@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 final class StockCharacterizationUITests: XCTestCase {
@@ -90,19 +91,74 @@ final class StockCharacterizationUITests: XCTestCase {
         inspect.tap()
         let json = app.textViews["stock.export.json"]
         XCTAssertTrue(json.waitForExistence(timeout: 5))
-        var value = try XCTUnwrap(json.value as? String)
-        let next = app.buttons["stock.export.next"]
-        while next.isEnabled {
-            next.tap()
-            value += try XCTUnwrap(json.value as? String)
+        var value = ""
+        var manifest: [String] = []
+        defer {
+            let attachment = XCTAttachment(string: value)
+            attachment.name = "UI-captured-export.json"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let pages = XCTAttachment(string: manifest.joined(separator: "\n"))
+            pages.name = "UI-captured-export-pages.txt"
+            pages.lifetime = .keepAlways
+            add(pages)
         }
-        let attachment = XCTAttachment(string: value)
-        attachment.name = "actual-export.json"
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        let first = try capturePage(app, expectedPage: 1)
+        value += first.text
+        manifest.append(first.metadata)
+        let count = try XCTUnwrap(Int(first.metadata.split(separator: ":")[1]))
+        let next = app.buttons["stock.export.next"]
+        if count > 1 {
+            for page in 2...count {
+                XCTAssertTrue(next.isEnabled)
+                next.tap()
+                let captured = try capturePage(app, expectedPage: page, pageCount: count)
+                value += captured.text
+                manifest.append(captured.metadata)
+            }
+        }
+        XCTAssertFalse(next.isEnabled)
         let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
         app.navigationBars.buttons.element(boundBy: 0).tap()
         return result
+    }
+
+    private func capturePage(_ app: XCUIApplication, expectedPage: Int, pageCount: Int? = nil) throws -> (text: String, metadata: String) {
+        let header = app.staticTexts["stock.export.page"]
+        let json = app.textViews["stock.export.json"]
+        var captured: (text: String, metadata: String)?
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard header.exists, json.exists,
+                  let metadata = header.value as? String, let text = json.value as? String,
+                  self.pageMatches(text, metadata: metadata, expectedPage: expectedPage, pageCount: pageCount) else { return false }
+            captured = (text, metadata)
+            return true
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "Expected page \(expectedPage) and its actual TextEditor bytes")
+        // Append the validated snapshot, not another AX read that could return different text.
+        return try XCTUnwrap(captured)
+    }
+
+    private func pageMatches(_ text: String, metadata: String, expectedPage: Int, pageCount: Int? = nil) -> Bool {
+        let fields = metadata.split(separator: ":")
+        guard fields.count == 4, Int(fields[0]) == expectedPage,
+              let count = Int(fields[1]), count >= expectedPage,
+              pageCount == nil || count == pageCount,
+              Int(fields[2]) == text.utf8.count else { return false }
+        return fields[3] == SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    func testExportPageCaptureRejectsStaleText() {
+        let old = "previous page"
+        let current = "expected page" // Same byte count, so length alone cannot pass this check.
+        let digest = SHA256.hash(data: Data(current.utf8)).map { String(format: "%02x", $0) }.joined()
+        let metadata = "2:3:\(current.utf8.count):\(digest)"
+        XCTAssertFalse(pageMatches(old, metadata: metadata, expectedPage: 2))
+        XCTAssertFalse(pageMatches(current, metadata: metadata, expectedPage: 3))
+        XCTAssertTrue(pageMatches(current, metadata: metadata, expectedPage: 2))
+        // Identical adjacent pages are valid once their page identity advances.
+        XCTAssertTrue(pageMatches(current, metadata: "3:3:\(current.utf8.count):\(digest)", expectedPage: 3))
     }
 
     private func verifyExport(_ json: [String: Any], includesText: Bool) throws {

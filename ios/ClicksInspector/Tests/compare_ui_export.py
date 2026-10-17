@@ -25,10 +25,12 @@ def main():
         if path.is_file() and path.name != "manifest.json":
             data = path.read_bytes()
             if data.startswith(b"{") and b'"coverage"' in data:
-                captures[path.name] = data
+                captures[str(path.relative_to(attachment_directory))] = data
+    failed = len(sources) != 3 or len(captures) != 3
+    print(f"Expected three source exports and three UI captures: sources={len(sources)} captures={len(captures)}")
     if not sources or not captures:
-        raise SystemExit(f"Missing evidence: {len(sources)} source exports, {len(captures)} UI captures")
-    failed = False
+        raise SystemExit("Missing source/UI evidence")
+    unmatched_sources = set(sources)
     for name, data in sources.items():
         print(f"SOURCE {name}: bytes={len(data)} sha256={digest(data)}")
         try:
@@ -57,6 +59,14 @@ def main():
                     page = data[i:i + 16384]
                     matches = [index + 1 for index, expected in enumerate(pages) if page == expected]
                     print(f"UI page {i // 16384 + 1}: source_pages={matches}")
+        elif source_name not in unmatched_sources:
+            failed = True
+            print(f"Duplicate UI capture for source {source_name}")
+        else:
+            unmatched_sources.remove(source_name)
+    if unmatched_sources:
+        failed = True
+        print(f"Source exports without an exact UI capture: {sorted(unmatched_sources)}")
     return int(failed)
 
 
