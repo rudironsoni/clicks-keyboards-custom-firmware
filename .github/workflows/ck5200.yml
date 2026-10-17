@@ -82,6 +82,8 @@ jobs:
             keyboards/ck5200/build/assurance/*.json
             keyboards/ck5200/build/assurance/*.jsonl
             keyboards/ck5200/build/assurance/*.log
+            keyboards/ck5200/build/ck5200_qmk.bin
+            keyboards/ck5200/build/ck5200_qmk.elf
 
       - name: Inspect firmware
         run: |
