@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import struct
 sys.dont_write_bytecode = True
 
 HERE = Path(__file__).resolve().parent
@@ -19,8 +20,8 @@ UPSTREAM = ROOT / "external/chgame_emulator"
 PIN = "bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48"
 WCH_PIN = "c6253942b29ff2a3f5e2829182a874afffa45881"
 BIN_HASH = "94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4"
-ELF_HASH = "0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298"
-# Internal LTO tracepoints are intentionally bound to BOTH exact artifact hashes.
+ELF_CONTRACT_HASH = "85e38624332094e6e06d9b9c9e0d150a0dc8729b9c0fce57782a325077aaf5b8"
+# Bind tracepoints to the exact BIN and the reviewed ELF contract.
 # A new binary requires a reviewed profile, never automatic acceptance.
 ANCHORS = {
     "STARTUP_MRET": 0x7f7e, "SYSTEM_RETURN": 0x7f72, "CONSUMED": 0x7b7c,
@@ -67,12 +68,47 @@ def validator():
     spec.loader.exec_module(module)
     return module
 
+def elf_contract_hash(elf):
+    """Ignore compiler-comment text and file placement, never loaded bytes or symbols."""
+    data = elf.read_bytes()
+    def block(offset, size):
+        if offset > len(data) or size > len(data) - offset:
+            raise ValueError("ELF contract range exceeds file")
+        return data[offset:offset+size]
+    header = struct.unpack("<16sHHIIIIIHHHHHH", block(0,52))
+    ident, kind, machine, version, entry, phoff, shoff, flags, ehsize, phsize, phnum, shsize, shnum, shnames = header
+    if ident[:7] != b"\x7fELF\x01\x01\x01" or (ehsize,phsize,shsize) != (52,32,40) or shnames >= shnum:
+        raise ValueError("unsupported ELF contract format")
+    sections = [struct.unpack("<10I",block(shoff+i*shsize,shsize)) for i in range(shnum)]
+    names_section = sections[shnames]
+    names = block(names_section[4],names_section[5])
+    contract = {"header":[ident.hex(),kind,machine,version,entry,flags,ehsize,phsize,phnum,shsize,shnum,shnames],
+                "sections":[], "segments":[]}
+    for name_index,typ,attributes,address,offset,size,link,info,align,entsize in sections:
+        if name_index >= len(names) or b"\0" not in names[name_index:]:
+            raise ValueError("invalid ELF section name")
+        name = names[name_index:].split(b"\0",1)[0].decode("ascii")
+        contents = block(offset,size) if typ != 8 else b"" # NOBITS has no file payload.
+        if name == ".comment":
+            if attributes & 2:
+                raise ValueError("allocated compiler comment is not metadata")
+            size,contents = 0,b""
+        contract["sections"].append([name,typ,attributes,address,size,link,info,align,entsize,
+                                     hashlib.sha256(contents).hexdigest()])
+    for i in range(phnum):
+        typ,offset,vma,lma,filesz,memsz,attributes,align = struct.unpack("<8I",block(phoff+i*phsize,phsize))
+        contract["segments"].append([typ,vma,lma,filesz,memsz,attributes,align,
+                                     hashlib.sha256(block(offset,filesz)).hexdigest()])
+    return hashlib.sha256(json.dumps(contract,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
 def validate(image, elf):
     v = validator()
     data = image.read_bytes()
     v.validate_elf(elf, data, v.validate_binary(data))
-    if digest(image) != BIN_HASH or digest(elf) != ELF_HASH:
-        raise ValueError("unreviewed artifact: exact BIN/ELF profile hash mismatch")
+    if digest(image) != BIN_HASH:
+        raise ValueError("unreviewed artifact: exact BIN profile hash mismatch")
+    if elf_contract_hash(elf) != ELF_CONTRACT_HASH:
+        raise ValueError("unreviewed artifact: ELF runtime contract hash mismatch")
     symbols = v._symbols(v._run(v._tool("nm"), "-n", str(elf)))
     dis = v._run(v._tool("objdump"), "-d", str(elf))
     instructions = {}
@@ -145,7 +181,9 @@ def main():
     try:
         report["input_hashes"] = {"BIN": digest(args.image), "ELF": digest(args.elf)}
         profile, anchors = validate(args.image, args.elf)
-        report.update(bounds_and_symbols=profile, tracepoints=anchors, byte_identity_verified=True)
+        report.update(bounds_and_symbols=profile, tracepoints=anchors, byte_identity_verified=True,
+                      elf_contract_sha256=ELF_CONTRACT_HASH,
+                      elf_comparison="section and segment contract, excluding compiler-comment text and file offsets")
         report["upstream_xw_decode"] = build(profile, not args.no_sanitize).strip()
         report["model_fixtures"] = json.loads(command([BUILD/"runner", "--fixtures", UPSTREAM/"tests/xw_golden.txt"]))
         result = subprocess.run([str(BUILD/"runner"),str(args.image.resolve()),str(BUILD)],
@@ -166,7 +204,7 @@ def main():
         verify_dependency(UPSTREAM, PIN)
         verify_dependency(ROOT / "external/ch32x035", WCH_PIN)
         report["passed"] = True
-    except (ValueError, OSError, subprocess.TimeoutExpired, KeyError) as error:
+    except (ValueError, OSError, subprocess.TimeoutExpired, KeyError, struct.error) as error:
         report["failures"].append(str(error))
     finally:
         if args.image.is_file() and args.elf.is_file():

@@ -95,7 +95,8 @@ The model starts with no enabled or pending PFIC interrupts and disabled SysTick
 These initial conditions do not establish the OEM handoff state.
 
 Controls passed for 193 XW encodings, each decoded upstream and executed with and without cached decoding.
-Further controls passed for 21 rejected operations, six execution boundaries, two initial stalls, two late stalls, and two invalid artifacts.
+Further controls passed for 21 rejected operations, six execution boundaries, two initial stalls, and two late stalls.
+Artifact controls now accept compiler-comment differences and reject five image or runtime-contract changes.
 The local report is `keyboards/ck5200/build/assurance/report.json`.
 Its adjacent JSONL files contain ordered execution traces.
 
@@ -121,6 +122,27 @@ It found no blocker in those files. CI uses the existing build, preserves runner
 The workflow also requires a nonempty `report.json`, so a log alone cannot satisfy the evidence requirement.
 The runner arguments and output paths match the workflow.
 CI retains the JSON report, JSONL traces, and log before any successful firmware upload.
-Hosted CI was not run for these uncommitted changes.
-The existing firmware suite and closed M1/M2/M3 workflows were not rerun because this gate did not change the candidate firmware.
+### Hosted ELF failure and correction
+
+[Run 39050140084](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39050140084) passed the build and firmware tests, then failed the whole-ELF identity check.
+The matching BIN did not make that gate failure acceptable.
+Diagnostic [run 39051670366](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39051670366) retained the actual inputs and reproduced the same ELF hash:
+`ef8df7d3bbf94e5518c7c64e18fd5ce7bf66600c23011e8a28eda84138d4d7db`.
+
+The section comparison established the cause: `.comment` names the compiler host as `x86_64` instead of `arm64`.
+Its extra byte shifts the file offset of `.riscv.attributes` by one.
+The CPU attributes, symbols, entry point, load segments, and firmware bytes match the reviewed local artifact.
+
+The corrected gate pins the exact BIN and an ELF contract derived from the original reviewed local ELF.
+It hashes all section and segment contents and runtime descriptors, excluding compiler-comment text and file placement.
+It retains the entry, vector, symbol, ABI, permissions, complete loadable-image, and tracepoint checks.
+The raw input hashes remain in the report.
+Changing the expected raw ELF hash to the CI value is not the fix.
+
+Both actual local and hosted inputs passed the corrected gate locally under ASan/UBSan.
+The compiler-comment regression failed before the correction and passes afterward.
+Runtime symbol, segment-permission, entry, ABI, and BIN changes still fail before execution.
+Hosted verification of the correction remains pending.
+
+The diagnostic workflow passed the existing firmware suite with the unchanged candidate.
 No physical tests ran. R3 remains UNMET and physical flashing remains NO-GO.

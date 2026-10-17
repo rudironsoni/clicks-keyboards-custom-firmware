@@ -22,16 +22,32 @@ artifact identity and is an assurance entry point.
 This profile accepts only the reviewed release:
 
 - BIN: `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`, 26496 bytes.
-- ELF: `0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298`.
+- ELF contract: `85e38624332094e6e06d9b9c9e0d150a0dc8729b9c0fce57782a325077aaf5b8`.
+- Original local ELF provenance: `0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298`.
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
 - OpenWCH register reference: `c6253942b29ff2a3f5e2829182a874afffa45881`.
 
 The existing `tools/validate_image.py` first checks BIN/ELF byte identity and
 layout. Symbols and `.text` bounds come from that ELF. Internal LTO tracepoints
-in `run.py` are bound to both hashes and checked against disassembled bytes.
-**A new artifact requires a reviewed profile.** Merely building a new artifact
+in `run.py` are bound to the BIN and ELF contract hashes and checked against disassembled bytes.
+**A changed runtime artifact requires a reviewed profile.** Merely building a new artifact
 cannot make this gate pass. Do not update the hashes without reviewing the
 tracepoint meanings and the executed register/instruction paths.
+
+The ELF contract includes header identity, CPU/ABI flags, entry point, section
+descriptors and contents, and program-segment descriptors and contents.
+This includes the complete symbol table, vectors, initialized data, RAM layout,
+CPU attributes, segment permissions, and every loadable byte.
+It excludes file offsets, unused file padding, and non-allocated `.comment`
+text and length. These do not affect the reviewed executable.
+The actual raw ELF hash remains in each report for provenance.
+
+Hosted run `39050140084` failed the original whole-ELF hash check.
+Diagnostic run `39051670366` retained the exact same hosted ELF for comparison.
+Its compiler comment says `x86_64` instead of `arm64`, moving the attribute-section
+file offset by one byte. Runtime symbols, attributes, load segments, and BIN match.
+Both artifacts have the contract hash above. The reference contract comes from
+the originally reviewed local ELF, not a replacement CI artifact hash.
 
 The driver copies six required CHGame core sources and their headers into
 ignored `build/assurance/src`, applies `upstream.patch` with zero fuzz, and builds
@@ -84,8 +100,9 @@ Two regression groups run automatically:
   Two late-stall controls execute the exact candidate for 50 modeled ms first.
   One stops foreground work while interrupts continue to return. The other stops
   inside SysTick. Each must fail its specific progress deadline with flash unchanged.
-- Artifact fixtures in `test_artifact.py`: mismatched BIN/ELF bytes and an
-  unreviewed ELF fail validation before guest execution.
+- Artifact fixtures in `test_artifact.py`: changed compiler-comment text passes.
+  Mismatched BIN/ELF bytes, a changed runtime symbol, segment permissions,
+  entry point, or ABI flags fail before guest execution.
 
 ## Model sources and limits
 
