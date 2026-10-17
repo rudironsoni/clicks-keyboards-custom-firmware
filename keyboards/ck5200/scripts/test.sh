@@ -110,7 +110,7 @@ QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c
  $Q/quantum/deferred_exec.c $Q/quantum/caps_word.c $Q/quantum/bootmagic/bootmagic.c \
  $Q/quantum/process_keycode/process_magic.c $Q/quantum/logging/debug.c \
  $Q/quantum/logging/print.c $Q/quantum/logging/sendchar.c \
- $Q/quantum/debounce/sym_defer_g.c \
+ $ROOT/firmware/keyboard/ck5200_debounce.c \
  $Q/quantum/send_string/send_string.c \
  $Q/drivers/eeprom/eeprom_driver.c $Q/drivers/eeprom/eeprom_transient.c \
  $Q/lib/fnv/hash_64a.c $Q/tmk_core/protocol/host.c $Q/tmk_core/protocol/report.c \

@@ -16,6 +16,8 @@
 #define UPDATE_RESPONSE_SIZE 8u
 #define CK_HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
 #define HID_QUEUE_DEPTH 16u
+/* Reconcile a lost callback only after TinyUSB reports the endpoint free. */
+#define HID_LOST_COMPLETION_GRACE_MS 20u
 
 uint8_t keyboard_protocol = 1, keyboard_idle = 0;
 static uint8_t keyboard_led_state;
@@ -24,6 +26,7 @@ static uint8_t hid_queue[HID_QUEUE_DEPTH][CK_HID_REPORT_SIZE];
 static uint8_t hid_head, hid_count;
 static uint32_t last_keyboard_report_sent_at;
 static bool keyboard_report_in_flight, last_keyboard_report_valid;
+static uint32_t hid_inflight_started_at;
 static uint8_t pending_update_response[UPDATE_RESPONSE_SIZE];
 static uint8_t pending_update_response_len;
 static uint8_t pending_update_response_itf;
@@ -51,6 +54,7 @@ static bool submit_hid_report(void) {
     if (!tud_hid_report(0, hid_queue[hid_head], length)) return false;
 
     keyboard_report_in_flight = true;
+    hid_inflight_started_at = timer_read32();
     return true;
 }
 
@@ -73,8 +77,24 @@ static void send_keyboard_impl(report_keyboard_t *report) {
 }
 
 void protocol_keyboard_task(void) {
-    if (!tud_mounted() || tud_suspended()) { keyboard_task(); return; }
-    if (keyboard_report_in_flight || !tud_hid_ready()) return;
+    const bool connected = tud_mounted() && !tud_suspended();
+
+    /* A missing TinyUSB callback cannot freeze scanning.  A ready endpoint
+     * (unclaimed and not busy in pinned TinyUSB) after the grace interval
+     * establishes that no USB transfer is currently owned by the driver.
+     * It does NOT establish that the host received the old report.
+     * Therefore keep the queue head and retry in order, including releases.
+     * Never re-submit while TinyUSB still reports the endpoint busy. */
+    if (connected && keyboard_report_in_flight && tud_hid_ready() &&
+        timer_elapsed32(hid_inflight_started_at) >= HID_LOST_COMPLETION_GRACE_MS) {
+        keyboard_report_in_flight = false;
+    }
+
+    /* Advance QMK independently of the HID endpoint state so that a lost
+     * callback, backpressure, and suspend cannot starve the matrix. */
+    keyboard_task();
+
+    if (!connected || keyboard_report_in_flight || !tud_hid_ready()) return;
     if (hid_count) { (void)submit_hid_report(); return; }
 
     /* A consumer-only change still needs a fresh report on the wire. */
@@ -88,10 +108,7 @@ void protocol_keyboard_task(void) {
         timer_elapsed32(last_keyboard_report_sent_at) >= (uint32_t)keyboard_idle * 4u) {
         queue_keyboard_report(&last_keyboard_report);
         (void)submit_hid_report();
-        return;
     }
-
-    keyboard_task();
 }
 
 static void send_nkro_impl(report_nkro_t *report) { (void)report; }

@@ -3,7 +3,7 @@ file(GLOB_RECURSE QMK_KEYMAP_EXTRAS "${QMK_DIR}/quantum/keymap_extras/*.c")
 
 set(QMK_CORE_SOURCES
     "${QMK_DIR}/quantum/bootmagic/bootmagic.c"
-    "${QMK_DIR}/quantum/debounce/sym_defer_g.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/firmware/keyboard/ck5200_debounce.c"
     ${QMK_KEYMAP_EXTRAS}
     "${QMK_DIR}/quantum/logging/debug.c"
     "${QMK_DIR}/quantum/logging/print.c"
