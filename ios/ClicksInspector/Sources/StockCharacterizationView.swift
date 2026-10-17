@@ -190,6 +190,18 @@ private struct StockExportPreview: View {
         .navigationTitle("Exported JSON")
         .task {
             guard pages.isEmpty else { return }
+            #if DEBUG
+            // Preserve the actual file for hosted UI/source comparison before the deletion test.
+            if ProcessInfo.processInfo.arguments.contains("--capture-stock-export") {
+                do {
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stock-export-ui-evidence")
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try Data(contentsOf: url).write(to: directory.appendingPathComponent(url.lastPathComponent), options: .atomic)
+                } catch {
+                    assertionFailure("Cannot preserve stock export for UI verification: \(error)")
+                }
+            }
+            #endif
             let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "Cannot read export"
             var start = text.startIndex
             while start < text.endIndex {

@@ -5,6 +5,7 @@ final class StockCharacterizationUITests: XCTestCase {
         continueAfterFailure = false
         // Simulator UI test. This proves neither physical key callbacks nor EA transport.
         let app = XCUIApplication()
+        app.launchArguments.append("--capture-stock-export")
         app.launch()
         app.buttons["Stock characterization and key recorder"].tap()
         let start = app.buttons["stock.start"]

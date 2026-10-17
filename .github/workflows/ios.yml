@@ -2,6 +2,11 @@ name: Clicks Inspector iOS
 
 on:
   workflow_dispatch:
+    inputs:
+      prior_run_id:
+        description: "Optional failed run whose xcresult attachments should also be extracted"
+        required: false
+        type: string
   push:
     paths:
       - "ios/ClicksInspector/**"
@@ -23,6 +28,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   verify:
@@ -47,6 +53,16 @@ jobs:
         run: |
           mkdir -p evidence
           { git rev-parse HEAD; xcodebuild -version; xcrun swiftc --version; xcodegen --version; } 2>&1 | tee evidence/toolchain.log
+      - name: Extract prior failed UI attachments
+        if: github.event_name == 'workflow_dispatch' && inputs.prior_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRIOR_RUN_ID: ${{ inputs.prior_run_id }}
+        run: |
+          gh run download "$PRIOR_RUN_ID" --pattern 'ios-verification-*' --dir "$RUNNER_TEMP/prior-ios"
+          find "$RUNNER_TEMP/prior-ios" -name ui-tests.xcresult -type d -print0 | while IFS= read -r -d '' RESULT; do
+            xcrun xcresulttool export attachments --path "$RESULT" --output-path evidence/prior-ui-attachments
+          done
       - name: Check readiness documentation
         run: python3 scripts/check-readiness.py
       - name: Reproduce red regressions on review target
@@ -77,11 +93,29 @@ jobs:
         run: |
           set -o pipefail
           DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          echo "UI_DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
           xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
             -scheme ClicksInspector -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
              CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+      - name: Retain source exports and UI captures
+        if: always() && env.UI_DEVICE_ID != ''
+        run: |
+          mkdir -p evidence/source-exports
+          CONTAINER=$(xcrun simctl get_app_container "$UI_DEVICE_ID" com.rudironsoni.clicks-inspector data)
+          for DIRECTORY in "$CONTAINER/tmp/stock-export-ui-evidence" "$CONTAINER/Library/Application Support/StockEvidence"; do
+            if [ -d "$DIRECTORY" ]; then
+              find "$DIRECTORY" -name 'stock-*-*.json' -type f -exec cp '{}' evidence/source-exports/ \;
+            fi
+          done
+          xcrun xcresulttool export attachments --path evidence/ui-tests.xcresult --output-path evidence/ui-attachments
+      - name: Compare exported source bytes with UI capture
+        if: always() && env.UI_DEVICE_ID != ''
+        run: |
+          set -o pipefail
+          python3 ios/ClicksInspector/Tests/compare_ui_export.py evidence/source-exports evidence/ui-attachments \
+            2>&1 | tee evidence/source-ui-comparison.log
       - name: Build and package the write-disabled stock manager
         run: |
           set -o pipefail
