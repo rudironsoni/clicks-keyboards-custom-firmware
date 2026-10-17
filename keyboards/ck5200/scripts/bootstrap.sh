@@ -28,6 +28,7 @@ clone_pin "$TINYUSB_REPO" external/tinyusb "$TINYUSB_COMMIT"
 clone_pin "$OPENWCH_REPO" external/ch32v20x "$OPENWCH_COMMIT"
 clone_pin "$OPENWCH_X035_REPO" external/ch32x035 "$OPENWCH_X035_COMMIT"
 clone_pin https://github.com/amosnier/sha-2.git external/sha-2 "$SHA256_COMMIT"
+clone_pin https://github.com/joyrider3774/chgame_emulator.git external/chgame_emulator "$CHGAME_COMMIT"
 
 echo
 echo "Source dependencies are ready."

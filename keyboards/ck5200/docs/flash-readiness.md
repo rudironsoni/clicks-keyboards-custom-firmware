@@ -57,6 +57,9 @@ Both scoped independent agent reviews are closed. The final ISP/lab review close
 The electrical review found no P1/P2 blockers for conceptual scope. [Review summary and verification limits](../../../research_notes/CK5200%20USB%20recovery%20feasibility/review.md).
 This closes review of the investigation, not R3 or physical recovery authorization.
 
+The separate [binary-execution assurance work](firmware-assurance.md) evaluates direct application startup in a specified software model.
+It cannot establish OEM boot handoff, physical USB behavior, or independent recovery. It changes none of the authorization gates above.
+
 Baseline collection is closed. Use the five recorded sessions as the stock diagnostics reference.
 Further physical characterization requires a specific need in a separately scoped task, not completion of every catalog trial.
 No firmware writes, resets, ISP operations, protection changes, or SDI investigation belong to this task.

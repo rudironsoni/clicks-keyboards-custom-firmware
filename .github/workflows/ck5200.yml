@@ -63,6 +63,26 @@ jobs:
       - name: Run tests
         run: bash scripts/test.sh
 
+      - name: Execute exact firmware in the bounded assurance model
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          mkdir -p build/assurance
+          python3 assurance/run.py --image build/ck5200_qmk.bin --elf build/ck5200_qmk.elf \
+            2>&1 | tee build/assurance/ci.log
+          test -s build/assurance/report.json
+
+      - name: Retain binary assurance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ck5200-assurance
+          if-no-files-found: warn
+          path: |
+            keyboards/ck5200/build/assurance/*.json
+            keyboards/ck5200/build/assurance/*.jsonl
+            keyboards/ck5200/build/assurance/*.log
+
       - name: Inspect firmware
         run: |
           TOOLCHAIN_BIN="$(find .toolchains -type f -name riscv-none-elf-objdump -print -quit | xargs dirname)"
