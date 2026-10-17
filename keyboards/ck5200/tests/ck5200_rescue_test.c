@@ -1,6 +1,8 @@
 /* Actual production main + protocol + iAP2 + staging + pinned QMK core.
  * Only hardware boundaries (USB, auth chip, flash, matrix, reset) are modeled. */
 #include <assert.h>
+#include <stdint.h>
+uint32_t ck5200_test_serial_word = 42000007u; /* synthetic host fixture */
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +22,7 @@ void tud_mount_cb(void);
 void tud_umount_cb(void);
 void tud_vendor_rx_cb(uint8_t, const uint8_t *, uint32_t);
 void tud_vendor_tx_cb(uint8_t, uint32_t);
+void ck5200_vendor_tx_failed(uint8_t);
 
 static jmp_buf escape;
 static bool expect_rescue, stop_loop, fail_platform, mounted;
@@ -27,6 +30,7 @@ static unsigned usb_tasks, matrix_inits, matrix_scans, pre_init, post_init;
 static unsigned auth_init, auth_reads, auth_writes, usb_packets, backlight_calls;
 static uint8_t flash[0x10000], response[8];
 static unsigned response_len, writes;
+static bool defer_completion, reject_write;
 
 void platform_setup(void) { if (fail_platform) longjmp(escape, 3); }
 void mcu_reset(void) { longjmp(escape, 2); }
@@ -55,6 +59,7 @@ void tud_task(void) {
     if (stop_loop && ++usb_tasks == 8) longjmp(escape, 1);
 }
 uint32_t tud_vendor_n_write(uint8_t itf, const void *p, uint32_t n) {
+    if (reject_write) return 0;
     ++usb_packets;
     if (itf == 1) { assert(n <= 8); memcpy(response, p, n); response_len = n; }
     return n;
@@ -87,7 +92,7 @@ static unsigned command(uint8_t cmd, uint32_t value, const uint8_t *data, size_t
     if (cmd == 0xA0 || cmd == 0x03 || cmd == 0x94) packet[0] = 2;
     response_len = 0;
     tud_vendor_rx_cb(1, packet, packet[0]); service(1);
-    if (response_len) tud_vendor_tx_cb(1, response_len);
+    if (response_len && !defer_completion) tud_vendor_tx_cb(1, response_len);
     return response_len ? response[3] : 255;
 }
 /* Phone control messages enter through the real EP2 parser, not context writes. */
@@ -227,7 +232,32 @@ int main(int argc, char **argv) {
     mounted = false; tud_umount_cb(); connect_phone();
     command(0xA0, 0, NULL, 0); assert(staging_host_reboots == 0);
     transfer(image, sizeof(image)); assert(command(0xA3, sizeof(image), NULL, 0) == 0);
-    command(0xA0, 0, NULL, 0); assert(staging_host_reboots == 1);
+    defer_completion = true;
+    reject_write = true;
+    assert(command(0xA0, 0, NULL, 0) == 255 && staging_host_reboots == 0);
+    reject_write = false; service(1);
+    assert(response_len == 4 && memcmp(response, (uint8_t[]){4,2,0xa0,0}, 4) == 0);
+    assert(staging_host_reboots == 0);
+    ck5200_vendor_tx_failed(1); tud_vendor_tx_cb(1, 4);
+    assert(staging_host_reboots == 0); /* Failed full-length completion cannot reset. */
+    assert(command(0xA0, 0, NULL, 0) == 0);
+    tud_vendor_tx_cb(1, 3); assert(staging_host_reboots == 0);
+    assert(command(0xA0, 0, NULL, 0) == 0);
+    mounted = false; tud_umount_cb(); tud_vendor_tx_cb(1, 4);
+    assert(staging_host_reboots == 0);
+    connect_phone(); defer_completion = false;
+    transfer(image, sizeof(image)); assert(command(0xA3, sizeof(image), NULL, 0) == 0);
+    defer_completion = true;
+    assert(command(0xA0, 0, NULL, 0) == 0);
+    advance_time(2600); tud_vendor_tx_cb(1, 4);
+    assert(staging_host_reboots == 0); /* Expired session at completion. */
+    connect_phone(); defer_completion = false;
+    transfer(image, sizeof(image)); assert(command(0xA3, sizeof(image), NULL, 0) == 0);
+    defer_completion = true;
+    assert(command(0xA0, 0, NULL, 0) == 0 && staging_host_reboots == 0);
+    tud_vendor_tx_cb(0, 4); assert(staging_host_reboots == 0);
+    tud_vendor_tx_cb(1, 4); assert(staging_host_reboots == 1);
+    tud_vendor_tx_cb(1, 4); assert(staging_host_reboots == 1);
     for (unsigned i=0; i<sizeof(flash); ++i)
         if (i < 0x8A00 || i >= 0xF500) assert(flash[i] == 0xA5);
     puts("rescue production entry, stock-only commit, reconnect cancellation, and staging bounds pass");

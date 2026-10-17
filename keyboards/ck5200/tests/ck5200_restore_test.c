@@ -189,9 +189,12 @@ static void run_cycle(const uint8_t *image, size_t image_len, bool expect_ok) {
     assert(marker_read() == image_len);
     assert(memcmp(flash + (STAGING_IMAGE_BASE - 0x08000000u), image, image_len) == 0);
 
-    /* A0: reboot command reaches the driver exactly once per cycle. */
+    /* A0 parsing returns the stock ACK; the transport owns completion. */
     const uint8_t a0[2] = {0x02, 0xA0};
-    assert(ck5200_update_handle(a0, sizeof(a0), response, &ck5200_staging_ops) == 0);
+    assert(ck5200_update_handle(a0, sizeof(a0), response, &ck5200_staging_ops) == 4);
+    assert(memcmp(response, (uint8_t[]){4,2,0xa0,0}, 4) == 0);
+    assert(staging_host_reboots == reboots_before);
+    ck5200_staging_ops.reboot(); /* Model successful transport completion. */
     assert(staging_host_reboots == reboots_before + 1 && "A0 did not trigger the reset path");
 }
 

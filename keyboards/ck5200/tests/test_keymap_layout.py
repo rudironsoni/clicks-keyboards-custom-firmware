@@ -3,8 +3,8 @@
 Parses the flashed keymap (firmware/keyboard/keymaps/diagnostic/keymap.c)
 and asserts every electrical crossing on every layer against the
 36-crossing table decoded from the stock V122 image (stock
-0x2b1c..0x3010; the full decode with stock addresses lives in
-docs/STOCK_DECODE.md and can be re-derived with
+0x2a54..0x3010; the corrected decode with stock addresses lives in
+docs/qmk-delivery-evidence.md. The partial letter extraction is available with
 tools/stock_audit/extract_keymap.py). This closes the gap where a typo
 in the keymap would ship silently: the dispatcher tests never looked at
 the keymap contents.
@@ -22,7 +22,7 @@ BASE = {
     (0, 4): "KC_ENT",  (0, 5): "CK_CONS_A",
     (1, 0): "KC_W",    (1, 1): "KC_I",    (1, 2): "KC_D",    (1, 3): "KC_L",
     (1, 4): "KC_V",    (1, 5): "CK_CONS_B",
-    (2, 0): "KC_E",    (2, 1): "KC_O",    (2, 2): "KC_F",    (2, 3): "KC_NO",
+    (2, 0): "KC_E",    (2, 1): "KC_O",    (2, 2): "KC_F",    (2, 3): "KC_LSFT",
     (2, 4): "KC_B",    (2, 5): "KC_LGUI",
     (3, 0): "KC_R",    (3, 1): "KC_P",    (3, 2): "KC_G",    (3, 3): "KC_Z",
     (3, 4): "KC_N",    (3, 5): "KC_SPC",
@@ -34,14 +34,14 @@ BASE = {
 
 SYM = {  # stock SYM values (the stock maps letters to their row numbers)
     (0, 0): "KC_1",    (0, 1): "KC_7",    (0, 2): "KC_QUOTE",
-    (1, 0): "KC_2",    (1, 1): "KC_8",    (1, 2): "KC_SCLN",   (1, 3): "KC_QUOTE",
-    (1, 4): "KC_SLASH",
-    (2, 0): "KC_3",    (2, 1): "KC_9",    (2, 2): "KC_SCLN",   (2, 3): "KC_NO",
-    (2, 4): "KC_1",
-    (3, 0): "KC_4",    (3, 1): "KC_0",    (3, 2): "KC_9",      (3, 4): "KC_COMMA",
-    (4, 0): "KC_5",    (4, 1): "KC_MINUS", (4, 2): "KC_0",     (4, 3): "KC_7",
+    (1, 0): "KC_2",    (1, 1): "KC_8",    (1, 2): "S(KC_SCLN)", (1, 3): "S(KC_QUOTE)",
+    (1, 4): "S(KC_SLASH)",
+    (2, 0): "KC_3",    (2, 1): "KC_9",    (2, 2): "KC_SCLN",
+    (2, 4): "S(KC_1)",
+    (3, 0): "KC_4",    (3, 1): "KC_0",    (3, 2): "S(KC_9)",   (3, 4): "KC_COMMA",
+    (4, 0): "KC_5",    (4, 1): "KC_MINUS", (4, 2): "S(KC_0)",  (4, 3): "S(KC_7)",
     (4, 4): "KC_DOT",
-    (5, 0): "KC_6",    (5, 1): "KC_SLASH", (5, 3): "KC_2",
+    (5, 0): "KC_6",    (5, 1): "KC_SLASH", (5, 3): "S(KC_2)",
 }
 
 CURSOR = {  # stock cursor-mode arrows
@@ -51,7 +51,6 @@ CURSOR = {  # stock cursor-mode arrows
     (5, 1): "KC_DOWN",
 }
 
-SPARE = {(2, 3)}
 TRANSPARENT = "KC_TRNS"
 # fmt: on
 
@@ -95,8 +94,6 @@ def test_keymap_matches_stock_decode():
     for (row, col), want in sorted(BASE.items()):
         got = layers[0][row][col]
         assert got == want, f"L0 ({row},{col}): {got} != decoded {want}"
-    for (row, col) in SPARE:
-        assert layers[0][row][col] == "KC_NO", f"L0 spare ({row},{col}) must stay empty"
 
     for (row, col), want in sorted(SYM.items()):
         got = layers[1][row][col]
@@ -110,12 +107,10 @@ def test_keymap_matches_stock_decode():
     for layer, table in ((1, SYM), (2, CURSOR)):
         for row in range(6):
             for col in range(6):
-                if (row, col) not in table and (row, col) not in SPARE:
+                if (row, col) not in table:
                     assert layers[layer][row][col] == TRANSPARENT, (
                         f"L{layer} ({row},{col}) should be transparent, is {layers[layer][row][col]}"
                     )
-                if (row, col) in SPARE:
-                    assert layers[layer][row][col] == "KC_NO"
 
     # Layer 3 stays fully reserved.
     for row in range(6):

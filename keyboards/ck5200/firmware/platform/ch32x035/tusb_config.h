@@ -1,4 +1,5 @@
 #pragma once
+#include "iap2.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,8 @@ extern "C" {
 #define CFG_TUD_VENDOR_RX_BUFSIZE    0
 #define CFG_TUD_VENDOR_TX_BUFSIZE    0
 #define CFG_TUD_VENDOR_TXRX_BUFFERED 0
+/* Transfer storage, not USB wMaxPacketSize (which stays 64 bytes). */
+#define CFG_TUD_VENDOR_TX_EPSIZE IAP2_PKT_MAX
 /* Stock topology: interface 1 exposes its EP3 pair only at alternate
  * setting 1, which the phone selects when the EA session opens. */
 #define CFG_TUD_VENDOR_ALT_SETTINGS  1

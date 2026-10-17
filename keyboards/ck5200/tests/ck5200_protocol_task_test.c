@@ -21,6 +21,8 @@
 #include "report.h"
 #include "tusb.h"
 #include "ck5200_update_protocol.h"
+#include "ch32x035_gpio.h"
+#include "ch32x035_rcc.h"
 
 void     set_time(uint32_t t);
 void     advance_time(uint32_t ms);
@@ -36,6 +38,10 @@ bool stub_mounted, stub_suspended, stub_hid_ready;
 uint8_t stub_epin_buf[64];
 long stub_submit_count;
 int stub_init_ports[4] = {0};
+static uint16_t wire_len;
+static uint8_t wire_history[512][10];
+static unsigned wire_count;
+static bool reject_report;
 
 bool tud_mounted(void) { return stub_mounted; }
 bool tud_suspended(void) { return stub_suspended; }
@@ -50,34 +56,49 @@ uint32_t tud_vendor_n_write(uint8_t itf, const void *buf, uint32_t len) {
 bool tud_hid_report(uint8_t report_id, void const *report, uint16_t len) {
     (void)report_id;
     if (!stub_mounted || stub_suspended || !stub_hid_ready) return false;
+    if (reject_report) return false;
     if (len > sizeof(stub_epin_buf)) return false;
     memcpy(stub_epin_buf, report, len);
+    wire_len = len;
+    if (wire_count < 512) {
+        memset(wire_history[wire_count], 0, 10);
+        memcpy(wire_history[wire_count++], report, len);
+    }
     stub_submit_count++;
     return true;
 }
 
 /* TinyUSB-side events the harness drives. */
 extern void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len);
-static void usb_complete_hid(void) { tud_hid_report_complete_cb(0, stub_epin_buf, 10); }
+static void usb_complete_hid(void) { tud_hid_report_complete_cb(0, stub_epin_buf, wire_len); }
 
 /* ---------------- matrix injection ------------------------------------- */
 static matrix_row_t test_raw[MATRIX_ROWS];
-static matrix_row_t injected_prev[MATRIX_ROWS];
 static long scan_calls;
-
-void matrix_init_custom(void) {
-    memset(test_raw, 0, sizeof(test_raw));
-    memset(injected_prev, 0, sizeof(injected_prev));
+static GPIO_TypeDef gpio_a, gpio_b;
+GPIO_TypeDef *GPIOA = &gpio_a, *GPIOB = &gpio_b;
+static uint16_t selected_row;
+void RCC_APB2PeriphClockCmd(uint32_t peripherals, unsigned enable) {
+    assert(peripherals == (RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB) && enable == ENABLE);
 }
-bool matrix_scan_custom(matrix_row_t current_matrix[]) {
-    bool changed = false;
-    scan_calls++;
-    for (uint8_t r = 0; r < MATRIX_ROWS; ++r) {
-        current_matrix[r] = test_raw[r];
-        changed |= test_raw[r] != injected_prev[r];
-        injected_prev[r] = test_raw[r];
-    }
-    return changed;
+void GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init) {
+    assert(init->GPIO_Pin == 0x3f);
+    assert((port == GPIOA && init->GPIO_Mode == GPIO_Mode_IPD) ||
+           (port == GPIOB && init->GPIO_Mode == GPIO_Mode_Out_PP && init->GPIO_Speed == GPIO_Speed_50MHz));
+}
+void GPIO_ResetBits(GPIO_TypeDef *port, uint16_t pins) {
+    assert(port == GPIOB && pins == 0x3f); selected_row = 0;
+}
+void GPIO_SetBits(GPIO_TypeDef *port, uint16_t pins) {
+    assert(port == GPIOB && selected_row == 0 && pins && !(pins & (pins - 1)) && pins <= 32);
+    selected_row = pins;
+}
+uint16_t GPIO_ReadInputData(GPIO_TypeDef *port) {
+    assert(port == GPIOA && selected_row);
+    unsigned row = 0;
+    while ((1u << row) != selected_row) ++row;
+    if (!row) ++scan_calls;
+    return test_raw[row] | 0xffc0; /* unrelated inputs must be masked out */
 }
 
 /* ---------------- iAP2 / backlight / update stubs ----------------------- */
@@ -134,7 +155,7 @@ static void loop_tick(void) {
 }
 
 static bool report_wire_has(uint8_t keycode) {
-    /* 10-byte wire report: mods, reserved, keys[6], consumer hi, consumer lo */
+    /* 10-byte wire report: mods, reserved, keys[6], consumer low, consumer high */
     for (int i = 2; i < 8; ++i)
         if (stub_epin_buf[i] == keycode) return true;
     return false;
@@ -145,9 +166,9 @@ static void setup_firmware(void) {
     stub_mounted = false;
     stub_suspended = false;
     stub_hid_ready = true;
+    protocol_setup();
     keyboard_setup();
     keyboard_init();
-    protocol_setup();
     stub_mounted = true; /* enumeration done */
 }
 
@@ -293,6 +314,170 @@ static void p5_plain_tap(void) {
     settle_ticks(12);
 }
 
+static bool history_has(uint8_t key, uint8_t mods, uint16_t consumer) {
+    for (unsigned h = 0; h < wire_count; ++h) {
+        uint8_t *r = wire_history[h];
+        if (r[0] != mods || (uint16_t)(r[8] | r[9] << 8) != consumer) continue;
+        if (!key) return true;
+        for (unsigned i = 2; i < 8; ++i) if (r[i] == key) return true;
+    }
+    return false;
+}
+
+static bool wire_empty(void) {
+    const uint8_t empty[10] = {0};
+    return memcmp(stub_epin_buf, empty, wire_len) == 0;
+}
+
+static void p7_all_crossings(void) {
+    extern bool tud_hid_set_idle_cb(uint8_t, uint8_t);
+    tud_hid_set_idle_cb(0, 0);
+    /* Independent expected base usages, including the delayed J tap. */
+    static const uint8_t keys[6][6] = {
+        {KC_Q,KC_U,KC_K,KC_BSPC,KC_ENT,0},
+        {KC_W,KC_I,KC_D,KC_L,KC_V,0},
+        {KC_E,KC_O,KC_F,0,KC_B,0},
+        {KC_R,KC_P,KC_G,KC_Z,KC_N,KC_SPC},
+        {KC_T,KC_A,KC_H,KC_X,KC_M,0},
+        {KC_Y,KC_S,KC_J,KC_C,0,0},
+    };
+    for (unsigned row = 0; row < 6; ++row) for (unsigned col = 0; col < 6; ++col) {
+        settle_ticks(220);
+        wire_count = 0;
+        set_key(row, col, true); settle_ticks(12);
+        set_key(row, col, false); settle_ticks(12);
+        uint8_t mods = row == 2 && col == 3 ? 2 : col == 5 ? (row == 2 ? 8 : row == 4 ? 1 : 0) : 0;
+        uint16_t consumer = col == 5 ? (row == 0 ? 0xcf : row == 1 ? 0x29d : row == 5 ? 0xb8 : 0) : 0;
+        if (row == 5 && col == 4) {
+            set_key(0, 0, true); settle_ticks(12);
+            set_key(0, 0, false); settle_ticks(12);
+            CHECK(history_has(KC_1, 0, 0), "SYM one-shot reaches wire");
+            wire_count = 0;
+            set_key(0, 0, true); settle_ticks(12);
+            CHECK(history_has(KC_Q, 0, 0), "SYM consumed, next key uses base layer");
+            set_key(0, 0, false); settle_ticks(12);
+        } else CHECK(history_has(keys[row][col], mods, consumer), "crossing (%u,%u) reaches wire", row, col);
+        CHECK(wire_empty() && selected_row == 0, "crossing (%u,%u) releases report and row drive", row, col);
+    }
+    set_key(2, 5, true); set_key(4, 5, true); set_key(0, 0, true);
+    settle_ticks(12);
+    CHECK(stub_epin_buf[0] == 9 && report_wire_has(KC_Q), "GUI + Ctrl + Q modifiers combine");
+    set_key(2, 5, false); set_key(4, 5, false); set_key(0, 0, false);
+    settle_ticks(12);
+    CHECK(wire_empty(), "modifier chord releases");
+
+    /* Stock 0x2a86..0x2ab0 adds Shift to these eight fixed SYM usages.
+     * Z/J use configuration-dependent paths, intentionally not guessed. */
+    const uint8_t symbols[][3] = {{1,2,KC_SCLN},{1,3,KC_QUOTE},{1,4,KC_SLASH},
+                                 {2,4,KC_1},{3,2,KC_9},{4,2,KC_0},{4,3,KC_7},{5,3,KC_2}};
+    for (unsigned i = 0; i < sizeof(symbols)/sizeof(symbols[0]); ++i) {
+        set_key(5, 4, true); settle_ticks(12);
+        set_key(5, 4, false); settle_ticks(12);
+        wire_count = 0;
+        set_key(symbols[i][0], symbols[i][1], true); settle_ticks(12);
+        set_key(symbols[i][0], symbols[i][1], false); settle_ticks(12);
+        CHECK(history_has(symbols[i][2], 2, 0) && wire_empty(), "shifted SYM crossing %u press/release", i);
+    }
+    set_key(2, 3, true); set_key(0, 0, true); settle_ticks(12);
+    CHECK(stub_epin_buf[0] == 2 && report_wire_has(KC_Q), "physical Shift crossing + Q");
+    set_key(2, 3, false); set_key(0, 0, false); settle_ticks(12);
+    CHECK(wire_empty(), "Shift chord releases");
+
+    set_key(5, 2, true); settle_ticks(220);
+    const uint8_t arrows[][3] = {{0,2,KC_DOWN},{1,0,KC_UP},{1,1,KC_UP},{1,2,KC_RIGHT},
+                                {1,3,KC_RIGHT},{4,1,KC_LEFT},{5,1,KC_DOWN}};
+    for (unsigned i = 0; i < sizeof(arrows)/sizeof(arrows[0]); ++i) {
+        set_key(arrows[i][0], arrows[i][1], true); settle_ticks(12);
+        CHECK(report_wire_has(arrows[i][2]), "held Clicks navigation crossing %u", i);
+        set_key(arrows[i][0], arrows[i][1], false); settle_ticks(12);
+    }
+    set_key(5, 2, false); settle_ticks(12);
+    CHECK(wire_empty(), "navigation layer releases");
+
+    wire_count = 0;
+    for (unsigned i = 0; i < 20; ++i) {
+        set_key(0, i % 2, true); settle_ticks(8);
+        set_key(0, i % 2, false); settle_ticks(8);
+    }
+    CHECK(wire_count == 40, "20 rapid taps preserve all 40 edges (got %u)", wire_count);
+    for (unsigned i = 0; i < wire_count; ++i) {
+        uint8_t expected[10] = {0};
+        if (!(i & 1)) expected[2] = (i / 2) % 2 ? KC_U : KC_Q;
+        assert(memcmp(wire_history[i], expected, 10) == 0);
+    }
+}
+
+static void p8_report_recovery(void) {
+    extern void tud_mount_cb(void), tud_umount_cb(void), tud_suspend_cb(bool), tud_resume_cb(void);
+    extern void tud_hid_set_protocol_cb(uint8_t, uint8_t);
+    extern void tud_hid_report_failed_cb(uint8_t, hid_report_type_t, const uint8_t *, uint16_t);
+    extern uint16_t tud_hid_get_report_cb(uint8_t, uint8_t, hid_report_type_t, uint8_t *, uint16_t);
+    uint8_t out[16];
+    for (unsigned disconnected = 0; disconnected < 2; ++disconnected) {
+        set_key(0, 0, true); settle_ticks(12);
+        set_key(5, 5, true); settle_ticks(12);
+        if (disconnected) { stub_mounted = false; tud_umount_cb(); }
+        else { stub_suspended = true; tud_suspend_cb(false); }
+        long before = stub_submit_count;
+        set_key(0, 0, false); set_key(5, 5, false); settle_ticks(12);
+        CHECK(stub_submit_count == before, "no report while %s", disconnected ? "unmounted" : "suspended");
+        if (disconnected) { stub_mounted = true; tud_mount_cb(); }
+        else { stub_suspended = false; tud_resume_cb(); }
+        settle_ticks(12);
+        CHECK(wire_empty() && stub_submit_count > before, "current release state sent after reconnect/resume");
+    }
+    set_key(0, 0, true);
+    for (unsigned i = 0; i < 8; ++i) loop_tick();
+    long before = stub_submit_count;
+    tud_hid_report_failed_cb(0, HID_REPORT_TYPE_INPUT, stub_epin_buf, 0);
+    settle_ticks(12);
+    CHECK(stub_submit_count > before && report_wire_has(KC_Q), "failed held-key transfer retries");
+    set_key(0, 0, false); settle_ticks(12);
+
+    reject_report = true;
+    set_key(1, 5, true); settle_ticks(12); /* consumer-only report rejected */
+    before = stub_submit_count;
+    reject_report = false; settle_ticks(12);
+    CHECK(stub_submit_count > before && stub_epin_buf[8] == 0x9d && stub_epin_buf[9] == 2,
+          "rejected consumer submission retains dirty state");
+    set_key(1, 5, false); settle_ticks(12);
+    CHECK(wire_empty(), "consumer release reaches wire");
+
+    tud_hid_set_protocol_cb(0, 0);
+    set_key(0, 0, true); settle_ticks(12);
+    CHECK(wire_len == 8 && report_wire_has(KC_Q), "boot protocol interrupt report is eight bytes");
+    CHECK(tud_hid_get_report_cb(0, 0, HID_REPORT_TYPE_INPUT, out, sizeof(out)) == 8,
+          "boot protocol GET_REPORT is eight bytes");
+    stub_mounted = false; tud_umount_cb();
+    stub_mounted = true; tud_mount_cb(); settle_ticks(12);
+    CHECK(wire_len == 10 && report_wire_has(KC_Q), "new mount resets protocol and resends held key");
+    set_key(0, 0, false); settle_ticks(12);
+    CHECK(wire_empty(), "reconnected held key releases");
+
+    /* A failed press must be retried before its already-queued release. */
+    report_keyboard_t tap = {0};
+    tap.keys[0] = KC_A;
+    wire_count = 0;
+    host_keyboard_send(&tap);
+    tap.keys[0] = 0;
+    host_keyboard_send(&tap);
+    tud_hid_report_failed_cb(0, HID_REPORT_TYPE_INPUT, stub_epin_buf, 0);
+    settle_ticks(12);
+    CHECK(wire_count == 3 && wire_history[0][2] == KC_A && wire_history[1][2] == KC_A && wire_empty(),
+          "failed tap retries the press before the queued release");
+
+    wire_count = 0;
+    for (unsigned i = 0; i < 40; ++i) {
+        tap.keys[0] = KC_A + i % 26;
+        host_keyboard_send(&tap);
+    }
+    tap.keys[0] = 0;
+    host_keyboard_send(&tap);
+    settle_ticks(40);
+    CHECK(wire_count == 16 && wire_history[0][2] == KC_A && wire_empty(),
+          "bounded queue overload retains in-flight head and final release");
+}
+
 int main(int argc, char **argv) {
     set_time(0);
     setup_firmware();
@@ -303,6 +488,8 @@ int main(int argc, char **argv) {
     if (strcmp(which, "p4") == 0 || strcmp(which, "all") == 0) p4_get_report();
     if (strcmp(which, "p5") == 0 || strcmp(which, "all") == 0) p5_plain_tap();
     if (strcmp(which, "p6") == 0 || strcmp(which, "all") == 0) p6_root_port_init();
+    if (strcmp(which, "p7") == 0 || strcmp(which, "all") == 0) p7_all_crossings();
+    if (strcmp(which, "p8") == 0 || strcmp(which, "all") == 0) p8_report_recovery();
     printf("==== %d failure(s) ====\n", failures);
     if (!failures) printf("ok\n");
     return failures ? 1 : 0;

@@ -14,13 +14,16 @@
 #include "ck5200_rescue.h"
 
 #define UPDATE_RESPONSE_SIZE 8u
-#define HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
+#define CK_HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
+#define HID_QUEUE_DEPTH 16u
 
 uint8_t keyboard_protocol = 1, keyboard_idle = 0;
 static uint8_t keyboard_led_state;
-static report_keyboard_t pending_keyboard_report, last_keyboard_report;
+static report_keyboard_t last_keyboard_report;
+static uint8_t hid_queue[HID_QUEUE_DEPTH][CK_HID_REPORT_SIZE];
+static uint8_t hid_head, hid_count;
 static uint32_t last_keyboard_report_sent_at;
-static bool pending_keyboard_report_valid, keyboard_report_in_flight, last_keyboard_report_valid;
+static bool keyboard_report_in_flight, last_keyboard_report_valid;
 static uint8_t pending_update_response[UPDATE_RESPONSE_SIZE];
 static uint8_t pending_update_response_len;
 static uint8_t pending_update_response_itf;
@@ -38,53 +41,53 @@ static void cancel_rescue_if_disconnected(void) {
 static uint8_t keyboard_leds_impl(void) { return keyboard_led_state; }
 
 /* Sends the 8-byte keyboard part plus the 16-bit consumer tail. */
-static bool submit_hid_report(const report_keyboard_t *report) {
+static bool submit_hid_report(void) {
     if (!tud_mounted() || tud_suspended() || keyboard_report_in_flight || !tud_hid_ready()) return false;
+    if (!hid_count) return false;
 
-    uint8_t buf[HID_REPORT_SIZE];
-    ck5200_consumer_pack(buf, (const uint8_t *)report);
     /* Boot protocol carries the plain 8-byte boot report; the consumer
      * tail exists only in report protocol (review 2026-10-11, F7). */
-    const uint16_t length = keyboard_protocol ? HID_REPORT_SIZE : 8u;
-    if (!tud_hid_report(0, buf, length)) return false;
+    const uint16_t length = keyboard_protocol ? CK_HID_REPORT_SIZE : 8u;
+    if (!tud_hid_report(0, hid_queue[hid_head], length)) return false;
 
     keyboard_report_in_flight = true;
     return true;
 }
 
-static bool submit_keyboard_report(const report_keyboard_t *report) {
-    return submit_hid_report(report);
+static void queue_keyboard_report(const report_keyboard_t *report) {
+    /* Preserve one-shot/mod-tap edges within a scan. On overload retain the
+     * newest state in the last slot so releases cannot leave keys stuck.
+     * Unmounted/suspended states coalesce; do not replay offline typing. */
+    if (!tud_mounted() || tud_suspended()) hid_head = hid_count = 0;
+    if (hid_count < HID_QUEUE_DEPTH) ++hid_count;
+    uint8_t tail = (uint8_t)((hid_head + hid_count - 1u) % HID_QUEUE_DEPTH);
+    ck5200_consumer_pack(hid_queue[tail], (const uint8_t *)report);
+    ck5200_consumer_clear_dirty();
 }
 
 static void send_keyboard_impl(report_keyboard_t *report) {
     if (!report) return;
 
-    /* One pending state coalesces a task pass; synchronous macros need a report queue. */
-    if (!tud_mounted() || tud_suspended() || pending_keyboard_report_valid || keyboard_report_in_flight ||
-        !submit_keyboard_report(report)) {
-        pending_keyboard_report = *report;
-        pending_keyboard_report_valid = true;
-    }
+    queue_keyboard_report(report);
+    (void)submit_hid_report();
 }
 
 void protocol_keyboard_task(void) {
     if (!tud_mounted() || tud_suspended()) { keyboard_task(); return; }
     if (keyboard_report_in_flight || !tud_hid_ready()) return;
-    if (pending_keyboard_report_valid) { (void)submit_keyboard_report(&pending_keyboard_report); return; }
+    if (hid_count) { (void)submit_hid_report(); return; }
 
     /* A consumer-only change still needs a fresh report on the wire. */
     if (ck5200_consumer_dirty()) {
-        ck5200_consumer_clear_dirty();
-        if (keyboard_report && submit_hid_report(keyboard_report)) return;
-        if (last_keyboard_report_valid && submit_hid_report(&last_keyboard_report)) return;
+        if (keyboard_report) queue_keyboard_report(keyboard_report);
+        else if (last_keyboard_report_valid) queue_keyboard_report(&last_keyboard_report);
+        if (submit_hid_report()) return;
     }
 
     if (keyboard_idle != 0 && last_keyboard_report_valid &&
         timer_elapsed32(last_keyboard_report_sent_at) >= (uint32_t)keyboard_idle * 4u) {
-        if (!submit_keyboard_report(&last_keyboard_report)) {
-            pending_keyboard_report = last_keyboard_report;
-            pending_keyboard_report_valid = true;
-        }
+        queue_keyboard_report(&last_keyboard_report);
+        (void)submit_hid_report();
         return;
     }
 
@@ -179,9 +182,10 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     if (ck5200_rescue_active()) return 0;
 
     if (report_type == HID_REPORT_TYPE_INPUT && keyboard_report) {
-        uint8_t buf[HID_REPORT_SIZE];
+        uint8_t buf[CK_HID_REPORT_SIZE];
         ck5200_consumer_pack(buf, (const uint8_t *)keyboard_report);
-        const uint16_t length = (uint16_t)((HID_REPORT_SIZE < reqlen) ? HID_REPORT_SIZE : reqlen);
+        const uint16_t report_size = keyboard_protocol ? CK_HID_REPORT_SIZE : 8u;
+        const uint16_t length = report_size < reqlen ? report_size : reqlen;
         memcpy(buffer, buf, length);
         return length;
     }
@@ -213,10 +217,8 @@ bool tud_hid_set_idle_cb(uint8_t instance, uint8_t idle_rate) {
 
 static void retain_interrupted_keyboard_report(void) {
     if (ck5200_rescue_active()) return;
-    if (keyboard_report) {
-        pending_keyboard_report = *keyboard_report;
-        pending_keyboard_report_valid = true;
-    }
+    hid_head = hid_count = 0;
+    if (keyboard_report) queue_keyboard_report(keyboard_report);
     keyboard_report_in_flight = false;
 }
 
@@ -233,9 +235,7 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     memcpy(&last_keyboard_report, report, sizeof(last_keyboard_report));
     last_keyboard_report_valid = true;
     last_keyboard_report_sent_at = timer_read32();
-    if (memcmp(&pending_keyboard_report, report, sizeof(last_keyboard_report)) == 0) {
-        pending_keyboard_report_valid = false;
-    }
+    if (hid_count) { hid_head = (uint8_t)((hid_head + 1u) % HID_QUEUE_DEPTH); --hid_count; }
 }
 
 void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
@@ -243,11 +243,17 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
     (void)report;
     (void)xferred_bytes;
     if (instance == 0 && report_type == HID_REPORT_TYPE_INPUT && keyboard_report_in_flight) {
-        keyboard_report_in_flight = false;
+        keyboard_report_in_flight = false; /* Keep the queue head for retry. */
     }
 }
 
-void tud_mount_cb(void) { retain_interrupted_keyboard_report(); iap2_set_connected(true); }
+void tud_mount_cb(void) {
+    keyboard_protocol = 1;
+    keyboard_idle = keyboard_led_state = 0;
+    last_keyboard_report_valid = false;
+    retain_interrupted_keyboard_report();
+    iap2_set_connected(true);
+}
 void tud_umount_cb(void) {
     retain_interrupted_keyboard_report();
     iap2_set_connected(false);
@@ -327,6 +333,21 @@ void tud_vendor_rx_cb(uint8_t idx, const uint8_t *buffer, uint32_t bufsize) {
 
 void tud_vendor_tx_cb(uint8_t idx, uint32_t sent_bytes) {
     if (idx != pending_update_response_itf || !update_response_in_flight) return;
+    account_iap2_elapsed_time();
+    if (!update_response_in_flight) return; /* Rescue authority expired. */
     update_response_in_flight = false;
+    if (pending_update_response_len == 4 && pending_update_response[2] == 0xA0) {
+        pending_update_response_len = 0; /* Never retry a failed/short A0 ACK. */
+        if (sent_bytes == 4 && tud_mounted() && !tud_suspended() &&
+            (!ck5200_rescue_active() || iap2_restore_authorized())) ck5200_staging_ops.reboot();
+        return;
+    }
     if (sent_bytes == pending_update_response_len) pending_update_response_len = 0;
+}
+
+/* The pinned vendor driver otherwise reports bytes without transfer status. */
+void ck5200_vendor_tx_failed(uint8_t idx) {
+    if (idx != pending_update_response_itf) return;
+    pending_update_response_len = 0;
+    update_response_in_flight = false;
 }
