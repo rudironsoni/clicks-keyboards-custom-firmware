@@ -1,4 +1,4 @@
-/* Fail-closed access contract for the reviewed, disconnected CK5200 profile.
+/* Fail-closed access contract for the reviewed CK5200 BIN and connected host profile.
  * Register definitions: pinned OpenWCH EVT/EXAM/SRC/Peripheral/inc/ch32x035{,_usb}.h.
  * PFIC/SysTick/CSR definitions: pinned OpenWCH EVT/EXAM/SRC/Core/core_riscv.h.
  * Unlisted registers, widths, directions and write values are model failures.
@@ -55,6 +55,7 @@ void gate_watchdog_expire(ChgMachine *m) {
     g.stage=g.scan_stage=g.startup_returns=0;
     g.pending_return=g.pending_handler=false;
     g.irqs=g.returns=g.observed_returns=g.handler_entries=0;
+    g.usb_irqs=g.usb_returns=g.usb_observed_returns=g.usb_handler_entries=0;
     g.foreground_after_irq=0;
     g.last_foreground=g.last_systick_return=m->cycles;
     g.fault_active=false;
@@ -174,6 +175,25 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v) {
         if (write) g.mmio_writes++; else g.mmio_reads++;
     }
     if (a == 0x1ffff704) { *v = 0x03510601; return true; } /* synthetic C8T */
+    if (g.usb_connected && a==0x40010808 && !write) {
+        uint32_t pins=0;
+        for (int pin=0;pin<24;pin++) if (gpio_pin(m,0,pin)) pins|=1u<<pin;
+        unsigned rows=m->gpio[1].outdr&63;
+        if (rows && !(rows&(rows-1))) {
+            unsigned row=0;
+            while (rows!=(1u<<row)) row++;
+            unsigned row_cfg=(m->gpio[1].cfg[0]>>(4*row))&15;
+            if ((m->rcc[6]&0x0c)==0x0c && (row_cfg&3) && gpio_pin(m,1,(int)row)) {
+                for (unsigned col=0;col<6;col++) if (g.keys[row]&(1u<<col)) {
+                    require(((m->gpio[0].cfg[0]>>(4*col))&15)==8 &&
+                            !(m->gpio[0].outdr&(1u<<col)),"matrix-input-pulldown",a);
+                    pins|=1u<<col;
+                }
+            }
+        }
+        *v=pins;
+        return true;
+    }
     if (a >= 0x40003000 && a < 0x40003010) {
         if (a==0x40003000) {
             if (*v==0x5555) g.watchdog_unlocked=true;
@@ -222,19 +242,41 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v) {
         return true;
     }
     if (a >= 0x40023400 && a < 0x40023800) {
+        if (g.usb_connected)
+            require((m->rcc[5]&0x1000)!=0,"USB-clock-disabled",a);
         unsigned off = a - 0x40023400;
         if (!write) {
             *v = 0; memcpy(v, m->usb + off, (size_t)n);
             if (off == 5 || off == 6) *v |= 0x20; /* SIE idle, no host traffic */
+            if (g.usb_model_mutant==2 && off==7 && ((*v>>4)&3)==0)
+                *v |= 0x40; /* Wrong peripheral TOG_OK status for duplicate OUT. */
         } else if (off == 6) {
-            m->usb[6] &= (uint8_t)~(*v & 0x1f); /* W1C, RO status untouched */
+            if (g.usb_model_mutant!=1)
+                m->usb[6] &= (uint8_t)~(*v & 0x1f); /* W1C, RO status untouched */
         } else {
-            /* DMA addresses are recorded only. No DMA, packets or completion events. */
-            if (n == 4) require(inside(*v,64,CHG_RAM_BASE,CHG_RAM_BASE+CHG_RAM_SIZE),
-                                "USB-DMA-range", *v);
+            if (n == 4) {
+                static const unsigned dma_offsets[]={0x10,0x14,0x18,0x1c,0x54,0x58,0x5c};
+                unsigned extent=g.usb_connected && off==0x10 ? 192 : g.usb_connected ? 128 : 64;
+                require(inside(*v,extent,CHG_RAM_BASE,CHG_RAM_BASE+CHG_RAM_SIZE),
+                        "USB-DMA-range",*v);
+                if (g.usb_connected) {
+                    require(!(*v & 3),"USB-DMA-alignment",*v);
+                    for (unsigned i=0;i<sizeof dma_offsets/sizeof *dma_offsets;i++) {
+                        unsigned other=dma_offsets[i];
+                        if (other==off) continue;
+                        uint32_t base; memcpy(&base,m->usb+other,4);
+                        if (!base) continue;
+                        unsigned size=other==0x10 ? 192 : 128;
+                        require(*v+extent<=base || base+size<=*v,
+                                "USB-DMA-overlap",*v);
+                    }
+                }
+            }
             memcpy(m->usb + off,v,(size_t)n);
             if (off == 0 && (*v & 6)) { m->usb[6] = 0; m->usb[7] = 0; }
         }
+        if (g.usb_connected && write && (off==0 || off==2 || off==6))
+            pfic_set_line(m,45,(m->usb[6] & m->usb[2] & 0x1f)!=0);
         return true;
     }
     /* X035 CFGR0 has no legacy SW/SWS fields. CTLR readiness follows enabled HSI. */
@@ -264,14 +306,19 @@ void gate_csr(ChgMachine *m, uint32_t csr, bool write, uint32_t value) {
 }
 void gate_trap(ChgMachine *m, uint32_t pc, uint32_t cause, uint32_t tval, int irq) {
     g.pc=pc;
-    require(irq == CHG_IRQ_SYSTICK && cause == 0x8000000c && !m->cpu.trap_depth,
+    require(!m->cpu.trap_depth &&
+            ((irq==CHG_IRQ_SYSTICK && cause==0x8000000c) ||
+             (g.usb_connected && irq==45 && cause==0x8000002d)),
             "unexpected-trap", cause);
-    require(!g.pending_return, "nested-SysTick", pc);
+    require(!g.pending_return, "nested-interrupt", pc);
+    g.return_irq=(unsigned)irq;
     g.return_pc = pc; g.return_sp = m->cpu.x[2];
     g.saved_mstatus=m->cpu.mstatus;
     memcpy(g.saved_regs,m->cpu.x,sizeof g.saved_regs);
     memcpy(&g.timer_before,m->ram + (P_TIMER - CHG_RAM_BASE),4);
-    g.irqs++; g.pending_return = g.pending_handler = true; event(m,"SysTick-interrupt");
+    if (irq==CHG_IRQ_SYSTICK) g.irqs++; else g.usb_irqs++;
+    g.pending_return = g.pending_handler = true;
+    event(m,irq==CHG_IRQ_SYSTICK ? "SysTick-interrupt" : "USBFS-interrupt");
     (void)tval;
 }
 void gate_mret(ChgMachine *m) {
@@ -280,9 +327,11 @@ void gate_mret(ChgMachine *m) {
         g.startup_returns++; event(m,"startup-mret");
     } else {
         require(g.pending_return && m->cpu.mepc == g.return_pc, "SysTick-return-target",g.pc);
-        require(g.fixture || g.pc == P_SYSTICK_MRET, "SysTick-mret-site",g.pc);
+        require(g.fixture || g.pc == (g.return_irq==CHG_IRQ_SYSTICK ?
+                                     P_SYSTICK_MRET : P_USBFS_MRET),
+                "interrupt-mret-site",g.pc);
         /* The next instruction hook checks the actual restored context. */
-        g.returns++;
+        if (g.return_irq==CHG_IRQ_SYSTICK) g.returns++; else g.usb_returns++;
     }
 }
 void gate_instruction(ChgMachine *m, uint32_t pc) {
@@ -296,18 +345,28 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
     require(inside(pc,len,P_ENTRY,P_ENTRY+4) || inside(pc,len,P_TEXT,P_TEXT_END),
             "execution-crosses-code",pc);
     if (g.pending_handler) {
-        require(m->cpu.trap_depth==1 && pc==(g.fixture ? 0x2300 : P_SYSTICK),"SysTick-handler-target",pc);
-        g.pending_handler=false; g.handler_entries++; event(m,"SysTick-handler-entry");
+        require(m->cpu.trap_depth==1 && pc==(g.fixture ? 0x2300 :
+                g.return_irq==CHG_IRQ_SYSTICK ? P_SYSTICK : P_USBFS),
+                "interrupt-handler-target",pc);
+        g.pending_handler=false;
+        if (g.return_irq==CHG_IRQ_SYSTICK) g.handler_entries++; else g.usb_handler_entries++;
+        event(m,g.return_irq==CHG_IRQ_SYSTICK ? "SysTick-handler-entry" : "USBFS-handler-entry");
     }
-    if (g.pending_return && !m->cpu.trap_depth && g.returns == g.irqs) {
+    if (g.pending_return && !m->cpu.trap_depth &&
+        (g.return_irq==CHG_IRQ_SYSTICK ? g.returns==g.irqs : g.usb_returns==g.usb_irqs)) {
         require(pc == g.return_pc && m->cpu.x[2] == g.return_sp && m->cpu.mstatus==g.saved_mstatus &&
                 !memcmp(m->cpu.x,g.saved_regs,sizeof g.saved_regs),"SysTick-context-return",pc);
         uint32_t timer; memcpy(&timer,m->ram + (P_TIMER - CHG_RAM_BASE),4);
-        require(g.fixture || timer == g.timer_before +
+        require(g.return_irq!=CHG_IRQ_SYSTICK || g.fixture || timer == g.timer_before +
                 ((g.fault_active && g.fault_kind==6) ? 0u : 1u),
                 "SysTick-timer-update",timer);
-        g.pending_return = false; g.observed_returns++; event(m,"SysTick-return-observed");
-        g.last_systick_return = m->cycles;
+        g.pending_return = false;
+        if (g.return_irq==CHG_IRQ_SYSTICK) {
+            g.observed_returns++; g.last_systick_return=m->cycles;
+            event(m,"SysTick-return-observed");
+        } else {
+            g.usb_observed_returns++; event(m,"USBFS-return-observed");
+        }
         if (g.fault_active && g.fault_kind==1)
             longjmp(g.watchdog_escape,2); /* Pause before any foreground instruction. */
     }
@@ -317,6 +376,22 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         event(m,"injected-missing-SysTick-count");
     }
     if (g.fixture) return;
+    if (g.usb_fault_kind && !g.usb_fault_injections && pc==P_HIDD_XFER_CB &&
+        m->cpu.x[11]==0x81 && m->cpu.x[12]==0) {
+        g.usb_fault_injections++;
+        if (g.usb_fault_kind==1) {
+            /* Synthetic lost class callback after TinyUSB has released EP1. */
+            m->cpu.x[10]=1;
+            m->cpu.pc=m->cpu.x[1];
+            m->cpu.fetch_word=(m->cpu.pc>>2)-1;
+            m->cpu.fetch_time=m->cycles;
+            event(m,"injected-missing-HID-class-callback");
+            longjmp(g.watchdog_escape,2);
+        }
+        /* Synthetic completion result failure, not a hardware-generated status. */
+        m->cpu.x[12]=1;
+        event(m,"injected-failed-HID-class-completion");
+    }
     if (pc==P_EARLY_CRT) {
         require(g.stage==0 && g.watchdog_enabled && g.watchdog_feeds>=1,
                 "CRT-before-IWDG-arm-and-feed",pc);
@@ -369,7 +444,10 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         g.stage=6; g.scan_stage=1; event(m,"normal-loop-head");
     }
     if (pc == P_KEYBOARD) {
-        require(g.scan_stage==1 && m->cpu.x[1]==P_KEYBOARD_RETURN,"keyboard-call-order",pc);
+        require(g.scan_stage==1 && (m->cpu.x[1]==P_KEYBOARD_RETURN ||
+                (g.usb_connected && m->cpu.x[1]==P_KEYBOARD_CONNECTED_RETURN)),
+                "keyboard-call-order",pc);
+        g.keyboard_return_pc=m->cpu.x[1];
         g.scan_stage=2; g.rows=g.row_mask=0; event(m,"keyboard-task-enter");
     }
     if (pc == P_ROW_READ) {
@@ -383,8 +461,10 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         require(g.scan_stage==2 && g.rows==6 && g.row_mask==63,"matrix-scan-order",pc);
         g.scan_stage=3; g.scans++; event(m,"six-matrix-rows-complete");
     }
-    if (pc == P_KEYBOARD_RETURN) {
-        require(g.scan_stage==3,"keyboard-return-order",pc); g.scan_stage=4; g.tasks++; event(m,"keyboard-task-return");
+    if (pc==g.keyboard_return_pc &&
+        (pc==P_KEYBOARD_RETURN || (g.usb_connected && pc==P_KEYBOARD_CONNECTED_RETURN))) {
+        require(g.scan_stage==3,"keyboard-return-order",pc);
+        g.scan_stage=4; g.tasks++; event(m,"keyboard-task-return");
     }
     if (pc == P_LOOP_BACK) {
         require(g.scan_stage==4,"normal-loop-completion-order",pc); g.scan_stage=0; g.loops++;

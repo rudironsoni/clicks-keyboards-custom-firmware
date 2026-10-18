@@ -8,10 +8,12 @@ typedef struct {
     jmp_buf abort;
     jmp_buf watchdog_escape;
     const char *failure;
-    uint32_t detail, pc, return_pc, return_sp, timer_before, saved_mstatus;
+    uint32_t detail, pc, return_pc, return_sp, timer_before, saved_mstatus, keyboard_return_pc;
     uint32_t saved_regs[32];
     uint64_t last_foreground, last_systick_return;
     unsigned stage, scan_stage, scans, tasks, loops, irqs, returns, observed_returns, handler_entries;
+    unsigned return_irq, usb_irqs, usb_returns, usb_observed_returns, usb_handler_entries;
+    unsigned usb_fault_kind, usb_fault_injections, usb_model_mutant;
     unsigned rescue_loops, foreground_after_irq, startup_returns;
     unsigned rows, row_mask, mmio_reads, mmio_writes;
     uint32_t watchdog_pscr, watchdog_rld, watchdog_feeds, watchdog_resets;
@@ -19,7 +21,8 @@ typedef struct {
     unsigned fault_kind, fault_loops, fault_injections, fault_limit, fault_marks_removed, fault_ticks_suppressed;
     unsigned watchdog_mutant; /* Fixture only: ignored feed or unconditional feed. */
     bool watchdog_enabled, watchdog_unlocked, watchdog_fault_mode, fault_active;
-    bool fixture, rescue, pending_return, pending_handler;
+    bool fixture, rescue, pending_return, pending_handler, usb_connected, usb_host_attached;
+    uint8_t keys[6]; /* Host's modeled row/column electrical closures. */
     uint8_t noinit[8];
     FILE *trace;
 } Gate;

@@ -493,3 +493,66 @@ also pass under the strict sanitizer-enabled gate. The final command, exit zero,
 and source-hash match are retained in
 `build/program-evidence/watchdog-model/executed-command.json`.
 Hosted verification remains pending.
+
+
+## Connected USB work in progress (2026-10-18)
+
+The connected model uses the unchanged watchdog BIN `9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439` and contract `3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
+It executes the compiled DCD, TinyUSB, QMK and protocol paths through modeled
+USBFS IRQ45, DMA buffers and GPIO matrix closures. It records the actual EP0
+and EP1 IN bytes, including full descriptor packets and ordered HID reports.
+
+The local command record is
+`build/program-evidence/connected-usb/final-executed-commands.json`.
+The default strict gate exits zero. The opt-in `assurance/run.py --connected`
+gate exits one because `USB-resume-state` fails. Both runs preserve exact
+BIN/ELF identity and record matching assurance-source hashes.
+Seven connected scenarios pass: ordinary keyboard/consumer/combined reports
+and boot protocol; synthetic missing class callback; synthetic failed class
+completion; host detach and re-enumeration; endpoint backpressure beyond one
+watchdog interval; a stalled USB IRQ followed by watchdog reset and
+re-enumeration; and healthy suspended idle beyond one watchdog interval.
+Eleven invalid USB-operation fixtures, two deliberate model mutations and one
+host-input alteration pass their rejection checks. The initial report labels
+all three controls as model mutations; review identified that classification
+error. These results do not close Milestone C.
+
+Independent model review also found missing row-output configuration checks,
+missing matrix GPIO clocks, missing USB clock and PHY prerequisites, and a missing malformed-SETUP
+negative control. Red controls reproduced the row-drive, matrix-clock and USB-prerequisite
+false acceptance before correction. The corrected model checks those
+prerequisites and malformed SETUP framing. Its TOG_OK mutant now changes
+the peripheral status read, rather than changing the host input.
+The pre-correction source and execution evidence are preserved in
+`build/program-evidence/connected-usb/red-baseline/manifest.json`.
+The current command record is
+`build/program-evidence/connected-usb/review-gpio-clock-final-executed.json`: default
+B exits zero, connected C exits one only for resume. All 21 invalid-operation
+controls, row-drive/clock checks, three actual model mutants and seven
+connected scenarios pass. Both reports match the live assurance sources and
+unchanged BIN/ELF. Independent re-review closed the model findings with no
+additional in-scope model blocker. The separate compiled resume defect still
+blocks Milestone C. The retained review is
+`build/program-evidence/connected-usb/independent-review.md`. Descriptor checks
+prove delivery and selected contents, not full byte-for-byte validation.
+
+The resume failure is a confirmed driver defect. The pinned
+`external/tinyusb/src/portable/wch/dcd_ch32_usbfs.c` emits only SUSPEND for X035,
+while X035 MIS_ST bit 2 distinguishes suspend from wake-up on that shared
+interrupt. Independent inspection confirmed the source, compiled branch,
+manual semantics and failing execution. WCH's CompositeKM example clears
+the flag, waits 10 microseconds, then reads MIS_ST. A proposed correction
+follows that order using the running SysTick without reprogramming it.
+Dependency and build-file approval, implementation, a newly reviewed binary,
+green resume evidence and hosted verification remain pending.
+
+Model limits remain explicit. Host detach means no tokens followed by a full
+bus reset; it does not invent a hardware unmount callback. Missing and failed
+class completions are labeled CPU fault inputs after TinyUSB releases the
+endpoint, not controller-generated errors. Packet scheduling, GPIO closure,
+clock timing and reset profiles are software assumptions. The host script
+uses EP0 and EP1. The compiled iAP2 task may attempt EP2 attach, but the script
+does not answer its link handshake, open an EA session, or supply successful
+authentication-device responses. This proves neither iPhone recognition nor
+MFi authentication, accessory compatibility, OEM installation, or independent
+recovery. R3 remains UNMET. Physical flashing remains NO-GO.

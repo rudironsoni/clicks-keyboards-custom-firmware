@@ -5,6 +5,9 @@
 
 static ChgMachine machine;
 static uint8_t original_flash[CHG_FLASH_SIZE];
+static unsigned selected_usb_mutant;
+static struct { uint64_t cycle; unsigned ep, len; uint8_t bytes[64]; } host_in_trace[128];
+static unsigned host_in_count;
 static void check(bool ok, const char *why) { if (!ok) gate_fail(why, g.pc); }
 static void put32(uint32_t a, uint32_t v) { memcpy(machine.flash+a,&v,4); }
 static void fixture_reset(void) {
@@ -470,13 +473,551 @@ static bool watchdog_mutant_controls(void) {
            unconditional_feed_rejected?"true":"false");
     return passed;
 }
+static uint32_t usb_dma(unsigned ep) {
+    uint32_t base=0;
+    check(ep<=7,"host-USB-endpoint-number");
+    memcpy(&base,machine.usb+(ep==4 ? 0x10 : ep<4 ? 0x10+4*ep : 0x54+4*(ep-5)),4);
+    check(base>=CHG_RAM_BASE && base+64<=CHG_RAM_BASE+CHG_RAM_SIZE,"host-USB-DMA");
+    return base;
+}
+static void host_raise_irq(unsigned flag, unsigned status, unsigned rx_len) {
+    check(g.usb_host_attached,"host-USB-token-while-detached");
+    check(flag==1 || flag==2 || flag==4,"host-USB-event-unsupported");
+    if (flag==2) {
+        unsigned token=(status>>4)&3;
+        check(token==0 || token==2 || token==3,"host-USB-token-unsupported");
+        check((status&15)<=7 && rx_len<=64,"host-USB-packet-oversize");
+        check(token==0 || token==3 || rx_len==0,"host-IN-RX-length");
+        check(token!=3 || ((status&15)==0 && rx_len==8),"host-SETUP-shape");
+    }
+    check((machine.usb[6]&0x1f)==0 && !(machine.pfic.line&(1ull<<45)),
+          "host-USB-pending-IRQ");
+    check((machine.usb[0]&0x39)==0x39 && (machine.usb[1]&0x81)==0x81 &&
+          (machine.usb[2]&flag),"host-USB-controller-disabled");
+    check(machine.rcc[5]&0x1000,"host-USB-clock-disabled");
+    check((machine.rcc[6]&0x11)==0x11,"host-USB-port-clocks-disabled");
+    check(machine.afio_ctlr&0x40,"host-USB-PHY-disabled");
+    check(machine.afio_ctlr&0x80,"host-USB-IO-disabled");
+    check((machine.afio_ctlr&0x0f)==0x0c,"host-USB-pullup-disabled");
+    check((machine.gpio[2].cfg[2]&0xff)==0x84 &&
+          (machine.gpio[2].outdr&(1u<<17)),"host-USB-pin-mode");
+    machine.usb[7]=(uint8_t)status;
+    machine.usb[8]=(uint8_t)rx_len;
+    machine.usb[9]=(uint8_t)(rx_len>>8);
+    machine.usb[6]|=(uint8_t)flag;
+    if (g.usb_model_mutant!=3) pfic_set_line(&machine,45,true);
+}
+static void host_irq(unsigned flag, unsigned status, unsigned rx_len) {
+    unsigned before=g.usb_observed_returns;
+    host_raise_irq(flag,status,rx_len);
+    gate_run(&machine,480000);
+    check(g.usb_observed_returns==before+1 && !(machine.usb[6]&flag) &&
+          !(machine.pfic.line&(1ull<<45)),"host-USB-IRQ-return");
+}
+static void host_setup(const uint8_t setup[8]) {
+    /* SETUP starts a new control transfer even when EP0 OUT data is NAK. */
+    memcpy(machine.ram+(usb_dma(0)-CHG_RAM_BASE),setup,8);
+    host_irq(2,0x30,8);
+}
+static unsigned host_in(unsigned ep, uint8_t packet[64]) {
+    check(ep<=1 && (ep==0 || (machine.usb[0x0c]&0x40)),
+          "host-IN-endpoint-disabled");
+    unsigned off=ep<5 ? 0x20+4*ep : 0x64+4*(ep-5);
+    check((machine.usb[off+2]&3)==0,"host-IN-not-ACK");
+    unsigned len=machine.usb[off] | ((unsigned)machine.usb[off+1]<<8);
+    check(len<=64,"host-IN-packet-oversize");
+    memcpy(packet,machine.ram+(usb_dma(ep)-CHG_RAM_BASE)+(ep?64:0),len);
+    check(host_in_count<sizeof host_in_trace/sizeof *host_in_trace,"host-IN-trace-overflow");
+    host_in_trace[host_in_count].cycle=machine.cycles;
+    host_in_trace[host_in_count].ep=ep;
+    host_in_trace[host_in_count].len=len;
+    memcpy(host_in_trace[host_in_count].bytes,packet,len);
+    host_in_count++;
+    host_irq(2,0x20|ep,0);
+    return len;
+}
+static void host_out0(const uint8_t *packet, unsigned len) {
+    check(len<=64 && ((machine.usb[0x22]>>2)&3)==0,"host-OUT-not-ACK");
+    if (len) memcpy(machine.ram+(usb_dma(0)-CHG_RAM_BASE),packet,len);
+    host_irq(2,0x40,len);
+}
+static void host_out1(uint8_t value, bool toggle_ok) {
+    check(machine.usb[0x0c]&0x80,"host-OUT-endpoint-disabled");
+    check(((machine.usb[0x26]>>2)&3)==0,"host-EP1-OUT-not-ACK");
+    machine.ram[usb_dma(1)-CHG_RAM_BASE]=value;
+    host_irq(2,1u | (toggle_ok ? 0x40u : 0u),1);
+}
+static unsigned host_control_read(uint8_t type, uint8_t request, uint16_t value,
+                                  uint16_t index, uint16_t wanted, uint8_t data[256]) {
+    const uint8_t setup[]={type,request,(uint8_t)value,(uint8_t)(value>>8),
+                           (uint8_t)index,(uint8_t)(index>>8),
+                           (uint8_t)wanted,(uint8_t)(wanted>>8)};
+    check(wanted<=256,"host-control-read-length");
+    host_setup(setup);
+    unsigned total=0, len;
+    do {
+        uint8_t packet[64];
+        len=host_in(0,packet);
+        check(total+len<=wanted,"host-control-overrun");
+        memcpy(data+total,packet,len);
+        total+=len;
+    } while (len==64 && total<wanted);
+    host_out0(NULL,0);
+    return total;
+}
+static void host_control_no_data(uint8_t type, uint8_t request, uint16_t value,
+                                 uint16_t index) {
+    const uint8_t setup[]={type,request,(uint8_t)value,(uint8_t)(value>>8),
+                           (uint8_t)index,(uint8_t)(index>>8),0,0};
+    uint8_t status[64];
+    host_setup(setup);
+    check(host_in(0,status)==0,"host-control-status-not-ZLP");
+}
+static void host_hid_report(unsigned size, uint8_t key, uint16_t consumer) {
+    uint8_t packet[64]={0};
+    check(host_in(1,packet)==size,"host-HID-report-length");
+    for (unsigned i=0;i<size;i++) {
+        uint8_t expected=i==2 ? key : i==8 ? (uint8_t)consumer :
+                         i==9 ? (uint8_t)(consumer>>8) : 0;
+        check(packet[i]==expected,"host-HID-report-bytes");
+    }
+}
+static void host_enumerate(void) {
+    unsigned before=g.usb_irqs;
+    host_irq(1,0,0); /* Host full-speed bus reset. */
+    check(g.usb_irqs==before+1 && g.usb_handler_entries==before+1 &&
+          g.usb_returns==before+1 && g.usb_observed_returns==before+1 &&
+          !(machine.usb[6]&1) && !(machine.pfic.line & (1ull<<45)) &&
+          machine.usb[3]==0,"USB-bus-reset-IRQ45");
+    check(g.scans>=3 && g.observed_returns>=3,
+          "USB-reset-foreground-progress");
+    uint8_t desc[256];
+    unsigned len=host_control_read(0x80,6,0x0100,0,18,desc);
+    check(len==18 && desc[0]==18 && desc[1]==1 && desc[7]==64 &&
+          desc[8]==0x2e && desc[9]==0x35 && desc[10]==0x06 && desc[11]==0x23,
+          "USB-device-descriptor");
+    const uint8_t set_address[]={0,5,5,0,0,0,0,0};
+    host_setup(set_address);
+    check(machine.usb[3]==0,"USB-address-before-status");
+    uint8_t packet[64];
+    check(host_in(0,packet)==0 && machine.usb[3]==5,"USB-address-after-status");
+    len=host_control_read(0x80,6,0x0200,0,96,desc);
+    check(len==96 && desc[0]==9 && desc[1]==2 && desc[2]==96 &&
+          desc[4]==3 && desc[20]==0x11 && desc[27]==7 && desc[29]==0x81,
+          "USB-configuration-descriptor");
+    len=host_control_read(0x80,6,0x0300,0,4,desc);
+    check(len==4 && desc[0]==4 && desc[1]==3 && desc[2]==9 && desc[3]==4,
+          "USB-language-descriptor");
+    len=host_control_read(0x80,6,0x0303,0x0409,22,desc);
+    check(len==22 && desc[0]==22 && desc[1]==3 && desc[2]=='0' && desc[3]==0 &&
+          desc[20]=='6' && desc[21]==0,"USB-serial-descriptor");
+    static const struct { uint8_t index; const char *text; } strings[]={
+        {1,"Clicks Technology Limited"}, {2,"Clicks Creator Keyboard"},
+        {4,"iAP2 Interface"}, {5,"com.clickscompanion.protocol"}
+    };
+    for (unsigned i=0;i<sizeof strings/sizeof *strings;i++) {
+        len=host_control_read(0x80,6,0x0300|strings[i].index,0x0409,255,desc);
+        size_t characters=strlen(strings[i].text);
+        check(len==2+2*characters && desc[0]==len && desc[1]==3,
+              "USB-string-descriptor-length");
+        for (size_t j=0;j<characters;j++)
+            check(desc[2+2*j]==(uint8_t)strings[i].text[j] && !desc[3+2*j],
+                  "USB-string-descriptor-bytes");
+    }
+    host_control_no_data(0,9,1,0);
+    /* usbd_device_t starts with a 20-byte control state; cfg_num is at +24. */
+    check(machine.usb[3]==5 && machine.ram[P_USBD_DEV-CHG_RAM_BASE+24]==1,
+          "USB-configuration-mount");
+    len=host_control_read(0x81,6,0x2200,2,255,desc);
+    check(len>64 && desc[0]==5 && desc[1]==1 && desc[len-1]==0xc0,
+          "USB-HID-report-descriptor");
+}
+static void fixture_usb_ready(void) {
+    machine.rcc[5]=0x1000; /* RCC_AHBPCENR.USBFS. */
+    machine.rcc[6]=0x11; /* RCC_APB2PCENR.AFIO and GPIOC. */
+    machine.afio_ctlr=0xcc; /* PHY_V33, USB_IOEN, D+ pull-up. */
+    machine.gpio[2].cfg[2]=0x84; /* PC16 floating input, PC17 pull-up input. */
+    machine.gpio[2].outdr=1u<<17;
+    machine.usb[0]=0x39; machine.usb[1]=0x81; machine.usb[2]=7;
+}
+static bool usb_negative(unsigned id, const char *expected) {
+    fixture_reset();
+    g.usb_connected=g.usb_host_attached=true;
+    fixture_usb_ready();
+    if (!setjmp(g.abort)) {
+        uint8_t packet[64];
+        switch (id) {
+        case 0: gate_access(&machine,0x40023406,4,false,0); break;
+        case 1: gate_access(&machine,0x40023407,1,true,1); break;
+        case 2: write_register(0x40023410,0x20005000); break;
+        case 3:
+            write_register(0x40023410,0x20000000);
+            write_register(0x40023414,0x20000080);
+            break;
+        case 4: gate_access(&machine,0x40023414,4,true,0x20000001); break;
+        case 5:
+            machine.usb[0x0c]=0x40; machine.usb[0x26]=0;
+            machine.usb[0x24]=65; (void)host_in(1,packet);
+            break;
+        case 6:
+            machine.usb[0x26]=0; machine.usb[0x24]=10;
+            (void)host_in(1,packet);
+            break;
+        case 7:
+            machine.usb[0x0c]=0x40; machine.usb[0x26]=2;
+            (void)host_in(1,packet);
+            break;
+        case 8:
+            machine.usb[6]=2; pfic_set_line(&machine,45,true);
+            host_irq(2,0x20,0);
+            break;
+        case 9: host_irq(2,0x10,0); break;
+        case 10: host_irq(2,0x40,65); break;
+        case 11: machine.rcc[5]=0; host_raise_irq(1,0,0); break;
+        case 12: machine.afio_ctlr &= ~0x40u; host_raise_irq(1,0,0); break;
+        case 13: machine.afio_ctlr &= ~0x80u; host_raise_irq(1,0,0); break;
+        case 14: machine.afio_ctlr &= ~0x0cu; host_raise_irq(1,0,0); break;
+        case 15: machine.rcc[6]=0; host_raise_irq(1,0,0); break;
+        case 16: machine.gpio[2].cfg[2]=0; host_raise_irq(1,0,0); break;
+        case 17:
+            machine.rcc[5]=0;
+            uint32_t value=0; (void)gate_bus(&machine,0x40023400,1,false,&value);
+            break;
+        case 18: machine.usb[0]&=(uint8_t)~0x20u; host_raise_irq(1,0,0); break;
+        case 19: host_raise_irq(2,0x30,7); break;
+        case 20: host_raise_irq(2,0x31,8); break;
+        default: return false;
+        }
+        fprintf(stderr,"USB negative %u was accepted\n",id);
+        return false;
+    }
+    if (strcmp(g.failure,expected)) {
+        fprintf(stderr,"USB negative %u: expected %s got %s\n",id,expected,g.failure);
+        return false;
+    }
+    return true;
+}
+static bool usb_row_drive_fixture(void) {
+    fixture_reset();
+    g.usb_connected=true;
+    g.keys[0]=1;
+    machine.rcc[6]=0x0c; /* RCC_APB2PCENR.GPIOA/B. */
+    machine.gpio[0].cfg[0]=8; /* PA0 input pull-down. */
+    machine.gpio[1].outdr=1; /* PB0 latch high, pin still analog/input. */
+    if (setjmp(g.abort)) {
+        fprintf(stderr,"USB row drive fixture: %s\n",g.failure);
+        return false;
+    }
+    uint32_t pins=0;
+    check(gate_bus(&machine,0x40010808,4,false,&pins) && !(pins&1),
+          "USB-row-latch-without-output-drive");
+    machine.gpio[1].cfg[0]=3; /* PB0 push-pull output, physically high. */
+    for (unsigned clocks=0;clocks<3;clocks++) {
+        machine.rcc[6]=clocks==0 ? 0 : clocks==1 ? 0x04 : 0x08;
+        check(gate_bus(&machine,0x40010808,4,false,&pins) && !(pins&1),
+              "USB-row-without-GPIO-clocks");
+    }
+    machine.rcc[6]=0x0c;
+    check(gate_bus(&machine,0x40010808,4,false,&pins) && (pins&1),
+          "USB-row-output-drive-missing");
+    machine.gpio[1].ext_low=1; /* External fault pulls PB0 low. */
+    check(gate_bus(&machine,0x40010808,4,false,&pins) && !(pins&1),
+          "USB-row-electrical-low-observed-as-press");
+    return true;
+}
+static bool usb_fixtures(void) {
+    static const char *expected[]={"register-width","register-direction",
+        "USB-DMA-range","USB-DMA-overlap","register-value-model",
+        "host-IN-packet-oversize","host-IN-endpoint-disabled",
+        "host-IN-not-ACK","host-USB-pending-IRQ",
+        "host-USB-token-unsupported","host-USB-packet-oversize",
+        "host-USB-clock-disabled","host-USB-PHY-disabled",
+        "host-USB-IO-disabled","host-USB-pullup-disabled",
+        "host-USB-port-clocks-disabled","host-USB-pin-mode",
+        "USB-clock-disabled","host-USB-controller-disabled",
+        "host-SETUP-shape","host-SETUP-shape"};
+    bool passed=true;
+    for (unsigned i=0;i<sizeof expected/sizeof *expected;i++)
+        if (!usb_negative(i,expected[i])) passed=false;
+    bool row_ok=usb_row_drive_fixture();
+    if (!row_ok) passed=false;
+    printf("{\"passed\":%s,\"negative_controls\":%zu,\"row_drive_control\":%s}\n",
+           passed?"true":"false",sizeof expected/sizeof *expected,
+           row_ok?"true":"false");
+    return passed;
+}
+static bool connected_reset_case(unsigned scenario, bool emit) {
+    prepare_case(0);
+    host_in_count=0;
+    g.usb_connected=true;
+    g.usb_host_attached=true;
+    g.usb_model_mutant=selected_usb_mutant;
+    volatile bool passed=false;
+    if (!setjmp(g.abort)) {
+        gate_run(&machine,4800000);
+        gate_complete();
+        check((machine.usb[0] & 0x39)==0x39 && (machine.usb[1] & 0x81)==0x81 &&
+              (machine.usb[2] & 3)==3 &&
+              (machine.pfic.enabled & (1ull<<45)),"USB-controller-not-ready");
+        check(!g.usb_irqs && !g.usb_observed_returns && !g.watchdog_resets,
+              "USB-interrupt-without-host");
+        host_enumerate();
+        uint8_t packet[64];
+        unsigned len;
+        check(machine.ram[P_KEYBOARD_LEDS-CHG_RAM_BASE]==0,"USB-LED-initial");
+        host_out1(3,false); /* Repeated DATA PID: TOG_OK=0, DCD must drop it. */
+        check(machine.ram[P_KEYBOARD_LEDS-CHG_RAM_BASE]==0,
+              "USB-duplicate-OUT-rejected");
+        host_out1(3,true);
+        check(machine.ram[P_KEYBOARD_LEDS-CHG_RAM_BASE]==3,
+              "USB-accepted-OUT-updates-LEDs");
+        if ((machine.usb[0x26]&3)==0) {
+            len=host_in(1,packet);
+            check(len==10 && !packet[2] && !packet[8] && !packet[9],
+                  "USB-initial-idle-report");
+        }
+        check((machine.usb[0x26]&3)==2,"USB-idle-IN-NAK");
+        unsigned before_nak=g.usb_observed_returns;
+        gate_run(&machine,480000);
+        check((machine.usb[0x26]&3)==2 && g.usb_observed_returns==before_nak,
+              "USB-NAK-no-fabricated-completion");
+        g.keys[0]=1; /* PB0 high connects PA0: L0(0,0) = KC_Q. */
+        gate_run(&machine,960000); /* More than the QMK 5 ms debounce interval. */
+        check((machine.usb[0x26]&3)==0,"USB-Q-IN-armed");
+        uint8_t pending_q[10];
+        memcpy(pending_q,machine.ram+(usb_dma(1)-CHG_RAM_BASE)+64,10);
+        unsigned before_delayed_ack=g.usb_observed_returns;
+        gate_run(&machine,1440000); /* Host withholds ACK for 30 ms. */
+        check((machine.usb[0x26]&3)==0 && g.usb_observed_returns==before_delayed_ack &&
+              !memcmp(pending_q,machine.ram+(usb_dma(1)-CHG_RAM_BASE)+64,10),
+              "USB-delayed-ACK-no-fabricated-completion");
+        len=host_in(1,packet);
+        check(len==10 && packet[0]==0 && packet[1]==0 && packet[2]==0x14 &&
+              packet[3]==0 && packet[8]==0 && packet[9]==0,
+              "USB-Q-press-report");
+        g.keys[0]=0;
+        gate_run(&machine,960000);
+        len=host_in(1,packet);
+        check(len==10 && packet[0]==0 && packet[2]==0 &&
+              packet[8]==0 && packet[9]==0,"USB-Q-release-report");
+        g.keys[0]=1u<<5; /* CK_CONS_A: consumer usage 0x00CF. */
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0x00cf);
+        g.keys[0]|=1u; /* Q and consumer in one 10-byte report. */
+        gate_run(&machine,960000);
+        host_hid_report(10,0x14,0x00cf);
+        g.keys[0]&=(uint8_t)~1u;
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0x00cf);
+        g.keys[0]=0;
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0);
+        g.keys[5]=1u<<5; /* CK_IOS_KB: consumer Eject 0x00B8. */
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0x00b8);
+        g.keys[5]=0;
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0);
+        host_control_no_data(0x21,11,0,2); /* HID SET_PROTOCOL boot. */
+        check(machine.ram[P_KEYBOARD_PROTOCOL-CHG_RAM_BASE]==0,"USB-boot-protocol-state");
+        g.keys[0]=1;
+        gate_run(&machine,960000);
+        host_hid_report(8,0x14,0);
+        g.keys[0]=0;
+        gate_run(&machine,960000);
+        host_hid_report(8,0,0);
+        host_control_no_data(0x21,11,1,2); /* Restore report protocol. */
+        check(machine.ram[P_KEYBOARD_PROTOCOL-CHG_RAM_BASE]==1,"USB-report-protocol-state");
+        g.keys[0]=1u<<5;
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0x00cf);
+        g.keys[0]=0;
+        gate_run(&machine,960000);
+        host_hid_report(10,0,0);
+        if (scenario==2 || scenario==3) {
+            g.usb_fault_kind=scenario==2 ? 1u : 2u;
+            g.keys[0]=1;
+            gate_run(&machine,960000);
+            host_hid_report(10,0x14,0);
+            check(g.usb_fault_injections==1 &&
+                  machine.ram[P_HID_COUNT-CHG_RAM_BASE]==1 &&
+                  (scenario!=2 || machine.ram[P_KB_INFLIGHT-CHG_RAM_BASE]==1),
+                  "USB-synthetic-completion-fault-state");
+            g.keys[5]=1u<<5; /* Eject tap while Q completion is unresolved. */
+            gate_run(&machine,960000);
+            g.keys[5]=0;
+            gate_run(&machine,960000);
+            check(machine.ram[P_HID_COUNT-CHG_RAM_BASE]==3,
+                  "USB-pending-consumer-edges-retained");
+            gate_run(&machine,1440000); /* Missing callback grace or failed-result retry. */
+            host_hid_report(10,0x14,0);
+            host_hid_report(10,0x14,0x00b8);
+            host_hid_report(10,0x14,0);
+            check(machine.ram[P_HID_COUNT-CHG_RAM_BASE]==0 &&
+                  machine.ram[P_KB_INFLIGHT-CHG_RAM_BASE]==0,
+                  "USB-completion-retry-and-consumer-order");
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            host_hid_report(10,0,0);
+            gate_run(&machine,960000);
+            check((machine.usb[0x26]&3)==2 &&
+                  machine.ram[P_HID_COUNT-CHG_RAM_BASE]==0,
+                  "USB-no-completed-press-on-idle");
+        }
+        if (scenario==4) {
+            check((machine.usb[0x26]&3)==2,"USB-offline-start-idle");
+            unsigned irq_before=g.usb_observed_returns;
+            unsigned feeds_before=g.watchdog_feeds;
+            g.usb_host_attached=false; /* Host detach: no tokens, no invented DCD callback. */
+            g.keys[0]=1;
+            gate_run(&machine,960000);
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            g.keys[5]=1u<<5;
+            gate_run(&machine,960000);
+            g.keys[5]=0;
+            gate_run(&machine,960000);
+            check(g.usb_observed_returns==irq_before && g.watchdog_feeds>feeds_before &&
+                  (machine.usb[0x26]&3)==0,
+                  "USB-offline-typing-no-host-completion");
+            g.usb_host_attached=true;
+            host_enumerate(); /* Actual host bus reset and full control sequence. */
+            if ((machine.usb[0x26]&3)==0) host_hid_report(10,0,0);
+            gate_run(&machine,960000);
+            check((machine.usb[0x26]&3)==2,"USB-offline-press-replayed");
+            g.keys[0]=1;
+            gate_run(&machine,960000);
+            host_hid_report(10,0x14,0);
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            host_hid_report(10,0,0);
+        }
+        if (scenario==5) {
+            unsigned feeds_before=g.watchdog_feeds, scans_before=g.scans;
+            unsigned usb_before=g.usb_observed_returns;
+            g.keys[0]=1;
+            gate_run(&machine,960000);
+            check((machine.usb[0x26]&3)==0,"USB-long-backpressure-not-armed");
+            uint8_t pending[10];
+            memcpy(pending,machine.ram+(usb_dma(1)-CHG_RAM_BASE)+64,10);
+            uint64_t deadline=g.watchdog_deadline;
+            gate_run(&machine,131104768ull+4800000ull);
+            check(machine.cycles>deadline && !g.watchdog_resets &&
+                  g.watchdog_feeds>feeds_before+1000 && g.scans>scans_before+1000 &&
+                  g.usb_observed_returns==usb_before && (machine.usb[0x26]&3)==0 &&
+                  !memcmp(pending,machine.ram+(usb_dma(1)-CHG_RAM_BASE)+64,10),
+                  "USB-long-backpressure-watchdog-progress");
+            host_hid_report(10,0x14,0);
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            host_hid_report(10,0,0);
+        }
+        if (scenario==6) {
+            g.watchdog_fault_mode=true;
+            unsigned loops_before=g.loops;
+            host_raise_irq(1,0,0);
+            uint64_t irq_entry_limit=machine.cycles+480000;
+            while ((!g.pending_return || g.return_irq!=45 || !machine.cpu.trap_depth) &&
+                   machine.cycles<irq_entry_limit)
+                gate_run(&machine,1);
+            check(g.usb_irqs>0 && g.pending_return && machine.cpu.trap_depth,
+                  "USB-stall-IRQ45-not-entered");
+            g.fault_active=true; g.fault_kind=2;
+            machine.cpu.wfi=true; machine.pfic.enabled=0;
+            uint64_t deadline=g.watchdog_deadline;
+            gate_run(&machine,deadline-machine.cycles+4800000);
+            check(g.watchdog_resets==1 && !g.pending_return && g.stage>=4 &&
+                  g.startup_returns==1 && g.loops>loops_before &&
+                  g.watchdog_feeds>0 && !g.fault_active,
+                  "USB-stalled-IRQ45-IWDG-recovery");
+            host_enumerate();
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+24]==1,
+                  "USB-post-IWDG-reenumeration");
+        }
+        if (scenario==7) {
+            unsigned feeds_before=g.watchdog_feeds, scans_before=g.scans;
+            machine.usb[5]|=4u; /* Stable X035 suspended MIS_ST. */
+            host_irq(4,0,0);
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==1,
+                  "USB-suspend-state");
+            gate_run(&machine,131104768ull+4800000ull);
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==1 &&
+                  !g.watchdog_resets && g.watchdog_feeds>feeds_before+1000 &&
+                  g.scans>scans_before+1000,
+                  "USB-healthy-suspend-IWDG-progress");
+        }
+        if (scenario==1) {
+            machine.usb[5]|=4u; /* X035 MIS_ST.SUSPEND = 1. */
+            host_irq(4,0,0);
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==1,
+                  "USB-suspend-state");
+            machine.usb[5]&=(uint8_t)~4u; /* Bus active; same suspend IRQ fires. */
+            host_irq(4,0,0);
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==0,
+                  "USB-resume-state");
+        }
+        passed=true;
+    }
+    if (emit) printf("{\"name\":\"%s\",\"passed\":%s,\"USBFS_entries\":%u,\"USBFS_returns\":%u,\"normal_loops\":%u,\"IWDG_resets\":%u,\"failure\":\"%s\",\"IN_packets\":[",
+           scenario==1?"X035-resume-counterexample":
+           scenario==2?"synthetic-missing-HID-callback":
+           scenario==3?"synthetic-failed-HID-completion":
+           scenario==4?"host-detach-reenumeration":
+           scenario==5?"connected-backpressure-over-IWDG":
+           scenario==6?"stalled-USB-IRQ45-IWDG-reset":
+           scenario==7?"healthy-USB-suspend-over-IWDG":"connected-Q-report",
+           passed?"true":"false",g.usb_handler_entries,g.usb_observed_returns,g.loops,
+           g.watchdog_resets,g.failure?g.failure:"");
+    if (emit) {
+        for (unsigned i=0;i<host_in_count;i++) {
+            printf("%s{\"cycle\":%llu,\"ep\":%u,\"length\":%u,\"hex\":\"",
+                   i?",":"",(unsigned long long)host_in_trace[i].cycle,
+                   host_in_trace[i].ep,host_in_trace[i].len);
+            for (unsigned j=0;j<host_in_trace[i].len;j++)
+                printf("%02x",host_in_trace[i].bytes[j]);
+            printf("\"}");
+        }
+        printf("]}\n");
+    }
+    if (!passed && emit) fprintf(stderr,"connected: %s at PC %08x detail %08x EP1_CTL=%02x EP1_LEN=%u\n",
+                         g.failure?g.failure:"case invariant failed",g.pc,g.detail,
+                         machine.usb[0x26],machine.usb[0x24]);
+    return passed;
+}
+static bool usb_mutant_controls(void) {
+    static const char *expected[]={"nested-interrupt",
+        "USB-duplicate-OUT-rejected","host-USB-IRQ-return"};
+    bool passed=true;
+    for (unsigned i=0;i<3;i++) {
+        selected_usb_mutant=i+1;
+        if (connected_reset_case(0,false) || !g.failure || strcmp(g.failure,expected[i])) {
+            fprintf(stderr,"USB mutant %u expected %s got %s\n",i+1,expected[i],
+                    g.failure?g.failure:"passed");
+            passed=false;
+        }
+    }
+    selected_usb_mutant=0;
+    printf("{\"passed\":%s,\"rejected_model_mutants\":3,\"mutants\":[\"stuck-INT_FG-W1C\",\"forced-INT_ST-TOG_OK\",\"missing-IRQ45-line\"]}\n",
+           passed?"true":"false");
+    return passed;
+}
 int main(int argc, char **argv) {
     if (argc!=3) return 2;
     if (!strcmp(argv[1],"--fixtures")) return fixtures(argv[2]);
+    if (!strcmp(argv[1],"--usb-fixtures")) return usb_fixtures()?0:1;
     bool stalls=!strcmp(argv[1],"--stall-controls");
     bool watchdog=!strcmp(argv[1],"--watchdog");
     bool mutants=!strcmp(argv[1],"--watchdog-mutants");
-    FILE *f=fopen(argv[stalls || watchdog || mutants ? 2 : 1],"rb"); if (!f) return 2;
+    bool connected=!strcmp(argv[1],"--connected");
+    bool resume=!strcmp(argv[1],"--resume-counterexample");
+    bool missing=!strcmp(argv[1],"--missing-callback");
+    bool failed=!strcmp(argv[1],"--failed-completion");
+    bool reconnect=!strcmp(argv[1],"--disconnect-reconnect");
+    bool backpressure=!strcmp(argv[1],"--connected-backpressure");
+    bool irq_stall=!strcmp(argv[1],"--stalled-usb-irq");
+    bool suspend_idle=!strcmp(argv[1],"--connected-suspend-idle");
+    bool usb_mutants=!strcmp(argv[1],"--usb-mutants");
+    FILE *f=fopen(argv[stalls || watchdog || mutants || connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle || usb_mutants ? 2 : 1],"rb"); if (!f) return 2;
     chg_init(&machine); machine.entry=P_ENTRY;
     size_t size=fread(machine.flash+P_ENTRY,1,P_IMAGE_END-P_ENTRY,f);
     bool exact=size==P_IMAGE_END-P_ENTRY && fgetc(f)==EOF; fclose(f);
@@ -494,6 +1035,10 @@ int main(int argc, char **argv) {
         printf("]\n"); return passed?0:1;
     }
     if (mutants) return watchdog_mutant_controls()?0:1;
+    if (usb_mutants) return usb_mutant_controls()?0:1;
+    if (connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle)
+        return connected_reset_case(resume ? 1u : missing ? 2u : failed ? 3u : reconnect ? 4u :
+                                    backpressure ? 5u : irq_stall ? 6u : suspend_idle ? 7u : 0u,true)?0:1;
     printf("["); bool passed=true;
     for (unsigned i=0;i<4;i++) { if (!run_case(i,argv[2])) { passed=false; break; } }
     printf("]\n"); return passed?0:1;
