@@ -14,6 +14,9 @@ typedef struct {
     unsigned stage, scan_stage, scans, tasks, loops, irqs, returns, observed_returns, handler_entries;
     unsigned return_irq, usb_irqs, usb_returns, usb_observed_returns, usb_handler_entries;
     unsigned usb_fault_kind, usb_fault_injections, usb_model_mutant;
+    uint64_t usb_resume_clear_cycle, usb_resume_first_cnt_cycle, usb_resume_mis_cycle;
+    unsigned usb_resume_clear_count, usb_resume_cnt_reads, usb_resume_mis_reads;
+    bool usb_resume_probe, usb_resume_later_uif, usb_resume_later_uif_preserved;
     unsigned rescue_loops, foreground_after_irq, startup_returns;
     unsigned rows, row_mask, mmio_reads, mmio_writes;
     uint32_t watchdog_pscr, watchdog_rld, watchdog_feeds, watchdog_resets;

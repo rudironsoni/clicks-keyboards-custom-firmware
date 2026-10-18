@@ -361,11 +361,11 @@ on `feat/software-only-qmk-delivery`; private inputs and dependency symlinks rem
 | Milestone | State | Next acceptance condition |
 | --- | --- | --- |
 | A: runtime integrity | MILESTONE_COMPLETE | Preserve existing regressions after later changes. |
-| B: progress-aware watchdog | ACTIVE | Validate fresh scan, transport, foreground, and tick progress before servicing IWDG; prove modeled stalls and reset handling. |
-| C: connected USB | PENDING | Execute actual firmware enumeration and report delivery with strict controller semantics and negative controls. |
+| B: progress-aware watchdog | Local verification and independent review passed | Exact-revision hosted firmware verification. |
+| C: connected USB | Local verification and independent review passed | Exact-revision hosted firmware verification. |
 | D: installer and preservation | MILESTONE_BLOCKED | Custom staging faults and region checks pass; the original OEM installer contract is unavailable. |
 | E: independent recovery | Assessment reviewed; R3 UNMET | Failure-state evidence is classified in recovery-research.md; no independent iPhone-only path is established. |
-| Final integration | PENDING | Resolve cross-milestone contradictions and review the complete software evidence. |
+| Final integration | Local review passed after remount correction | Verify hosted artifacts and publish the final evidence record. |
 
 The existing `scripts/test.sh`, image validator, exact-binary runner, restore
 harness, and recovery lab remain the verification owners. Local commands,
@@ -374,8 +374,8 @@ Each material change needs independent review and exact-revision hosted proof.
 
 The IWDG design uses the pinned CH32X035 manual chapter 5 and datasheet timing
 tables. The clock is HSI divided by 1024, not a separate oscillator. Servicing
-will depend on completed work, not USB host availability or instruction activity.
-The model must distinguish hardware watchdog reset from its own assertion failures.
+depends on completed work, not USB host availability or instruction activity.
+The model distinguishes hardware watchdog reset from its own assertion failures.
 
 The retained OEM application contains no bytes below `0x2000`; its installer
 consumer is unavailable. The existing model's assumed independent loader and
@@ -495,7 +495,9 @@ and source-hash match are retained in
 Hosted verification remains pending.
 
 
-## Connected USB work in progress (2026-10-18)
+## Historical connected USB red checkpoint (2026-10-18)
+
+This section records the pre-correction checkpoint. The [combined correction](#combined-watchdog-and-usb-correction-2026-10-18) below owns the current status.
 
 The connected model uses the unchanged watchdog BIN `9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439` and contract `3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
 It executes the compiled DCD, TinyUSB, QMK and protocol paths through modeled
@@ -556,3 +558,76 @@ does not answer its link handshake, open an EA session, or supply successful
 authentication-device responses. This proves neither iPhone recognition nor
 MFi authentication, accessory compatibility, OEM installation, or independent
 recovery. R3 remains UNMET. Physical flashing remains NO-GO.
+
+
+## Combined watchdog and USB correction, 2026-10-18
+
+The feature-branch publication and project-owned TinyUSB correction are
+explicitly authorized by the current program goal. The earlier approval
+requests are resolved. This section supersedes the pending correction status
+in the preceding work-in-progress record.
+
+The pinned X035 DCD emitted SUSPEND for both suspend and wake-up. The permanent
+compiled regression failed at `USB-resume-state` with the old exact BIN. A
+stronger control also reproduced the old handler clearing a later USB flag.
+The project-owned `firmware/usb/tinyusb.patch` now clears UIF first, waits using
+the existing HCLK SysTick across rollover, then reads MIS_ST to choose SUSPEND
+or RESUME. It does not clear a later event. CMake builds a patched copy; the
+pinned TinyUSB checkout stays unchanged. Repeated configuration produces the
+same copied driver and image. No dependency revision changed.
+
+Integration review found a separate normal update-channel deadlock. TinyUSB
+bus reset drops transfers without calling `tud_umount_cb`, so an old reply
+could remain marked in flight after remount. The new regression in
+`tests/ck5200_rescue_test.c` failed against the old production protocol, then
+passed for accepted replies, queued replies and a pending A0 acknowledgment.
+Mount now clears response ownership and aborts rescue staging before starting
+a fresh session. All eleven rescue-harness modes passed under ASan/UBSan.
+Evidence: `build/program-evidence/usb-remount/final-red.json`, `final-green.json`
+and `integration-review.md`. The independent reviewer also ruled out a shared
+EP2 FIFO hypothesis: this build uses unbuffered vendor transfers, whose endpoint
+claim prevents accepting an update behind an outstanding attach packet.
+
+The combined firmware is 26,860 bytes in `[0x2000,0x88EC)`, leaving 276 bytes
+in the unchanged allocation. BIN SHA-256 is
+`eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4`.
+The ELF runtime contract is
+`aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7`;
+local raw ELF SHA-256 is
+`c452c84cc9c33a62a13a1b660ab38790bf26c24cd4ffc97f7985bb6fb93a38ba`.
+The image validator confirms BIN/ELF correspondence and memory boundaries.
+Actual reset, scan, loop, interrupt, and suspend instructions were inspected
+before updating the exact profile. `.data` remains 144 bytes; `.bss` is 4,680
+bytes ending at `0x200012D8`, followed by eight retained bytes. The model derives
+RAM symbols from the reviewed ELF. Build, host tests, sections, symbols and
+source snapshots are retained in
+`build/program-evidence/connected-usb/combined-candidate/manifest.json`.
+
+The default strict gate now requires connected cases; there is no optional
+connected switch that hosted CI can omit. It retains four startup cases,
+thirteen watchdog cases, 193 instruction fixtures, existing memory/execution,
+stall and artifact controls, plus eight connected cases and the resume case.
+All 21 USB negative controls, row-drive/clock checks and three model mutations
+pass. Resume waits 532 modeled HCLK cycles from the first CNT read to MIS_ST,
+retains a second USB flag through the first interrupt return, and submits a
+fresh Q press followed by release after wake-up. Stopped CNT resets once through
+IWDG while the modeled HSI continues. These are software timing observations.
+
+The later-event test also exposed an observer defect: a valid pending interrupt
+can be entered immediately after MRET, before a foreground instruction. The
+same restored register, stack, PC and timer checks now run at either observation
+point. The original failing report is retained; actual nested interrupts and
+invalid restored context still fail. A transient all-zero idle HID report after
+resume is accepted only with complete zero-byte validation and a bounded drain;
+nonzero offline taps still fail.
+
+Independent final review found no actionable in-scope correctness blocker in
+the resume patch, remount correction, model or exact binary. The final local
+strict run after the README edit exited zero. All seven
+assurance source hashes match, and BIN/ELF identity is unchanged. The canonical
+local report is `build/assurance/report.json`; the command record is
+`build/program-evidence/connected-usb/root-final-executed.json`.
+Exact-revision hosted verification remains required. The D/E assessment remains unchanged: custom staging fault
+handling is modeled and reviewed, but original OEM installation, preservation
+of `[0x68D8,0x6900)`, interruption recovery and independent iPhone-only recovery
+remain unverified. R3 remains UNMET. Physical flashing remains NO-GO.

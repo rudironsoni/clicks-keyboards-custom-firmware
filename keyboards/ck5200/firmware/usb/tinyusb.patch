@@ -1,0 +1,23 @@
+--- a/dcd_ch32_usbfs.c
++++ b/dcd_ch32_usbfs.c
+@@ -407,2 +407,14 @@
+-#if CFG_TUSB_MCU == OPT_MCU_CH583
+-    // CH58x raises this single interrupt for both suspend and resume; MIS_ST's suspend bit tells
++#if CFG_TUSB_MCU == OPT_MCU_CH32X035
++    USBOTG_FS->INT_FG = USBFS_INT_FG_SUSPEND;
++    // The running HCLK SysTick reloads every 1 ms. Wait 1/100 period (nominal 10 us)
++    // after clearing the flag, as in WCH's X035 CompositeKM suspend handler.
++    const uint32_t period = (uint32_t)SysTick->CMP + 1u;
++    const uint32_t start = (uint32_t)SysTick->CNT;
++    const uint32_t settle = period / 100u;
++    uint32_t now;
++    do {
++      now = (uint32_t)SysTick->CNT;
++    } while ((now >= start ? now - start : period - start + now) < settle);
++#endif
++#if CFG_TUSB_MCU == OPT_MCU_CH583 || CFG_TUSB_MCU == OPT_MCU_CH32X035
++    // CH58x and X035 raise this interrupt for both suspend and resume; MIS_ST's suspend bit tells
+@@ -415,0 +428 @@
++#if CFG_TUSB_MCU != OPT_MCU_CH32X035
+@@ -416,0 +430 @@
++#endif

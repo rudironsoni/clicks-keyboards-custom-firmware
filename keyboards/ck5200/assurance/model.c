@@ -171,6 +171,25 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v) {
     gate_fail("unknown-memory-register", a);
 }
 bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v) {
+    if (g.usb_resume_probe) {
+        if (a==0x40023406 && write && (*v&4u)) {
+            if (!g.usb_resume_clear_count) g.usb_resume_clear_cycle=m->cycles;
+            g.usb_resume_clear_count++;
+        } else if (a==0xe000f008 && !write) {
+            if (!g.usb_resume_cnt_reads) g.usb_resume_first_cnt_cycle=m->cycles;
+            g.usb_resume_cnt_reads++;
+            if (g.usb_resume_clear_count && !g.usb_resume_later_uif &&
+                m->cycles-g.usb_resume_clear_cycle>=240) {
+                m->usb[6]|=4u; /* Synthetic second host suspend/resume event. */
+                pfic_set_line(m,45,true);
+                g.usb_resume_later_uif=true;
+                event(m,"injected-later-USB-suspend-UIF");
+            }
+        } else if (a==0x40023405 && !write) {
+            if (!g.usb_resume_mis_reads) g.usb_resume_mis_cycle=m->cycles;
+            g.usb_resume_mis_reads++;
+        }
+    }
     if (a==0x1ffff704 || a>=0x40000000) {
         if (write) g.mmio_writes++; else g.mmio_reads++;
     }
@@ -304,8 +323,33 @@ void gate_csr(ChgMachine *m, uint32_t csr, bool write, uint32_t value) {
     require(!write || !(value & ~mask), "CSR-value-model", csr);
     (void)m;
 }
+static bool return_ready(const ChgMachine *m) {
+    return g.pending_return && !m->cpu.trap_depth &&
+           (g.return_irq==CHG_IRQ_SYSTICK ? g.returns==g.irqs :
+                                               g.usb_returns==g.usb_irqs);
+}
+static void observe_interrupt_return(ChgMachine *m, uint32_t pc) {
+    require(pc==g.return_pc && m->cpu.x[2]==g.return_sp &&
+            m->cpu.mstatus==g.saved_mstatus &&
+            !memcmp(m->cpu.x,g.saved_regs,sizeof g.saved_regs),
+            "SysTick-context-return",pc);
+    uint32_t timer; memcpy(&timer,m->ram+(P_TIMER-CHG_RAM_BASE),4);
+    require(g.return_irq!=CHG_IRQ_SYSTICK || g.fixture || timer==g.timer_before+
+            ((g.fault_active && g.fault_kind==6) ? 0u : 1u),
+            "SysTick-timer-update",timer);
+    g.pending_return=false;
+    if (g.return_irq==CHG_IRQ_SYSTICK) {
+        g.observed_returns++; g.last_systick_return=m->cycles;
+        event(m,"SysTick-return-observed");
+    } else {
+        g.usb_observed_returns++; event(m,"USBFS-return-observed");
+    }
+    if (g.fault_active && g.fault_kind==1)
+        longjmp(g.watchdog_escape,2); /* Pause before any foreground instruction. */
+}
 void gate_trap(ChgMachine *m, uint32_t pc, uint32_t cause, uint32_t tval, int irq) {
     g.pc=pc;
+    if (return_ready(m)) observe_interrupt_return(m,pc);
     require(!m->cpu.trap_depth &&
             ((irq==CHG_IRQ_SYSTICK && cause==0x8000000c) ||
              (g.usb_connected && irq==45 && cause==0x8000002d)),
@@ -330,7 +374,7 @@ void gate_mret(ChgMachine *m) {
         require(g.fixture || g.pc == (g.return_irq==CHG_IRQ_SYSTICK ?
                                      P_SYSTICK_MRET : P_USBFS_MRET),
                 "interrupt-mret-site",g.pc);
-        /* The next instruction hook checks the actual restored context. */
+        /* The next instruction or an immediate reentry checks restored context. */
         if (g.return_irq==CHG_IRQ_SYSTICK) g.returns++; else g.usb_returns++;
     }
 }
@@ -344,6 +388,12 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
     unsigned len = (m->flash[pc] & 3) == 3 ? 4 : 2;
     require(inside(pc,len,P_ENTRY,P_ENTRY+4) || inside(pc,len,P_TEXT,P_TEXT_END),
             "execution-crosses-code",pc);
+    if (g.usb_resume_probe && pc==P_USBFS_MRET && !g.usb_resume_later_uif_preserved) {
+        require(g.usb_resume_later_uif && (m->usb[6]&4u),
+                "USB-later-UIF-erased-before-return",pc);
+        g.usb_resume_later_uif_preserved=true;
+        event(m,"later-USB-UIF-preserved-at-first-MRET");
+    }
     if (g.pending_handler) {
         require(m->cpu.trap_depth==1 && pc==(g.fixture ? 0x2300 :
                 g.return_irq==CHG_IRQ_SYSTICK ? P_SYSTICK : P_USBFS),
@@ -352,24 +402,7 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         if (g.return_irq==CHG_IRQ_SYSTICK) g.handler_entries++; else g.usb_handler_entries++;
         event(m,g.return_irq==CHG_IRQ_SYSTICK ? "SysTick-handler-entry" : "USBFS-handler-entry");
     }
-    if (g.pending_return && !m->cpu.trap_depth &&
-        (g.return_irq==CHG_IRQ_SYSTICK ? g.returns==g.irqs : g.usb_returns==g.usb_irqs)) {
-        require(pc == g.return_pc && m->cpu.x[2] == g.return_sp && m->cpu.mstatus==g.saved_mstatus &&
-                !memcmp(m->cpu.x,g.saved_regs,sizeof g.saved_regs),"SysTick-context-return",pc);
-        uint32_t timer; memcpy(&timer,m->ram + (P_TIMER - CHG_RAM_BASE),4);
-        require(g.return_irq!=CHG_IRQ_SYSTICK || g.fixture || timer == g.timer_before +
-                ((g.fault_active && g.fault_kind==6) ? 0u : 1u),
-                "SysTick-timer-update",timer);
-        g.pending_return = false;
-        if (g.return_irq==CHG_IRQ_SYSTICK) {
-            g.observed_returns++; g.last_systick_return=m->cycles;
-            event(m,"SysTick-return-observed");
-        } else {
-            g.usb_observed_returns++; event(m,"USBFS-return-observed");
-        }
-        if (g.fault_active && g.fault_kind==1)
-            longjmp(g.watchdog_escape,2); /* Pause before any foreground instruction. */
-    }
+    if (return_ready(m)) observe_interrupt_return(m,pc);
     if (g.fault_active && g.fault_kind==6 && pc==P_SYSTICK_MRET) {
         memcpy(m->ram+(P_TIMER-CHG_RAM_BASE),&g.timer_before,4);
         g.fault_ticks_suppressed++;

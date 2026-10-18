@@ -19,18 +19,18 @@ BUILD = ROOT / "build/assurance"
 UPSTREAM = ROOT / "external/chgame_emulator"
 PIN = "bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48"
 WCH_PIN = "c6253942b29ff2a3f5e2829182a874afffa45881"
-BIN_HASH = "9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439"
-ELF_CONTRACT_HASH = "3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b"
+BIN_HASH = "eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4"
+ELF_CONTRACT_HASH = "aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7"
 # Bind tracepoints to the exact BIN and the reviewed ELF contract.
 # A new binary requires a reviewed profile, never automatic acceptance.
 ANCHORS = {
-    "STARTUP_MRET": 0x7c84, "SYSTEM_RETURN": 0x7c78, "CONSUMED": 0x7cda,
-    "EARLY_ARM": 0x7be0, "EARLY_CRT": 0x7bfa,
-    "TRANSPORT_RETURN": 0x7de4, "LOOP": 0x7fcc, "ROW_READ": 0x614c,
-    "ROW_BOUND": 0x6164, "SCAN_DONE": 0x6176, "KEYBOARD_RETURN": 0x8024,
-    "KEYBOARD_CONNECTED_RETURN": 0x8008,
-    "LOOP_BACK": 0x8084, "SYSTICK_MRET": 0x7848, "USBFS_MRET": 0x79d6,
-    "RESCUE_LOOP": 0x7d98, "RESCUE_BACK": 0x7dce,
+    "STARTUP_MRET": 0x7cc8, "SYSTEM_RETURN": 0x7cbc, "CONSUMED": 0x7d1e,
+    "EARLY_ARM": 0x7c24, "EARLY_CRT": 0x7c3e,
+    "TRANSPORT_RETURN": 0x7e28, "LOOP": 0x8010, "ROW_READ": 0x614c,
+    "ROW_BOUND": 0x6164, "SCAN_DONE": 0x6176, "KEYBOARD_RETURN": 0x8068,
+    "KEYBOARD_CONNECTED_RETURN": 0x804c,
+    "LOOP_BACK": 0x80c8, "SYSTICK_MRET": 0x785c, "USBFS_MRET": 0x79ea,
+    "RESCUE_LOOP": 0x7ddc, "RESCUE_BACK": 0x7e12,
 }
 SYMBOLS = {
     "ENTRY": "_start", "RESET": "handle_reset", "SYSTEM": "SystemInit",
@@ -49,9 +49,11 @@ SYMBOLS = {
 LIMITATIONS = [
     "Direct application entry at 0x2000, not OEM boot or installation evidence.",
     "Synthetic POR/warm resets; C8T chip ID is a model assumption, not a device observation.",
-    "Disconnected USB: no enumeration, mount, packets, DMA or transfer completion.",
-    "No connected-host or USB suspend transition is modeled.",
-    "No keys pressed. GPIO/TIM1 state is modeled, not physical matrix or PWM evidence.",
+    "Host detach is modeled as absence of tokens then full bus reset; no physical unplug callback is invented.",
+    "Matrix pin closure, GPIO/PWM behavior, and USB host packet timing are modeled assumptions, not hardware observations.",
+    "EP0/EP1 only: no host iAP2 FF55/FF5A response, EA session, auth chip success, iPhone recognition, or accessory compatibility is established.",
+    "Missing HID class callback and failed completion result are one-shot CPU fault inputs, not controller-produced errors.",
+    "X035 MIS_ST settling time is unverified; the host model supplies stable suspend/active levels at IRQ entry.",
     "Fixed modeled 48 MHz, including watchdog cases past one full timeout. Timing is approximate, not hardware timing proof.",
     "First CCCC uses a conservative maximum 12-bit counter bound; exact internal count at enable is unverified. AAAA reload uses RLDR=4000.",
     "IWDG_SW option-bit state is unverified; the model starts with IWDG disabled after reset.",
@@ -183,19 +185,10 @@ def main():
     parser.add_argument("--elf", type=Path, required=True)
     parser.add_argument("--report", type=Path, default=BUILD / "report.json")
     parser.add_argument("--no-sanitize", action="store_true", help="explicitly skip host ASan/UBSan")
-    parser.add_argument("--connected", action="store_true", help="run compiled USB host scenarios")
     args = parser.parse_args()
-    limitations = [v for v in LIMITATIONS if not args.connected or
-                   not v.startswith(("Disconnected USB:", "No connected-host", "No keys pressed."))]
-    if args.connected:
-        limitations += ["Host detach is modeled as absence of tokens then full bus reset; no physical unplug callback is invented.",
-                        "Matrix pin closure, GPIO/PWM behavior, and USB host packet timing are modeled assumptions, not hardware observations.",
-                        "EP0/EP1 only: no host iAP2 FF55/FF5A response, EA session, auth chip success, iPhone recognition, or accessory compatibility is established.",
-                        "Missing HID class callback and failed completion result are one-shot CPU fault inputs, not controller-produced errors.",
-                        "X035 MIS_ST settling time is unverified; the host model supplies stable suspend/active levels at IRQ entry."]
-    report = {"gate": "FIRST-CK5200-v1", "passed": False, "failures": [], "limitations": limitations,
+    report = {"gate": "FIRST-CK5200-v1", "passed": False, "failures": [], "limitations": LIMITATIONS,
               "chgame_pin": PIN, "register_reference_pin": WCH_PIN,
-               "profile": "exact-release-connected-C8T" if args.connected else "exact-release-disconnected-C8T", "modeled_budget_ms": 100,
+               "profile": "exact-release-connected-C8T", "modeled_budget_ms": 100,
                "maximum_progress_gap_cycles": 480000,
               "host_timeout_seconds_per_run": 60, "watchdog_timeout_seconds": 360,
               "sanitizers": not args.no_sanitize}
@@ -210,17 +203,16 @@ def main():
                                "first_CCCC_conservative_max_cycles":134217728,
                                "configured_AAAA_reload_cycles":131104768,
                                "IWDG_SW":"assumed disabled after reset",
-                               "USB":"modeled connected host" if args.connected else "disconnected",
+                               "USB":"modeled connected host",
                                "keys_pressed": ["row0/col0 Q", "row0/col5 consumer 0x00CF",
-                                                "row5/col5 consumer 0x00B8"] if args.connected else []}
-    if args.connected:
-        report["host_script"] = {"speed":"full", "address":5,
-            "EP0":"real setup, data, and status IRQ45 transactions; all device/configuration/string/HID report descriptors",
-            "EP1":"10-byte report protocol and 8-byte boot protocol, host ACK and OUT toggle",
-            "matrix":"PB one-hot row drives PA pull-down columns; hold each transition 20 ms beyond 5 ms debounce",
-            "detach":"no host tokens or invented firmware callback; reconnect uses bus reset and full enumeration",
-            "backpressure_cycles":131104768,
-            "packet_trace":"each connected case result includes exact consumed IN packets"}
+                                                "row5/col5 consumer 0x00B8"]}
+    report["host_script"] = {"speed":"full", "address":5,
+        "EP0":"real setup, data, and status IRQ45 transactions; all device/configuration/string/HID report descriptors",
+        "EP1":"10-byte report protocol and 8-byte boot protocol, host ACK and OUT toggle",
+        "matrix":"PB one-hot row drives PA pull-down columns; hold each transition 20 ms beyond 5 ms debounce",
+        "detach":"no host tokens or invented firmware callback; reconnect uses bus reset and full enumeration",
+        "backpressure_cycles":131104768,
+        "packet_trace":"each connected case result includes exact consumed IN packets"}
     try:
         report["input_hashes"] = {"BIN": digest(args.image), "ELF": digest(args.elf)}
         profile, anchors = validate(args.image, args.elf)
@@ -248,25 +240,23 @@ def main():
         report["watchdog_mutant_controls"] = json.loads(command([BUILD/"runner", "--watchdog-mutants", args.image.resolve()],timeout=360))
         if not report["watchdog_mutant_controls"]["passed"]:
             raise ValueError("watchdog mutant controls failed")
-        if args.connected:
-            report["usb_negative_controls"] = runner_record("--usb-fixtures", args.image)
-            report["usb_model_mutants"] = runner_record("--usb-mutants", args.image)
-            if any(r["exit_code"] or not r["result"]["passed"] for r in
-                   (report["usb_negative_controls"], report["usb_model_mutants"])):
-                raise ValueError("connected USB model controls failed")
-            report["connected_cases"] = [runner_record(mode, args.image) for mode in
-                ("--connected", "--missing-callback", "--failed-completion",
-                 "--disconnect-reconnect", "--connected-backpressure", "--stalled-usb-irq",
-                 "--connected-suspend-idle")]
-            if any(r["exit_code"] or not r["result"]["passed"] for r in report["connected_cases"]):
-                raise ValueError("compiled connected USB scenario failed")
-            report["resume_case"] = runner_record("--resume-counterexample", args.image)
+        report["usb_negative_controls"] = runner_record("--usb-fixtures", args.image)
+        report["usb_model_mutants"] = runner_record("--usb-mutants", args.image)
+        if any(r["exit_code"] or not r["result"]["passed"] for r in
+               (report["usb_negative_controls"], report["usb_model_mutants"])):
+            raise ValueError("connected USB model controls failed")
+        report["connected_cases"] = [runner_record(mode, args.image) for mode in
+            ("--connected", "--missing-callback", "--failed-completion",
+             "--disconnect-reconnect", "--connected-backpressure", "--stalled-usb-irq",
+             "--connected-suspend-idle", "--stopped-cnt-resume")]
+        if any(r["exit_code"] or not r["result"]["passed"] for r in report["connected_cases"]):
+            raise ValueError("compiled connected USB scenario failed")
+        report["resume_case"] = runner_record("--resume-counterexample", args.image)
         # The tests also exercise pre-execution rejection and failure reports.
         report["artifact_controls"] = json.loads(command([sys.executable,HERE/"test_artifact.py",args.image.resolve(),args.elf.resolve()]))
         verify_dependency(UPSTREAM, PIN)
         verify_dependency(ROOT / "external/ch32x035", WCH_PIN)
-        if args.connected and (report["resume_case"]["exit_code"] or
-                               not report["resume_case"]["result"]["passed"]):
+        if report["resume_case"]["exit_code"] or not report["resume_case"]["result"]["passed"]:
             raise ValueError("compiled X035 suspend/resume transition failed")
         report["passed"] = True
     except (ValueError, OSError, subprocess.TimeoutExpired, KeyError, struct.error) as error:

@@ -951,23 +951,89 @@ static bool connected_reset_case(unsigned scenario, bool emit) {
             host_irq(4,0,0);
             check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==1,
                   "USB-suspend-state");
+            g.keys[0]=1; /* Offline Q and Eject taps must not replay. */
+            gate_run(&machine,960000);
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            g.keys[5]=1u<<5;
+            gate_run(&machine,960000);
+            g.keys[5]=0;
+            gate_run(&machine,960000);
+            check((machine.usb[0x26]&3)==2,"USB-suspended-IN-not-NAK");
             machine.usb[5]&=(uint8_t)~4u; /* Bus active; same suspend IRQ fires. */
-            host_irq(4,0,0);
+            write_register(0xe000f000,machine.systick.ctlr & ~2u);
+            write_register(0xe000f008,47700); /* Cross the 48000-count reload during settle. */
+            const uint64_t wrap_cycle=machine.cycles+300;
+            unsigned before=g.usb_observed_returns;
+            g.usb_resume_probe=true;
+            host_raise_irq(4,0,0);
+            gate_run(&machine,4000);
+            g.usb_resume_probe=false;
+            check(g.usb_observed_returns==before+2 && !(machine.usb[6]&4u) &&
+                  !(machine.pfic.line&(1ull<<45)),"USB-resume-IRQ-return");
+            check(g.usb_resume_clear_count==2 && g.usb_resume_cnt_reads>=2 &&
+                  g.usb_resume_mis_reads>=1 &&
+                  g.usb_resume_clear_cycle<=g.usb_resume_first_cnt_cycle &&
+                  g.usb_resume_first_cnt_cycle<wrap_cycle &&
+                  g.usb_resume_mis_cycle>=wrap_cycle &&
+                  g.usb_resume_mis_cycle-g.usb_resume_first_cnt_cycle>=480,
+                  "USB-resume-10us-wrap-settle");
+            check(g.usb_resume_later_uif_preserved,
+                  "USB-later-UIF-not-serviced-after-return");
+            check(machine.systick.sr&1u,"USB-resume-SysTick-UIF-erased");
+            write_register(0xe000f000,machine.systick.ctlr | 2u);
             check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==0,
                   "USB-resume-state");
+            if ((machine.usb[0x26]&3)==0) host_hid_report(10,0,0);
+            gate_run(&machine,960000);
+            if ((machine.usb[0x26]&3)==0) host_hid_report(10,0,0);
+            gate_run(&machine,480000);
+            check((machine.usb[0x26]&3)==2,"USB-offline-taps-replayed-after-resume");
+            g.keys[0]=1;
+            gate_run(&machine,960000);
+            host_hid_report(10,0x14,0);
+            g.keys[0]=0;
+            gate_run(&machine,960000);
+            host_hid_report(10,0,0);
+            gate_run(&machine,960000);
+            check((machine.usb[0x26]&3)==2,"USB-post-resume-idle-replay");
+        }
+        if (scenario==8) {
+            machine.usb[5]|=4u;
+            host_irq(4,0,0);
+            check(machine.ram[P_USBD_DEV-CHG_RAM_BASE+22]==1,
+                  "USB-suspend-state");
+            machine.usb[5]&=(uint8_t)~4u;
+            write_register(0xe000f000,machine.systick.ctlr & ~1u);
+            g.watchdog_fault_mode=g.fault_active=true;
+            g.fault_kind=9; /* Synthetic stopped CNT, HSI/IWDG keeps running. */
+            unsigned before=g.usb_observed_returns;
+            host_raise_irq(4,0,0);
+            gate_run(&machine,48000);
+            check(g.usb_irqs>0 && g.usb_observed_returns==before &&
+                  machine.cpu.trap_depth,"USB-stopped-CNT-resume-did-not-stall");
+            uint64_t deadline=g.watchdog_deadline;
+            gate_run(&machine,deadline-machine.cycles+4800000);
+            check(g.watchdog_resets==1 && g.stage>=4 && g.startup_returns==1 &&
+                  !g.fault_active && g.loops>0 && g.watchdog_feeds>0,
+                  "USB-stopped-CNT-IWDG-reset");
         }
         passed=true;
     }
-    if (emit) printf("{\"name\":\"%s\",\"passed\":%s,\"USBFS_entries\":%u,\"USBFS_returns\":%u,\"normal_loops\":%u,\"IWDG_resets\":%u,\"failure\":\"%s\",\"IN_packets\":[",
+    if (emit) printf("{\"name\":\"%s\",\"passed\":%s,\"USBFS_entries\":%u,\"USBFS_returns\":%u,\"normal_loops\":%u,\"IWDG_resets\":%u,\"resume_settle_cycles\":%llu,\"later_USB_UIF_preserved\":%s,\"failure\":\"%s\",\"IN_packets\":[",
            scenario==1?"X035-resume-counterexample":
            scenario==2?"synthetic-missing-HID-callback":
            scenario==3?"synthetic-failed-HID-completion":
            scenario==4?"host-detach-reenumeration":
            scenario==5?"connected-backpressure-over-IWDG":
            scenario==6?"stalled-USB-IRQ45-IWDG-reset":
-           scenario==7?"healthy-USB-suspend-over-IWDG":"connected-Q-report",
+           scenario==7?"healthy-USB-suspend-over-IWDG":
+           scenario==8?"stopped-CNT-resume-IWDG-reset":"connected-Q-report",
            passed?"true":"false",g.usb_handler_entries,g.usb_observed_returns,g.loops,
-           g.watchdog_resets,g.failure?g.failure:"");
+           g.watchdog_resets,
+           (unsigned long long)(g.usb_resume_mis_reads ?
+               g.usb_resume_mis_cycle-g.usb_resume_first_cnt_cycle : 0),
+           g.usb_resume_later_uif_preserved?"true":"false",g.failure?g.failure:"");
     if (emit) {
         for (unsigned i=0;i<host_in_count;i++) {
             printf("%s{\"cycle\":%llu,\"ep\":%u,\"length\":%u,\"hex\":\"",
@@ -985,7 +1051,7 @@ static bool connected_reset_case(unsigned scenario, bool emit) {
     return passed;
 }
 static bool usb_mutant_controls(void) {
-    static const char *expected[]={"nested-interrupt",
+    static const char *expected[]={"unexpected-trap",
         "USB-duplicate-OUT-rejected","host-USB-IRQ-return"};
     bool passed=true;
     for (unsigned i=0;i<3;i++) {
@@ -1016,8 +1082,9 @@ int main(int argc, char **argv) {
     bool backpressure=!strcmp(argv[1],"--connected-backpressure");
     bool irq_stall=!strcmp(argv[1],"--stalled-usb-irq");
     bool suspend_idle=!strcmp(argv[1],"--connected-suspend-idle");
+    bool stopped_cnt=!strcmp(argv[1],"--stopped-cnt-resume");
     bool usb_mutants=!strcmp(argv[1],"--usb-mutants");
-    FILE *f=fopen(argv[stalls || watchdog || mutants || connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle || usb_mutants ? 2 : 1],"rb"); if (!f) return 2;
+    FILE *f=fopen(argv[stalls || watchdog || mutants || connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle || stopped_cnt || usb_mutants ? 2 : 1],"rb"); if (!f) return 2;
     chg_init(&machine); machine.entry=P_ENTRY;
     size_t size=fread(machine.flash+P_ENTRY,1,P_IMAGE_END-P_ENTRY,f);
     bool exact=size==P_IMAGE_END-P_ENTRY && fgetc(f)==EOF; fclose(f);
@@ -1036,9 +1103,9 @@ int main(int argc, char **argv) {
     }
     if (mutants) return watchdog_mutant_controls()?0:1;
     if (usb_mutants) return usb_mutant_controls()?0:1;
-    if (connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle)
+    if (connected || resume || missing || failed || reconnect || backpressure || irq_stall || suspend_idle || stopped_cnt)
         return connected_reset_case(resume ? 1u : missing ? 2u : failed ? 3u : reconnect ? 4u :
-                                    backpressure ? 5u : irq_stall ? 6u : suspend_idle ? 7u : 0u,true)?0:1;
+                                    backpressure ? 5u : irq_stall ? 6u : suspend_idle ? 7u : stopped_cnt ? 8u : 0u,true)?0:1;
     printf("["); bool passed=true;
     for (unsigned i=0;i<4;i++) { if (!run_case(i,argv[2])) { passed=false; break; } }
     printf("]\n"); return passed?0:1;

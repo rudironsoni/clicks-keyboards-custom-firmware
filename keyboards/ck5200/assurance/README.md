@@ -21,11 +21,11 @@ artifact identity and is an assurance entry point.
 
 This profile accepts only the reviewed release:
 
-- BIN: `9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439`, 26792 bytes.
-- ELF contract: `3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
-- Hosted verification for this watchdog candidate is pending.
-- Local ELF provenance: `5a016bdfac12e0d1fd4c1d2879b07cd7604dfcd176c720ec0abccd4c3ccf0c24`.
-- Application bytes end at `0x88a8`, leaving 344 bytes before `0x8a00`.
+- BIN: `eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4`, 26860 bytes.
+- ELF contract: `aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7`.
+- Hosted verification is recorded in the [program evidence](../docs/firmware-assurance.md).
+- Local ELF provenance: `c452c84cc9c33a62a13a1b660ab38790bf26c24cd4ffc97f7985bb6fb93a38ba`.
+- Application bytes end at `0x88ec`, leaving 276 bytes before `0x8a00`.
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
 - OpenWCH register reference: `c6253942b29ff2a3f5e2829182a874afffa45881`.
 
@@ -53,16 +53,16 @@ recovery correction has a new exact-BIN profile, reviewed against the rebuilt
 baseline and corrected ELF disassembly before updating any identity.
 The consumer setter stores the new usage then jumps through the existing
 `host_keyboard_send` at `0x266a`. The same FIFO owns consumer and keyboard states.
-The watchdog candidate calls QMK at `0x8020`, returns at `0x8024`, and
-branches from `0x8084` to loop head `0x7fcc` in disconnected execution.
+The watchdog candidate calls QMK at `0x8064`, returns at `0x8068`, and
+branches from `0x80c8` to loop head `0x8010` in disconnected execution.
 GPIO row read `0x614c` uses `a5` (x15), with the six-row bound at `0x6164`.
 Scan completion `0x6176` follows the final row-drive reset at `0x6174`.
-`SystemInit` returns at `0x7c78`, startup MRET is `0x7c84`, and SysTick MRET
-is `0x7848`. Rescue consumption is `0x7cda`, transport return is `0x7de4`,
-and the rescue loop spans `0x7d98` to `0x7dce`. Watchdog servicing at `0x2e0e`
-reads and consumes the progress byte at `0x20000120`, checks the required marks
+`SystemInit` returns at `0x7cbc`, startup MRET is `0x7cc8`, and SysTick MRET
+is `0x785c`. Rescue consumption is `0x7d1e`, transport return is `0x7e28`,
+and the rescue loop spans `0x7ddc` to `0x7e12`. Watchdog servicing at `0x2e0e`
+reads and consumes the progress byte at `0x20000118`, checks the required marks
 and a new tick, then writes the reload key at `0x2e38`. The initial enable store
-is `0x7be0`, before the first poll and before GP/SP, data/BSS, or SystemInit.
+is `0x7c24`, before the first poll and before GP/SP, data/BSS, or SystemInit.
 The reset path uses the existing `_einit` vector base and the linker retains
 `.vector` with `KEEP`, preserving its `0x2004` address and `0xfc` size. These anchors were reviewed in the
 new disassembly before profile replacement.
@@ -77,7 +77,12 @@ The old `6a29277` profile had BIN hash
 `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`
 and ELF contract
 `85e38624332094e6e06d9b9c9e0d150a0dc8729b9c0fce57782a325077aaf5b8`.
-The emulator still does not model connected USB.
+Connected execution additionally checks the QMK return at `0x804c` and USBFS
+interrupt return at `0x79ea`. The X035 suspend branch clears its flag at
+`0x7b10`, waits using the running SysTick at `0x7b18..0x7b40`, then reads
+MIS_ST at `0x7b52`. It dispatches the event without clearing a later flag.
+The BSS ends at `0x200012d8`; the eight retained bytes start there. These
+changes were reviewed in the actual executable before profile replacement.
 
 The driver copies six required CHGame core sources and their headers into
 ignored `build/assurance/src`, applies `upstream.patch` with zero fuzz, and builds
@@ -90,7 +95,7 @@ the RISC-V immediate. No full vendor CPU source is checked in here.
 
 ## Obligations and controls
 
-Each case has a 4,800,000-cycle budget, nominally 100 ms at fixed 48 MHz. The host
+Each of the four startup cases has a 4,800,000-cycle budget, nominally 100 ms at fixed 48 MHz. The host
 process also has a 60-second timeout. A final instruction can cross the cycle
 boundary. Instruction counts alone never establish progress.
 Application cases allow at most 480,000 cycles (10 modeled ms) between completed
@@ -105,7 +110,7 @@ only while both deadlines remain satisfied.
 3. Warm entry with the valid two-word retained rescue request.
 4. Warm entry with only the first request word valid.
 
-At `SystemInit`, the runner checks all 144 data bytes against flash, all 4688 BSS
+At `SystemInit`, the runner checks all 144 data bytes against flash, all 4680 BSS
 bytes for zero, the ELF-derived GP/SP, and the unchanged eight `.noinit` bytes.
 It observes the `SystemInit` return, startup MRET, main entry, and request
 consumption. Normal cases require at least three ordered six-row matrix scans,
@@ -160,15 +165,14 @@ starts erased. No bootloader or F700 metadata is installed. HSI is modeled ready
 when enabled; X035 CFGR0 has no legacy PLL/SW/SWS fields. Fixed modeled timing
 does not prove clock timing on hardware.
 
-USB is disconnected. Documented register storage, idle SIE status and INT_FG
-W1C semantics are modeled. DMA addresses are checked but no DMA runs. No host
-packets, enumeration, mount, reset event or transfer completion are synthesized.
-GPIO has no pressed keys. The attached CHGame LCD/SD/buzzer code is linked only
+The startup cases use disconnected USB and no pressed keys. Connected cases
+execute controller interrupts, DMA-backed packets, enumeration, HID transfers
+and modeled key closures as described below. The attached CHGame LCD/SD/buzzer code is linked only
 because its bus module references it; no CK5200 external board devices are
 claimed. Unknown models fail rather than returning zero.
 
 This gate proves the stated executed paths under this model. It does not prove
-all instructions/states, physical matrix wiring, USB operation, OEM boot,
+all instructions/states, physical matrix wiring, physical USB operation, OEM boot,
 installation permission, rescue retention through the OEM boot stage, or safe
 flashing. The BIN and ELF are rehashed after execution; neither is modified.
 
@@ -208,6 +212,53 @@ Software protection starts at the straight-line reset prefix's enable store.
 The OEM boot stage and the short entry/configuration prefix before that store
 remain outside protection. All startup polling and data/BSS loops follow enable.
 The model uses the software-watchdog reset profile; the actual IWDG_SW option
-word is unverified. HSI failure, connected USB, and physical reset behavior
+word is unverified. HSI failure and physical reset behavior
 remain outside this model. Timing and installation limitations
 are recorded in [the program record](../docs/firmware-assurance.md#watchdog-candidate-and-verification-boundary).
+
+
+## Connected USB execution
+
+The strict gate also executes a scripted host against the actual compiled
+USBFS DCD, TinyUSB core, QMK and protocol code. Host events populate checked
+RAM DMA buffers, update documented status fields and assert IRQ45. Firmware
+acknowledges the interrupt through INT_FG W1C writes. The model checks USBFS,
+AFIO and GPIO clocks, PHY and pull-up configuration, endpoint mode, response
+ownership, DMA range/alignment/overlap, packet size, and supported framing.
+Matrix closures require enabled GPIOA/B clocks, a driven PB row and configured
+PA input columns. Unsupported accesses and states fail.
+
+EP0 exercises bus reset, device/configuration/string/HID descriptor delivery,
+address commitment after status, configuration, and boot/report protocol.
+The report retains every consumed EP0 and EP1 IN packet with its cycle, endpoint,
+length and hex bytes. Descriptor checks validate delivery and selected contents,
+not every byte. HID assertions check the complete 8-byte or 10-byte payload.
+
+Required connected cases cover keyboard, consumer and combined reports;
+missing and failed class completions with preserved Q/0000, Q/00B8, Q/0000
+ordering; host detach and full re-enumeration without offline tap replay;
+backpressure and suspended idle beyond a watchdog interval; a stalled USB
+interrupt followed by reset and re-enumeration; and suspend/resume recovery.
+The resume case crosses SysTick rollover, preserves a later USB suspend flag,
+rejects replay of offline taps, and requires fresh HID press and release after
+wake-up. A stopped SysTick CNT during the resume wait must trigger IWDG reset
+while the modeled HSI remains live. Interrupt return checks also apply when a
+pending interrupt is taken immediately after MRET, before a foreground instruction.
+
+The X035 correction is a project-owned patch against the pinned TinyUSB source.
+CMake copies only the DCD and its private header into the build directory,
+applies the patch with zero fuzz, and fails configuration if it cannot apply.
+The dependency checkout remains unchanged. The handler follows WCH's clear,
+wait, and MIS_ST-read order. Its running 1 ms HCLK SysTick supplies a nominal
+10 microsecond wait without reprogramming the timer. Physical settling time
+and device resume behavior remain unverified.
+
+Missing and failed class completions are explicit CPU fault inputs after
+TinyUSB releases the endpoint, not fabricated controller error statuses.
+The host does not answer iAP2 attach/link traffic on EP2, open an EA session on
+EP3, or supply successful authentication-device responses. This establishes
+neither MFi authentication nor iPhone accessory compatibility. Host detach means
+absence of tokens followed by bus reset, not an invented unmount callback.
+GPIO closures, token timing, C8T identity and reset profiles remain model inputs.
+There is no connected-device experiment, OEM installer execution or proof of
+independent recovery. R3 remains UNMET; physical flashing remains NO-GO.
