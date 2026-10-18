@@ -348,3 +348,148 @@ prove connected USB behavior, installation safety, protected-byte preservation,
 interruption recovery, or independent iPhone-only recovery. Watchdog supervision
 and connected-USB emulation remain separate workstreams.
 **R3 remains UNMET. Physical flashing remains NO-GO.**
+
+
+## Software-only assurance program, 2026-10-18
+
+This program continues beyond individual milestone completion. The baseline is
+`de8ef3e06279b48f7623cbcf8cfca736ef2ea6c1` on `feat/ck5200-runtime-liveness`.
+The live feature ref, retained BIN/ELF, and completed firmware and iOS workflow
+results were verified before new source changes. The primary checkout remains
+on `feat/software-only-qmk-delivery`; private inputs and dependency symlinks remain preserved.
+
+| Milestone | State | Next acceptance condition |
+| --- | --- | --- |
+| A: runtime integrity | MILESTONE_COMPLETE | Preserve existing regressions after later changes. |
+| B: progress-aware watchdog | ACTIVE | Validate fresh scan, transport, foreground, and tick progress before servicing IWDG; prove modeled stalls and reset handling. |
+| C: connected USB | PENDING | Execute actual firmware enumeration and report delivery with strict controller semantics and negative controls. |
+| D: installer and preservation | MILESTONE_BLOCKED | Custom staging faults and region checks pass; the original OEM installer contract is unavailable. |
+| E: independent recovery | Assessment reviewed; R3 UNMET | Failure-state evidence is classified in recovery-research.md; no independent iPhone-only path is established. |
+| Final integration | PENDING | Resolve cross-milestone contradictions and review the complete software evidence. |
+
+The existing `scripts/test.sh`, image validator, exact-binary runner, restore
+harness, and recovery lab remain the verification owners. Local commands,
+reports, and milestone state are retained under `build/program-evidence/`.
+Each material change needs independent review and exact-revision hosted proof.
+
+The IWDG design uses the pinned CH32X035 manual chapter 5 and datasheet timing
+tables. The clock is HSI divided by 1024, not a separate oscillator. Servicing
+will depend on completed work, not USB host availability or instruction activity.
+The model must distinguish hardware watchdog reset from its own assertion failures.
+
+The retained OEM application contains no bytes below `0x2000`; its installer
+consumer is unavailable. The existing model's assumed independent loader and
+tail-preserving operation do not establish actual hardware behavior. The earlier
+conceptual external adapter does not satisfy this program's no-extra-hardware
+recovery requirement. Those gaps do not block independent runtime and USB work.
+
+**R3 remains UNMET. Physical flashing remains NO-GO.**
+
+
+### Watchdog candidate and verification boundary
+
+The candidate services IWDG only after a fresh loop has completed its required
+work and SysTick has advanced since the previous service. Normal execution
+requires a completed six-row scan and a completed transport pass. Rescue requires
+a completed transport pass because it does not run QMK. Each new loop clears the
+marks, and each service decision consumes them. Endpoint readiness and host
+presence are not progress requirements. A non-returning transport call, scan,
+foreground pass, or interrupt therefore prevents further servicing.
+
+The application owns a strong `handle_reset` override of the pinned SDK's weak
+handler. Its straight-line prefix unlocks and configures IWDG, enables it, then
+polls status and reloads the counter. All status waits, data/BSS loops,
+`SystemInit`, and main initialization therefore run under supervision. The
+following reset sequence preserves the pinned GP/SP, data/BSS, CSR, vector,
+SystemInit, and main-entry behavior. A required one-line linker change retains
+`.vector` explicitly: replacing the weak handler removed its former live
+reference, and the image validator rejected that intermediate missing-vector
+build. The final vector remains at `0x2004`, size `0xfc`; flash allocation is
+unchanged. No shared dependency or option word is modified.
+
+The OEM boot stage and the short entry/configuration prefix before enable remain
+outside software protection. The model uses software-watchdog reset defaults;
+the keyboard's IWDG_SW option setting and physical reset behavior are unverified.
+A reset before `main` preserves a valid rescue request for the next startup.
+A reset after `main` consumes it normally restarts QMK. These are modeled
+application restarts, not independent recovery. Persistent initialization faults
+can cause reset loops and must not be reported as successful recovery.
+
+CH32X035 reference manual V1.9 chapter 5 specifies HSI/1024 and a prescaler of 32
+with reload 4000. After the AAAA reload, the interval is
+`(4000 + 1) * 32 * 1024`, or 131,104,768 HSI
+cycles, nominally 2.731349 seconds at 48 MHz. Datasheet V2.3 table 3-9 gives
+calibrated HSI tolerance of -2.6% to +2.2% over -40 to 85 degrees Celsius. Under
+those stated conditions the interval is approximately 2.673 to 2.804 seconds.
+These are conditional datasheet bounds, not CK-5200 measurements. HSI failure is
+outside this watchdog clock model. The manual's introductory LSI wording conflicts
+with its repeated HSI description, diagram, and register timing; the model uses
+the repeated HSI definition and does not assume a second oscillator.
+
+The first internal count loaded by CCCC is not specified by the available
+manual text. The model uses the conservative maximum 12-bit count, 4095, for
+that first interval: 134,217,728 HSI cycles with prescaler 32. This is an upper
+bound assumption, not an observed counter value. It is 2.796203 seconds at the
+modeled 48 MHz, or approximately 2.870845 seconds at the stated slow HSI limit.
+The healthy reset prefix must reach AAAA before either a 4000-count or maximum
+count deadline. A stuck post-enable status poll must reset by the maximum bound.
+Subsequent feeds use the documented reload value of 4000.
+
+The current candidate has 26,792 application bytes, ending at `0x88a8`, with 344
+bytes before `0x8a00`. Its BIN SHA-256 is
+`9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439`;
+its ELF runtime contract is
+`3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
+The reviewed disassembly and memory layout are retained in
+`build/program-evidence/watchdog-final/`. Verification and independent review remain
+in progress; these identities do not by themselves establish milestone acceptance.
+
+The timing review bounds authentication call sizes and retry counts, and checks
+the datasheet's 3 ms erase and 2 ms program maxima. It does not establish a full
+hardware loop bound: vendor flash-busy waits have no software limit, and complete
+SHA, callback, and initialization timing is unmeasured. The watchdog is intended
+to reset a stuck busy wait. A reset during a page operation does not establish
+installer interruption safety. The preserved analysis is
+`build/program-evidence/watchdog/timing-review.md`.
+
+Independent D/E review found no blocker in the twelve A2 page-fault cases or the
+recovery assessment. Its focused restore build and run both returned zero with
+the 18,648-byte stock fixture and 26,788-byte candidate. The cases cover the first,
+middle, and last full A2 page of a bounded 768-byte transaction, not every possible
+firmware length. They preserve bytes outside the staging write region and allow
+retry only under the explicit assumption that the application remains callable.
+The OEM installation contract and independent iPhone recovery remain unverified;
+see [the current D/E assessment](recovery-research.md#current-de-assessment-2026-10-18).
+
+The full host suite passed after the final startup correction, including
+ASan/UBSan on the production QMK and protocol harnesses
+(`build/program-evidence/watchdog/host-tests.log`). The earlier baseline entry
+failed the new supervision harness (`ck5200-baseline-red.log`, exit 134).
+Independent review then exposed the late-arm candidate's initialization gap.
+The permanent pre-SystemInit fault case failed against its exact BIN with zero
+feeds, zero resets, and `pre-main-IWDG-reset-missing`
+(`watchdog-model/pre-main-red.json`, exit 1). That defective candidate and its
+profile are preserved in `build/program-evidence/watchdog-pre-main-baseline/`.
+The final artifact must pass the same case along with thirteen watchdog cases,
+four startup cases, 193 instruction fixtures, existing rejection controls, and
+two deliberate watchdog-model mutations before milestone acceptance.
+
+Independent review found that the initial watchdog reset model discarded sticky
+reset-cause flags. A new fixture failed with `got 20000000, expected 38000000`
+before correction (`watchdog-model/sticky-red.json`). The corrected model
+preserves prior causes and adds IWDGRSTF, then verifies that RMVF clears them.
+The full gate passed again with every recorded assurance-source hash matching
+the current source. The firmware bytes did not change for this model correction.
+
+
+The local implementation is
+[`c24fd9b6b8dea74e7a1c54b28ca293b27860732b`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/c24fd9b6b8dea74e7a1c54b28ca293b27860732b).
+The separate staging regression is
+[`990ef5b4c6bb1dad90f985553d91ff8ed4297223`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/990ef5b4c6bb1dad90f985553d91ff8ed4297223).
+The final vendor-order binary passes all thirteen watchdog cases, including the
+same pre-SystemInit case that failed before correction. All four startup cases,
+193 instruction fixtures, prior rejection controls, and both watchdog mutants
+also pass under the strict sanitizer-enabled gate. The final command, exit zero,
+and source-hash match are retained in
+`build/program-evidence/watchdog-model/executed-command.json`.
+Hosted verification remains pending.

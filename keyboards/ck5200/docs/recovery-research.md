@@ -4,6 +4,51 @@ Current decision: [independent iPhone recovery remains UNMET](adr/0001-independe
 Supporting evidence: [2026-10-14 recovery audit](recovery-audit-2026-10-14.md).
 The investigation priorities below are historical, not authorization for device operations. See [current readiness](flash-readiness.md).
 
+## Current D/E assessment, 2026-10-18
+
+The active R3 requirement is recovery from a failed keyboard application using
+the iPhone alone, with no additional hardware. The prior BLE-controlled USB host
+adapter is outside this requirement. R3 remains **UNMET** and custom flashing
+remains **NO-GO** under [flash-readiness.md](flash-readiness.md#L10-L12).
+
+| Evidence class | Installer and memory finding | Checked source |
+| --- | --- | --- |
+| Actual device | The accepted iPhone sessions observed working stock getters, typing, and session reopening. They did not test an unbootable application or installer recovery. | [Readiness baseline](flash-readiness.md#L67-L75), [physical observations](flash-readiness.md#L77-L82) |
+| Original artifact | The retained V122 file is 18,648 bytes and maps to `[0x2000,0x68D8)`. It contains no original bytes in presumed OEM bootstage `[0,0x2000)`. OEM marker validation, copy order, rollback, and boot handoff are unknown. | [Recovery audit](recovery-audit-2026-10-14.md#L18-L31), [ADR](adr/0001-independent-iphone-recovery.md#L13-L24) |
+| Source code | The custom application stages updates at `0x08008A00`, with a four-byte length marker followed by payload. Its guard permits 256-byte page writes only in `[0x08008A00,0x0800F500)`. A1 invalidates the marker, A2 writes ordered chunks, and stock-only A3 hashes staged V122 before committing the length. | [Staging writer](../firmware/platform/ch32x035/ck5200_staging.c#L5-L36), [guard](../firmware/platform/ch32x035/ck5200_staging.c#L105-L149), [transaction](../firmware/platform/ch32x035/ck5200_staging.c#L190-L305) |
+| Modeled | The host harness injects A1 and A3 page faults and A2 first, middle, and last page faults in four phases. It resets volatile state but keeps simulated flash. It calls the custom application updater again after a fault; it does not execute the OEM installer. | [Restore harness](../tests/ck5200_restore_test.c#L63-L98), [cycle](../tests/ck5200_restore_test.c#L125-L199), [A2 cases](../tests/ck5200_restore_test.c#L201-L263) |
+| [INFERENCE] | Since both observed update dispatchers run in application callbacks, those paths cannot serve a keyboard whose application does not execute. This does not rule out an unseen OEM service. | [Recovery audit](recovery-audit-2026-10-14.md#L33-L47) |
+| Unknown | V122 ends 40 bytes before the final 256-byte page boundary. `[0x68D8,0x6900)` has no original image bytes. Ordinary whole-page erase changes that tail, and no selective operation that preserves it through interruption is established. | [Region map](../../../reports/CK5200%20USB%20recovery%20feasibility.md#L198-L205), [counterexample](../recovery_lab/test_lab.py#L139-L147) |
+
+The custom writer's erased-marker interpretation is a design assumption about
+the unread OEM installer, not observed OEM behavior. The staged length and an
+A3 acknowledgment do not prove that the installer accepts, copies, or retains
+the image. [Staging comments](../firmware/platform/ch32x035/ck5200_staging.c#L17-L24),
+[recovery audit](recovery-audit-2026-10-14.md#L33-L58).
+
+| Application failure state | Current evidence | R3 result |
+| --- | --- | --- |
+| Application remains callable, transfer or staging write fails | The host harness models a fresh A1/A2/A3 attempt over retained flash, conditional on the custom update handler remaining callable. A2 first, middle, and last page faults leave excluded bytes unchanged in this model. [Restore harness](../tests/ck5200_restore_test.c#L125-L199), [A2 cases](../tests/ck5200_restore_test.c#L201-L263). | Modeled application retry only. Independent recovery unverified. |
+| Application starts but update service or USB session fails | Stock and custom dispatchers reside in application callbacks. The iPhone updater requires an accessory session. [Recovery audit](recovery-audit-2026-10-14.md#L33-L43). | No demonstrated iPhone recovery channel. |
+| Application entry is invalid, early startup fails, or application pages are erased | Neither retained image includes the OEM bootstage. Independent entry, its USB/iPhone service, and its behavior with invalid application code remain unknown. [ADR](adr/0001-independent-iphone-recovery.md#L13-L22). | No demonstrated recovery channel. |
+| Install marker or other boot metadata is invalid | The custom staging harness rejects an A3 size mismatch and leaves its marker zero. The direct-entry CPU model adds no OEM bootloader or `0xF700` metadata. How the original bootstage interprets invalid metadata is unknown. [Restore harness](../tests/ck5200_restore_test.c#L492-L503), [CPU fixture](../assurance/runner.c#L440-L449), [ADR](adr/0001-independent-iphone-recovery.md#L19-L21). | Modeled custom rejection only. OEM recovery unverified. |
+| Application repeatedly resets | The application reset handler arms its watchdog before startup loops. The CPU runner includes a repeated initialization reset-loop case with two modeled watchdog resets. It enters the application directly, so it does not establish an independent OEM service or an iPhone recovery path. [Reset handler](../firmware/platform/ch32x035/platform.c#L15-L80), [modeled case](../assurance/runner.c#L352-L360), [reset checks](../assurance/runner.c#L404-L411). | Modeled resets only. Independent recovery unverified. |
+| Power fails while the OEM installer copies staged bytes | The host harness does not execute installer copy or restart. OEM marker checks, copy effects, and retry state are unknown. [Recovery audit](recovery-audit-2026-10-14.md#L49-L58), [ADR](adr/0001-independent-iphone-recovery.md#L19-L21). | Interruption safety unverified. |
+| Presumed bootstage is lost | The inspected artifacts contain no original bytes below `0x2000`. [Recovery audit](recovery-audit-2026-10-14.md#L27-L31). | No verified restore source or independent service. |
+
+The D host harness now covers A2 page-write faults, marker state, excluded
+flash, and retry while the custom application update handler remains callable.
+Further installer modeling needs the original bootstage or a model-matched OEM
+contract; these tests cannot settle OEM installation. E needs a model-matched
+OEM boot and iPhone transport contract, exact erase/program effects including
+the unknown tail, and restart behavior before an executable recovery claim is
+possible. The offline lab makes independent entry and a tail-preserving erase
+explicit assumptions; its journal exists only in memory.
+[A2 path](../firmware/platform/ch32x035/ck5200_staging.c#L212-L250),
+[lab gates](../recovery_lab/lab.py#L113-L178),
+[lab restart](../recovery_lab/lab.py#L275-L287),
+[ADR](adr/0001-independent-iphone-recovery.md#L78-L83).
+
 Status: 2026-10-12. This report answers one question: can a broken custom
 application on the CK-5200 be recovered WITHOUT that application executing,
 under the constraints of no new hardware, no dev board, no PCB modification,
