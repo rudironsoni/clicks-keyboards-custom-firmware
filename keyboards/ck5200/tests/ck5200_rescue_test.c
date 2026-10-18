@@ -183,6 +183,34 @@ int main(int argc, char **argv) {
         assert(pre_init == 1 && post_init == 1 && matrix_inits == 1 && matrix_scans > 0);
         assert(backlight_calls && eeconfig_is_enabled());
         assert(command(0x94, 0, NULL, 0) == 255); /* No unauthenticated reset. */
+        /* TinyUSB bus reset drops transfers without an unmount callback.
+         * Cover an accepted reply, an unsent reply, and an accepted A0 ACK. */
+        for (unsigned interrupted = 0; interrupted < 3; ++interrupted) {
+            connect_phone();
+            defer_completion = true;
+            reject_write = interrupted == 1;
+            const uint8_t request = interrupted == 2 ? 0xA0 : 0x03;
+            assert(command(request, 0, NULL, 0) == (reject_write ? 255 : 0));
+            const unsigned reboots_before = staging_host_reboots;
+            mounted = false;
+            service(1);
+            mounted = true;
+            response_len = 0;
+            tud_mount_cb();
+            if (interrupted == 2) {
+                tud_vendor_tx_cb(1, 4); /* An old A0 completion has no authority. */
+                assert(staging_host_reboots == reboots_before);
+            }
+            reject_write = false;
+            service(1);
+            assert(response_len == 0); /* Do not replay a reply from the old mount. */
+            connect_phone();
+            defer_completion = false;
+            assert(command(0x03, 0, NULL, 0) == 0 &&
+                   "bus reset left the old reply blocking the new session");
+            assert(staging_host_reboots == reboots_before);
+        }
+        puts("bus reset cancels accepted, queued, and A0 reply ownership");
         connect_phone();
         memset(flash+0x8A00, 0xA5, 4);
         assert(command(0x94, 0, NULL, 0) == 255); /* Unknown/pending marker blocks reset. */

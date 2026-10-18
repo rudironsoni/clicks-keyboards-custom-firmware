@@ -260,6 +260,10 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
 }
 
 void tud_mount_cb(void) {
+    /* Bus reset drops old transfers without calling tud_umount_cb. */
+    pending_update_response_len = 0;
+    update_response_in_flight = false;
+    if (ck5200_rescue_active()) ck5200_staging_abort();
     keyboard_protocol = 1;
     keyboard_idle = keyboard_led_state = 0;
     last_keyboard_report_valid = false;
