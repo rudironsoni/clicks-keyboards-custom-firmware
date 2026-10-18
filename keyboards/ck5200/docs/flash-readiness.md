@@ -8,7 +8,7 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock diagnostics baseline | COMPLETE, accepted for the observed identity, stock getters, mixed-key recording, exports, and session reopening |
 | Comprehensive physical CK-5200 characterization | UNVERIFIED beyond the recorded observations; remaining gaps do not block the diagnostics baseline |
 | M2 application-level rescue | COMPLETE, accepted at `ee45b6b` after independent review as a software-only secondary mechanism. Not installed or physically verified. See [acceptance and evidence](application-rescue.md#acceptance). Does not satisfy R3. |
-| R3 iPhone-only independent recovery | UNMET. USB-C/BLE-host adapter research is conceptual only. No proven rescue from an unbootable application. [Investigation](../../../reports/CK5200%20USB%20recovery%20feasibility.md). |
+| R3 iPhone-only independent recovery | UNMET. No proven rescue from an unbootable application using the iPhone alone without added hardware. [Current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18). |
 | Custom firmware flashing | NO-GO, no custom image authorized |
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
@@ -34,6 +34,17 @@ The [2026-10-15 decision](adr/0001-independent-iphone-recovery.md) retains NO-GO
 The missing evidence is an independent boot service with iPhone transport, validated stock restoration, preservation, and interruption safety.
 Installer readback could help but would not satisfy these requirements by itself.
 See [iPhone transport limits](iphone-recovery-transport.md) for the separate public-API constraint.
+
+## Installation feasibility, 2026-10-18
+
+The completed runtime and binary assurance does not establish installation
+readiness. The [current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18)
+ranks the missing OEM entry, iPhone transport, and preservation evidence.
+The exact reviewed QMK image places instructions in `[0x68D8,0x6900)`, whose
+original contents remain unknown and protected. Safe installation of that
+image is therefore unverified, even though it fits the application allocation.
+External adapters and replacement-loader installation do not meet the current
+constraints. R3 remains UNMET. Physical flashing remains NO-GO.
 
 ## R3 investigation status, 2026-10-16
 
