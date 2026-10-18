@@ -13,6 +13,7 @@
 #include "ck5200_rescue.h"
 #include "ck5200_staging.h"
 #include "ck5200_staging_host.h"
+#include "ck5200_watchdog.h"
 #include "sha-256.h"
 
 int ck5200_main(void);
@@ -33,6 +34,10 @@ static uint8_t flash[0x10000], reply[8];
 static size_t reply_length;
 
 void platform_setup(void) {}
+/* This host bridge does not model the hardware watchdog. */
+void ck5200_watchdog_begin(void) {}
+void ck5200_watchdog_note_transport(void) {}
+void ck5200_watchdog_finish(bool rescue) { (void)rescue; }
 void mcu_reset(void) {
     ++reset_requests;
     if (!reset_armed) abort();
