@@ -361,11 +361,11 @@ on `feat/software-only-qmk-delivery`; private inputs and dependency symlinks rem
 | Milestone | State | Next acceptance condition |
 | --- | --- | --- |
 | A: runtime integrity | MILESTONE_COMPLETE | Preserve existing regressions after later changes. |
-| B: progress-aware watchdog | Local verification and independent review passed | Exact-revision hosted firmware verification. |
-| C: connected USB | Local verification and independent review passed | Exact-revision hosted firmware verification. |
+| B: progress-aware watchdog | MILESTONE_COMPLETE | Reviewed firmware and strict hosted execution passed at `732d651fdd36e9013a932df99518073339af8841`. |
+| C: connected USB | MILESTONE_COMPLETE within the stated controller model | Reviewed enumeration, HID, fault controls, and strict hosted execution passed at `732d651fdd36e9013a932df99518073339af8841`. |
 | D: installer and preservation | MILESTONE_BLOCKED | Custom staging faults and region checks pass; the original OEM installer contract is unavailable. |
-| E: independent recovery | Assessment reviewed; R3 UNMET | Failure-state evidence is classified in recovery-research.md; no independent iPhone-only path is established. |
-| Final integration | Local review passed after remount correction | Verify hosted artifacts and publish the final evidence record. |
+| E: independent recovery | MILESTONE_COMPLETE for the assessment; R3 UNMET | Failure-state evidence is classified in recovery-research.md; no independent iPhone-only path is established. |
+| Final integration | MILESTONE_COMPLETE for the tested software contracts | Firmware artifacts passed at `732d651`; host-bridge and iOS verification passed at `fad3969`. |
 
 The existing `scripts/test.sh`, image validator, exact-binary runner, restore
 harness, and recovery lab remain the verification owners. Local commands,
@@ -627,7 +627,83 @@ strict run after the README edit exited zero. All seven
 assurance source hashes match, and BIN/ELF identity is unchanged. The canonical
 local report is `build/assurance/report.json`; the command record is
 `build/program-evidence/connected-usb/root-final-executed.json`.
-Exact-revision hosted verification remains required. The D/E assessment remains unchanged: custom staging fault
-handling is modeled and reviewed, but original OEM installation, preservation
+The D/E assessment remains unchanged: custom staging fault handling is modeled
+and reviewed, but original OEM installation, preservation
 of `[0x68D8,0x6900)`, interruption recovery and independent iPhone-only recovery
 remain unverified. R3 remains UNMET. Physical flashing remains NO-GO.
+
+
+### Hosted firmware and integration evidence
+
+[Firmware run 39124133944](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124133944)
+passed at implementation revision
+`732d651fdd36e9013a932df99518073339af8841`. Its host tests, image inspection,
+and mandatory strict gate passed. Downloaded firmware and assurance artifacts
+contain identical BIN and ELF files. Their BIN and runtime contract match the
+combined artifact above. The hosted raw ELF hash is
+`cf9fefc8db51113b5e9566cc133d5db605d4c1fa261e4794c9502198e89d1711`;
+compiler-host metadata differs from the local ELF, while the reviewed runtime
+contract is identical. All seven assurance source hashes match the published
+revision, and all four retained startup trace hashes match the report.
+The downloaded BIN/ELF also passed the local image validator.
+
+Retained artifact identities:
+
+| Artifact | GitHub artifact ID | Archive digest |
+| --- | --- | --- |
+| ck5200-firmware | 12135950107 | `sha256:91f8f0d51cb3bb1be14007503a5c5646b15a224d18da765ff8ba627005ed4f53` |
+| ck5200-assurance | 12135835649 | `sha256:ebd6d64c64498371e7bdf248171d820a097dff7c0024600507d0bfd76f23c197` |
+
+The local command and comparison record is
+`build/program-evidence/hosted-732d651/verified-artifacts.json`.
+Independent binary and model review is retained in
+`build/program-evidence/connected-usb/final-independent-review.md`.
+The final integration review found the remount defect described above; its
+regression and correction resolved the finding. Installer and recovery review
+is retained in `build/program-evidence/installer-independent-review.md`.
+
+The same revision's
+[iOS run 39124133942](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124133942)
+exposed a missing host-test integration: the C bridge compiles the real firmware
+loop but omits the hardware platform, so three watchdog hooks were undefined.
+Revision `fad396907480482046f325ff3974f9f495b4e180` adds those three no-op hooks
+beside the existing platform stub, using the production declarations. This is
+a necessary test-bridge scope expansion, not an application behavior change.
+A local C bridge probe reproduced the three undefined symbols before the fix,
+then linked and booted successfully afterward. Independent review found no
+blocker. Evidence is `build/program-evidence/ios-bridge/manifest.json`; the
+review is retained beside it as `independent-review.md`.
+No local Swift or Xcode tests were run.
+
+[iOS run 39124581002](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124581002)
+passed at `fad396907480482046f325ff3974f9f495b4e180`, including Swift tests,
+unsigned application builds, Simulator recording/export/deletion checks, source
+byte comparison, and write-disabled stock-manager packaging. The bridge-only
+change leaves the reviewed firmware bytes and assurance sources unchanged.
+The completed job record is `build/program-evidence/ios-bridge/hosted-run.json`.
+
+
+### Software-scope completion boundary
+
+The final audit retains the runtime regressions, progress-based watchdog
+obligations, strict controller checks, actual HID payload assertions, staging
+fault matrix, and independent recovery assessment. The connected model runs
+compiled EP0 enumeration and EP1 HID paths. Missing and failed class completions
+are explicit CPU fault inputs. It does not simulate successful Apple
+authentication or establish an EP2/EP3 Apple session. Host harnesses separately
+exercise the application update session and remount behavior.
+
+No actionable correctness finding remains from the reviewed software changes.
+Milestone D remains blocked for the actual OEM installation contract: the
+available application image does not contain the bootstage that performs the
+installation. Additional assumed copy, erase, or recovery behavior would not
+close that evidence gap. The custom staging tests establish their stated
+application-level bounds only. Milestone E completes the assessment, not R3.
+
+The remaining system guarantees require original OEM boot/installer evidence
+or admissible device evidence that this software-only program does not supply.
+They include marker interpretation, interrupted installation, preservation of
+excluded destination bytes, and an independent iPhone-only service when the
+application cannot execute. Physical operations remain prohibited. Software
+scope completion does not establish installation safety or flash readiness.
+**R3 remains UNMET. Physical flashing remains NO-GO.**
