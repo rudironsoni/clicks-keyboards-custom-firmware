@@ -12,6 +12,7 @@
 #include "ck5200_keymap.h"
 #include "eeconfig.h"
 #include "ck5200_rescue.h"
+#include "ck5200_watchdog.h"
 
 #define UPDATE_RESPONSE_SIZE 8u
 #define CK_HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
@@ -177,11 +178,13 @@ void protocol_post_task(void) {
     tud_task();
     apply_persisted_brightness_once();
     service_iap2();
+    ck5200_watchdog_note_transport();
 }
 
 void ck5200_transport_task(void) {
     tud_task();
     service_iap2();
+    ck5200_watchdog_note_transport();
 }
 
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,

@@ -33,6 +33,8 @@ void protocol_setup(void);
 void protocol_pre_task(void);
 void protocol_keyboard_task(void);
 void protocol_post_task(void);
+void ck5200_watchdog_note_scan(void) {}
+void ck5200_watchdog_note_transport(void) {}
 
 /* ---------------- TinyUSB stub ------------------------------------------ */
 bool stub_mounted, stub_suspended, stub_hid_ready;

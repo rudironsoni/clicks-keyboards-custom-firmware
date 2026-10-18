@@ -19,15 +19,17 @@ BUILD = ROOT / "build/assurance"
 UPSTREAM = ROOT / "external/chgame_emulator"
 PIN = "bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48"
 WCH_PIN = "c6253942b29ff2a3f5e2829182a874afffa45881"
-BIN_HASH = "322f227997d5ea8c291a06dc2e5c210be31f1a97c00816c18ffcf161e7326c00"
-ELF_CONTRACT_HASH = "de296b6d1ed8b342e07c2426f51d672f3d34990104ec340d2d73e42cc31296d2"
+BIN_HASH = "9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439"
+ELF_CONTRACT_HASH = "3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b"
 # Bind tracepoints to the exact BIN and the reviewed ELF contract.
 # A new binary requires a reviewed profile, never automatic acceptance.
 ANCHORS = {
-    "STARTUP_MRET": 0x7ffc, "SYSTEM_RETURN": 0x7ff0, "CONSUMED": 0x7bcc,
-    "TRANSPORT_RETURN": 0x7cc0, "LOOP": 0x7ea8, "ROW_READ": 0x6116,
-    "SCAN_DONE": 0x6132, "KEYBOARD_RETURN": 0x7efc, "LOOP_BACK": 0x7f4a,
-    "SYSTICK_MRET": 0x7806, "RESCUE_LOOP": 0x7c8a, "RESCUE_BACK": 0x7caa,
+    "STARTUP_MRET": 0x7c84, "SYSTEM_RETURN": 0x7c78, "CONSUMED": 0x7cda,
+    "EARLY_ARM": 0x7be0, "EARLY_CRT": 0x7bfa,
+    "TRANSPORT_RETURN": 0x7de4, "LOOP": 0x7fcc, "ROW_READ": 0x614c,
+    "ROW_BOUND": 0x6164, "SCAN_DONE": 0x6176, "KEYBOARD_RETURN": 0x8024,
+    "LOOP_BACK": 0x8084, "SYSTICK_MRET": 0x7848,
+    "RESCUE_LOOP": 0x7d98, "RESCUE_BACK": 0x7dce,
 }
 SYMBOLS = {
     "ENTRY": "_start", "RESET": "handle_reset", "SYSTEM": "SystemInit",
@@ -35,13 +37,17 @@ SYMBOLS = {
     "TIMER": "timer_count", "NOINIT": "rescue_request", "RESCUE": "rescue",
     "GP": "__global_pointer$", "STACK": "_estack", "STACK_SIZE": "__stack_size", "DATA": "_data_vma",
     "DATA_LMA": "_data_lma", "DATA_END": "_edata", "BSS": "_sbss", "BSS_END": "_ebss",
+    "WATCHDOG_FINISH": "ck5200_watchdog_finish", "WATCHDOG_PROGRESS": "watchdog_progress",
 }
 LIMITATIONS = [
     "Direct application entry at 0x2000, not OEM boot or installation evidence.",
     "Synthetic POR/warm resets; C8T chip ID is a model assumption, not a device observation.",
     "Disconnected USB: no enumeration, mount, packets, DMA or transfer completion.",
+    "No connected-host or USB suspend transition is modeled.",
     "No keys pressed. GPIO/TIM1 state is modeled, not physical matrix or PWM evidence.",
-    "100 ms at fixed modeled 48 MHz. Timing is approximate, not hardware timing proof.",
+    "Fixed modeled 48 MHz, including watchdog cases past one full timeout. Timing is approximate, not hardware timing proof.",
+    "First CCCC uses a conservative maximum 12-bit counter bound; exact internal count at enable is unverified. AAAA reload uses RLDR=4000.",
+    "IWDG_SW option-bit state is unverified; the model starts with IWDG disabled after reset.",
     "Executed-path checks only, not total instruction proof or all firmware states.",
     "Internal tracepoints are exact-hash-bound. New artifacts require profile review.",
 ]
@@ -168,7 +174,8 @@ def main():
               "chgame_pin": PIN, "register_reference_pin": WCH_PIN,
                "profile": "exact-release-disconnected-C8T", "modeled_budget_ms": 100,
                "maximum_progress_gap_cycles": 480000,
-              "host_timeout_seconds_per_run": 60, "sanitizers": not args.no_sanitize}
+              "host_timeout_seconds_per_run": 60, "watchdog_timeout_seconds": 360,
+              "sanitizers": not args.no_sanitize}
     report["model_inputs"] = {"entry":0x2000, "chip_id":0x03510601, "serial_word":0x12345678,
                               "cold_reset_flags":0x08000000, "warm_reset_flags":0x10000000,
                               "cold_ram_seed":"1 + (offset * 73) % 255",
@@ -177,6 +184,9 @@ def main():
                                "initial_general_registers":"zero",
                                "initial_PFIC":"no enabled or pending interrupts",
                                "initial_SysTick":"disabled",
+                               "first_CCCC_conservative_max_cycles":134217728,
+                               "configured_AAAA_reload_cycles":131104768,
+                               "IWDG_SW":"assumed disabled after reset",
                                "USB":"disconnected", "keys_pressed":[]}
     try:
         report["input_hashes"] = {"BIN": digest(args.image), "ELF": digest(args.elf)}
@@ -199,6 +209,12 @@ def main():
         report["late_stall_controls"] = json.loads(command([BUILD/"runner", "--stall-controls", args.image.resolve()]))
         if len(report["late_stall_controls"]) != 2 or not all(c["passed"] for c in report["late_stall_controls"]):
             raise ValueError("late-stall controls failed")
+        report["watchdog_cases"] = json.loads(command([BUILD/"runner", "--watchdog", args.image.resolve()],timeout=360))
+        if len(report["watchdog_cases"]) != 13 or not all(c["passed"] for c in report["watchdog_cases"]):
+            raise ValueError("watchdog fault/reset controls failed")
+        report["watchdog_mutant_controls"] = json.loads(command([BUILD/"runner", "--watchdog-mutants", args.image.resolve()],timeout=360))
+        if not report["watchdog_mutant_controls"]["passed"]:
+            raise ValueError("watchdog mutant controls failed")
         # The tests also exercise pre-execution rejection and failure reports.
         report["artifact_controls"] = json.loads(command([sys.executable,HERE/"test_artifact.py",args.image.resolve(),args.elf.resolve()]))
         verify_dependency(UPSTREAM, PIN)

@@ -7,6 +7,7 @@
 #include "keyboard.h"
 #include "ck5200_rescue.h"
 #include "ck5200_staging.h"
+#include "ck5200_watchdog.h"
 #include <stdint.h>
 
 void platform_setup(void);
@@ -41,7 +42,11 @@ int main(void) {
     if (rescue) {
         ck5200_staging_require_stock();
         ck5200_transport_setup();
-        for (;;) ck5200_transport_task();
+        for (;;) {
+            ck5200_watchdog_begin();
+            ck5200_transport_task();
+            ck5200_watchdog_finish(true);
+        }
     }
 
     protocol_setup();
@@ -50,6 +55,7 @@ int main(void) {
     keyboard_init();
     protocol_post_init();
     for (;;) {
+        ck5200_watchdog_begin();
         protocol_pre_task();
         protocol_keyboard_task();
         protocol_post_task();
@@ -70,5 +76,6 @@ int main(void) {
         deferred_exec_task();
 #endif
         housekeeping_task();
+        ck5200_watchdog_finish(false);
     }
 }

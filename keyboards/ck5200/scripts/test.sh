@@ -33,6 +33,9 @@ cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmwar
 
 "$TEST_BUILD/ck5200_backlight_test"
 
+cc -std=c11 -Wall -Wextra tests/ck5200_watchdog_test.c -o "$TEST_BUILD/ck5200_watchdog_test"
+"$TEST_BUILD/ck5200_watchdog_test"
+
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \
   firmware/platform/ch32x035/ck5200_keymap.c \
@@ -142,7 +145,7 @@ cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -DCK5200_IDENTITY_HOST_TEST -
   firmware/platform/ch32x035/ck5200_staging.c \
   firmware/platform/ch32x035/ck5200_update_protocol.c \
   $QCORE $QCK -o "$M2_BUILD/rescue_test"
-for mode in normal rescue early-failure closed-session watchdog-jump watchdog-packet watchdog-ep3; do
+for mode in normal rescue early-failure closed-session watchdog-jump watchdog-packet watchdog-ep3 watchdog-scan-stall watchdog-transport-stall watchdog-busy watchdog-suspend; do
   UBSAN_OPTIONS=halt_on_error=1 "$M2_BUILD/rescue_test" "$mode" .stock/iKeyboard_CK-5200_V122_120.bin
 done
 

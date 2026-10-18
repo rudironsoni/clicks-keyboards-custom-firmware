@@ -16,7 +16,7 @@ static void require(bool ok, const char *why, uint32_t detail) {
     if (!ok) gate_fail(why, detail);
 }
 static void progress_deadlines(ChgMachine *m) {
-    if (g.fixture) return; /* Instruction fixtures have no application loop. */
+    if (g.fixture || g.fault_active) return; /* Fault tests use IWDG expiry. */
     require(m->cycles - g.last_systick_return <= GATE_PROGRESS_GAP,
             "SysTick-progress-timeout", g.pc);
     require(m->cycles - g.last_foreground <= GATE_PROGRESS_GAP,
@@ -28,6 +28,37 @@ static bool inside(uint32_t a, unsigned n, uint32_t low, uint32_t high) {
 static void event(ChgMachine *m, const char *name) {
     if (g.trace) fprintf(g.trace, "{\"cycle\":%llu,\"pc\":%u,\"event\":\"%s\"}\n",
                          (unsigned long long)m->cycles, g.pc, name);
+}
+static uint64_t watchdog_period(uint32_t reload) {
+    static const unsigned divisor[] = {4,8,16,32,64,128,256,256};
+    return (uint64_t)(reload + 1) * 1024 * divisor[g.watchdog_pscr];
+}
+void gate_watchdog_reset(void) {
+    g.watchdog_pscr=0; g.watchdog_rld=0xfff;
+    g.watchdog_deadline=g.watchdog_enable_cycle=g.watchdog_pvu_until=g.watchdog_rvu_until=0;
+    g.watchdog_enabled=g.watchdog_unlocked=false;
+}
+void gate_watchdog_expire(ChgMachine *m) {
+    require(g.watchdog_enabled && g.watchdog_deadline && m->cycles>=g.watchdog_deadline,
+            "watchdog-expiry-order",g.pc);
+    require(g.watchdog_fault_mode,"unexpected-watchdog-reset",g.pc);
+    m->cycles=g.watchdog_deadline;
+    g.watchdog_resets++;
+    event(m,"IWDG-expiry");
+    uint32_t prior_flags=m->reset_flags;
+    chg_reset(m,false); /* Retain RAM; execute the actual application startup next. */
+    m->reset_flags=prior_flags | 0x20000000u; /* Sticky causes, plus IWDGRSTF. */
+    gate_watchdog_reset();
+    memcpy(g.noinit,m->ram+(P_NOINIT-CHG_RAM_BASE),sizeof g.noinit);
+    uint32_t request[2]; memcpy(request,g.noinit,sizeof request);
+    g.rescue=request[0]==0x43524d32u && request[1]==~0x43524d32u;
+    g.stage=g.scan_stage=g.startup_returns=0;
+    g.pending_return=g.pending_handler=false;
+    g.irqs=g.returns=g.observed_returns=g.handler_entries=0;
+    g.foreground_after_irq=0;
+    g.last_foreground=g.last_systick_return=m->cycles;
+    g.fault_active=false;
+    event(m,"IWDG-CPU-reset");
 }
 typedef struct { uint32_t address, mask; unsigned width, directions; } Register;
 #define R(a,n) {a,0,n,1}
@@ -80,6 +111,8 @@ static void register_access(const Register *r, int n, bool write, uint32_t v) {
     require(!write || !(v & ~r->mask), "register-value-model", r->address);
 }
 void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v) {
+    if (g.watchdog_enabled && m->cycles>=g.watchdog_deadline)
+        longjmp(g.watchdog_escape,1);
     require(n == 1 || n == 2 || n == 4, "memory-width", a);
     if (inside(a, n, CHG_RAM_BASE, CHG_RAM_BASE + CHG_RAM_SIZE)) return;
     if (inside(a, n, 0, CHG_FLASH_SIZE) ||
@@ -92,6 +125,29 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v) {
     }
     if (a >= 0x40022000 && a < 0x40022400 && a != 0x40022000)
         gate_fail("flash-controller-denied", a);
+    if (a >= 0x40003000 && a < 0x40003010) {
+        require(n==4,"register-width",a); /* Vendor SDK uses 32-bit MMIO accesses. */
+        require(!(a & 3),"unknown-memory-register",a);
+        switch (a) {
+        case 0x40003000:
+            require(write,"register-direction",a);
+            require(v==0x5555 || v==0xaaaa || v==0xcccc,"IWDG-key",v);
+            break;
+        case 0x40003004:
+        case 0x40003008:
+            require(a==0x40003004 ? m->cycles>=g.watchdog_pvu_until :
+                                         m->cycles>=g.watchdog_rvu_until,
+                    "IWDG-update-busy",a);
+            require(!write || g.watchdog_unlocked,"IWDG-write-locked",a);
+            require(!write || !(v & (a==0x40003004 ? ~7u : ~0xfffu)),
+                    "register-value-model",a);
+            break;
+        case 0x4000300c:
+            require(!write,"register-direction",a);
+            break;
+        }
+        return;
+    }
     for (unsigned i = 0; i < sizeof(registers)/sizeof(*registers); i++)
         if (registers[i].address == a) {
             register_access(&registers[i], n, write, v);
@@ -118,6 +174,53 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v) {
         if (write) g.mmio_writes++; else g.mmio_reads++;
     }
     if (a == 0x1ffff704) { *v = 0x03510601; return true; } /* synthetic C8T */
+    if (a >= 0x40003000 && a < 0x40003010) {
+        if (a==0x40003000) {
+            if (*v==0x5555) g.watchdog_unlocked=true;
+            else if (*v==0xaaaa) {
+                g.watchdog_unlocked=false;
+                if (g.watchdog_enabled && g.watchdog_mutant!=1) {
+                    g.watchdog_feeds++;
+                    g.watchdog_deadline=m->cycles+watchdog_period(g.watchdog_rld);
+                }
+                event(m,"IWDG-reload");
+            } else {
+                g.watchdog_unlocked=false;
+                if (!g.watchdog_enabled) {
+                    g.watchdog_enabled=true;
+                    g.watchdog_enable_cycle=m->cycles;
+                    /* RM does not state the internal count loaded by CCCC.
+                     * Use the maximum 12-bit count until the explicit AAAA. */
+                    g.watchdog_deadline=m->cycles+watchdog_period(0xfff);
+                }
+                event(m,"IWDG-enable");
+                if (g.watchdog_fault_mode && g.fault_kind==3 &&
+                    g.fault_injections<g.fault_limit) {
+                    g.fault_active=true; g.fault_injections++;
+                    m->stop_at=m->cycles; /* Stop the guest after this store. */
+                    event(m,"injected-init-hang-after-IWDG-enable");
+                }
+            }
+        } else if (a==0x40003004) {
+            if (write) { g.watchdog_pscr=*v; g.watchdog_pvu_until=m->cycles+5; }
+            else *v=g.watchdog_pscr;
+        } else if (a==0x40003008) {
+            if (write) { g.watchdog_rld=*v; g.watchdog_rvu_until=m->cycles+5; }
+            else *v=g.watchdog_rld;
+        } else {
+            *v=(m->cycles<g.watchdog_pvu_until ? 1u : 0u) |
+               (m->cycles<g.watchdog_rvu_until ? 2u : 0u);
+            if (g.watchdog_fault_mode && g.fault_kind==8 && g.watchdog_enabled &&
+                (g.fault_active || g.fault_injections<g.fault_limit)) {
+                if (!g.fault_active) {
+                    g.fault_active=true; g.fault_injections++;
+                    event(m,"injected-post-enable-STATR-stuck");
+                }
+                *v |= 1u; /* Peripheral fault, separate from normal five-cycle update. */
+            }
+        }
+        return true;
+    }
     if (a >= 0x40023400 && a < 0x40023800) {
         unsigned off = a - 0x40023400;
         if (!write) {
@@ -184,6 +287,8 @@ void gate_mret(ChgMachine *m) {
 }
 void gate_instruction(ChgMachine *m, uint32_t pc) {
     g.pc = pc;
+    if (g.watchdog_enabled && m->cycles>=g.watchdog_deadline)
+        longjmp(g.watchdog_escape,1);
     progress_deadlines(m);
     require(!(pc & 1) && (inside(pc,2,P_ENTRY,P_ENTRY+4) || inside(pc,2,P_TEXT,P_TEXT_END)),
             "execution-outside-code",pc);
@@ -198,11 +303,36 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         require(pc == g.return_pc && m->cpu.x[2] == g.return_sp && m->cpu.mstatus==g.saved_mstatus &&
                 !memcmp(m->cpu.x,g.saved_regs,sizeof g.saved_regs),"SysTick-context-return",pc);
         uint32_t timer; memcpy(&timer,m->ram + (P_TIMER - CHG_RAM_BASE),4);
-        require(g.fixture || timer == g.timer_before + 1,"SysTick-timer-update",timer);
+        require(g.fixture || timer == g.timer_before +
+                ((g.fault_active && g.fault_kind==6) ? 0u : 1u),
+                "SysTick-timer-update",timer);
         g.pending_return = false; g.observed_returns++; event(m,"SysTick-return-observed");
         g.last_systick_return = m->cycles;
+        if (g.fault_active && g.fault_kind==1)
+            longjmp(g.watchdog_escape,2); /* Pause before any foreground instruction. */
+    }
+    if (g.fault_active && g.fault_kind==6 && pc==P_SYSTICK_MRET) {
+        memcpy(m->ram+(P_TIMER-CHG_RAM_BASE),&g.timer_before,4);
+        g.fault_ticks_suppressed++;
+        event(m,"injected-missing-SysTick-count");
     }
     if (g.fixture) return;
+    if (pc==P_EARLY_CRT) {
+        require(g.stage==0 && g.watchdog_enabled && g.watchdog_feeds>=1,
+                "CRT-before-IWDG-arm-and-feed",pc);
+        require(m->cycles-g.watchdog_enable_cycle<watchdog_period(4000) &&
+                m->cycles-g.watchdog_enable_cycle<watchdog_period(0xfff),
+                "IWDG-first-feed-too-late",pc);
+        event(m,"CRT-entered-after-IWDG-arm-and-feed");
+    }
+    if (g.fault_active && (g.fault_kind==4 || g.fault_kind==5) &&
+        pc==P_WATCHDOG_FINISH) {
+        uint8_t *progress=m->ram+(P_WATCHDOG_PROGRESS-CHG_RAM_BASE);
+        *progress &= (uint8_t)~(g.fault_kind==4 ? 1u : 2u);
+        g.fault_marks_removed++;
+        event(m,g.fault_kind==4 ? "injected-missing-scan-mark" :
+                                   "injected-missing-transport-mark");
+    }
     require(!g.stage || inside(m->cpu.x[2]-1,1,P_STACK-P_STACK_SIZE,P_STACK),"stack-budget",m->cpu.x[2]);
     if (pc == P_RESET) { require(g.stage == 0,"reset-order",pc); event(m,"reset"); }
     if (pc == P_SYSTEM) {
@@ -213,6 +343,12 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         for (uint32_t a=P_BSS;a<P_BSS_END;a++) require(!m->ram[a-CHG_RAM_BASE],"startup-bss",a);
         require(!memcmp(m->ram+(P_NOINIT-CHG_RAM_BASE),g.noinit,8),"startup-noinit",pc);
         g.stage=1; event(m,"SystemInit-data-bss-gp-sp-noinit-checked");
+        if (g.watchdog_fault_mode && g.fault_kind==7 &&
+            g.fault_injections<g.fault_limit) {
+            g.fault_active=true; g.fault_injections++;
+            event(m,"injected-pre-SystemInit-hang");
+            longjmp(g.watchdog_escape,2); /* No SystemInit instruction executes. */
+        }
     }
     if (pc == P_SYSTEM_RETURN) { require(g.stage==1,"SystemInit-return-order",pc); g.stage=2; event(m,"SystemInit-return"); }
     if (pc == P_MAIN) {
@@ -237,8 +373,8 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
         g.scan_stage=2; g.rows=g.row_mask=0; event(m,"keyboard-task-enter");
     }
     if (pc == P_ROW_READ) {
-        /* Exact BIN: row index a5 (x15), not earlier a2 (x12);
-         * 0x6116 reads GPIO, 0x612e bounds index against six. */
+        /* Exact BIN: row index a5 (x15); 0x614c reads GPIO,
+         * 0x6164 bounds the index against six. */
         require(g.scan_stage==2 && m->cpu.x[15]==g.rows && g.rows<6,"matrix-row-order",pc);
         require((m->gpio[1].outdr&63)==(1u<<g.rows),"matrix-row-drive",pc);
         g.row_mask |= 1u << g.rows; g.rows++;
@@ -253,6 +389,11 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
     if (pc == P_LOOP_BACK) {
         require(g.scan_stage==4,"normal-loop-completion-order",pc); g.scan_stage=0; g.loops++;
         g.last_foreground = m->cycles;
+        if (g.fault_active) g.fault_loops++;
+        if (g.fault_active && g.watchdog_mutant==2) {
+            g.watchdog_feeds++;
+            g.watchdog_deadline=m->cycles+watchdog_period(g.watchdog_rld);
+        }
         if (g.observed_returns>=3 && !g.pending_return) g.foreground_after_irq++;
         event(m,"normal-loop-complete");
     }
@@ -262,6 +403,7 @@ void gate_instruction(ChgMachine *m, uint32_t pc) {
     if (pc == P_RESCUE_BACK) {
         require(g.rescue && g.scan_stage==1,"rescue-loop-completion-order",pc); g.scan_stage=0; g.rescue_loops++;
         g.last_foreground = m->cycles;
+        if (g.fault_active) g.fault_loops++;
         if (g.observed_returns>=3 && !g.pending_return) g.foreground_after_irq++;
         event(m,"rescue-transport-complete");
     }
@@ -277,11 +419,29 @@ void gate_run(ChgMachine *m, uint64_t budget) {
     uint64_t end=m->cycles+budget;
     progress_deadlines(m);
     while (m->cycles<end) {
+        if (g.watchdog_enabled && m->cycles>=g.watchdog_deadline) {
+            gate_watchdog_expire(m);
+            continue;
+        }
+        int escape=setjmp(g.watchdog_escape);
+        if (escape) {
+            if (escape==1) gate_watchdog_expire(m);
+            continue; /* Foreground pause resumes at the next scheduling slice. */
+        }
         require(!m->reset_request,"guest-reset-denied",m->cpu.pc);
         if (m->cycles>=m->next_event) bus_events(m);
+        if (g.fault_active && (g.fault_kind==3 || g.fault_kind==7)) m->pfic.enabled=0;
+        if (g.fault_active && (g.fault_kind==1 || g.fault_kind==3 || g.fault_kind==7) &&
+            !m->cpu.trap_depth && !g.pending_return) m->cpu.wfi=true;
         cpu_take_interrupt(m); chg_schedule(m);
+        if (g.watchdog_enabled && m->cycles>=g.watchdog_deadline) {
+            gate_watchdog_expire(m);
+            continue;
+        }
         m->stop_at = m->next_event < end ? m->next_event : end;
-        if (!g.fixture) {
+        if (g.watchdog_enabled && m->stop_at>g.watchdog_deadline)
+            m->stop_at=g.watchdog_deadline;
+        if (!g.fixture && !g.fault_active) {
             uint64_t oldest = g.last_foreground < g.last_systick_return ?
                               g.last_foreground : g.last_systick_return;
             uint64_t deadline = oldest + GATE_PROGRESS_GAP + 1;
@@ -289,6 +449,8 @@ void gate_run(ChgMachine *m, uint64_t budget) {
         }
         if (m->stop_at<=m->cycles) m->stop_at=m->cycles+1;
         if (m->cpu.wfi) m->cycles=m->stop_at; else cpu_exec(m);
+        if (g.watchdog_enabled && m->cycles>=g.watchdog_deadline)
+            gate_watchdog_expire(m);
         progress_deadlines(m);
     }
 }
