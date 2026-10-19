@@ -320,10 +320,17 @@ static void t_lt_hold(void) {
     settle(12);
     CHECK(hist_has(KC_RIGHT), "held Clicks + (1,2) produced KC_RIGHT");
     CHECK(report_has(KC_RIGHT), "KC_RIGHT still held (got k0=%02x)", cap_report.keys[0]);
-    set_key(1, 2, false);
     set_key(5, 2, false);
     settle(12);
+    CHECK(report_has(KC_RIGHT) && !report_has(KC_D), "cursor layer release preserves active arrow until its key releases");
+    set_key(1, 2, false);
+    settle(12);
     CHECK(report_empty(), "release all -> empty report");
+    set_key(1, 2, true);
+    settle(12);
+    CHECK(report_has(KC_D) && !report_has(KC_RIGHT), "next press returns to base-layer D");
+    set_key(1, 2, false);
+    settle(12);
 }
 
 static void t_osl_sticky_sym(void) {
@@ -346,6 +353,28 @@ static void t_osl_sticky_sym(void) {
     CHECK(!hist_has(KC_Q), "sticky SYM did NOT type through layer 0");
     CHECK(report_empty(), "one-shot auto-released the key (upstream sticky semantics)");
     printf("     observed report: mods=%02x keys=%02x %02x %02x\n", cap_report.mods, cap_report.keys[0], cap_report.keys[1], cap_report.keys[2]);
+    set_key(0, 0, false);
+    settle(12);
+    cap_reset_hist();
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_Q) && !hist_has(KC_1), "one-shot consumed: next press is base Q");
+    set_key(0, 0, false);
+    settle(12);
+
+    set_key(5, 4, true);
+    settle(220);
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_1), "held one-shot key activates symbol layer");
+    set_key(5, 4, false);
+    settle(12);
+    set_key(0, 0, false);
+    settle(12);
+    CHECK(report_empty(), "symbol sequence releases after layer key releases first");
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_Q), "held symbol sequence returns to base Q");
     set_key(0, 0, false);
     settle(12);
 }

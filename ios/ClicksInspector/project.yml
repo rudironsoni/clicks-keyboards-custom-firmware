@@ -4,6 +4,7 @@ configs:
   Release: release
   AuthorizedStockUpdate: release
   StockFirmwareManager: release
+  QMKKeymap: debug
 options:
   minimumXcodeGenVersion: 2.46.0
   deploymentTarget:
@@ -34,6 +35,27 @@ targets:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FIRMWARE_MANAGER"
         StockFirmwareManager:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FIRMWARE_MANAGER"
+        QMKKeymap:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) QMK_RAM_KEYMAP"
+          SWIFT_OBJC_BRIDGING_HEADER: "Tests/QMKBridge.h"
+          "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": ["$(inherited)", "$(DERIVED_FILE_DIR)"]
+          "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) -lQMKBridge"
+    preBuildScripts:
+      - name: Build production QMK simulator bridge
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          if [ "$CONFIGURATION" = QMKKeymap ] && [ "$PLATFORM_NAME" = iphonesimulator ]; then
+            for ARCH in $ARCHS; do
+              bash "$SRCROOT/Tests/build-qmk-bridge.sh" "$DERIVED_FILE_DIR/qmk-$ARCH" "$ARCH"
+            done
+            # Xcode's derived-file path can contain spaces. Use positional arguments.
+            set --
+            for ARCH in $ARCHS; do
+              set -- "$@" "$DERIVED_FILE_DIR/qmk-$ARCH/libQMKBridge.a"
+            done
+            xcrun lipo -create "$@" -output "$DERIVED_FILE_DIR/libQMKBridge.a"
+          fi
     dependencies:
       - sdk: ExternalAccessory.framework
       - sdk: GameController.framework

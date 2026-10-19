@@ -1,4 +1,143 @@
-# CK-5200 QMK software delivery
+# CK-5200 Custom QMK v1: Software-Verified Candidate
+
+## Requested
+
+One integrated firmware and iPhone editor MUST configure four 6x6 layers in
+keyboard RAM, save named phone profiles, detect RAM loss, explicitly reapply a
+profile, and restore the compiled factory layout. Mapping proof MUST include
+production QMK processing and emitted HID reports. Physical flashing remains
+NO-GO and R3 remains UNMET. Normative words use RFC 2119 meanings.
+
+## Done
+
+The candidate starts at `131363e2727edd22f4f8483dfc6481f264c70d1c` and reconciles
+the profile editor from `9917774e2217a9476b12becd12952ac7e1de6295`.
+`git merge-base`, `git range-diff`, and file diffs showed that the runtime
+baseline already contains PR #1's firmware fixes. PR #2's profile controller,
+JSON storage, UI, and Swift/C tests were missing. Its source changes were
+reconciled with the runtime branch's session invalidation and write-disabled
+stock manager. The primary checkout and its private inputs were preserved.
+
+The [behavior contract](qmk-v1-behavior.md) records primary V122 byte evidence,
+all 36 electrical positions, all four numeric layers, intentional QMK changes,
+production paths, expected output, and counterexamples. Physical keycap labels
+are not established. Dependency revisions remain pinned:
+
+| Dependency | Revision |
+| --- | --- |
+| QMK | `3d4da6de29c8635c9cd232ce456d8fec8d31921b` |
+| TinyUSB | `efa3e132235aefa4ef49d31c746c0c5f0c0e0bc9` |
+| CH32X035 SDK | `c6253942b29ff2a3f5e2829182a874afffa45881` |
+| SHA-256 | `565f65009bdd98267361b17d50cddd7c9beb3e6c` |
+| CHGame assurance | `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48` |
+
+The production Swift controller requires CK-5200 hardware 1.2.0, QM 00 01,
+four 6x6 layers, a complete read, and explicit session RAM permission.
+Each write requires readback. Profiles use atomic JSON storage on the phone.
+Reconnect reads actual RAM and compares it with the saved desired profile.
+Reapplication stays explicit. All shipped iOS configurations block A0 through
+A3. RAM editing does not enable keyboard nonvolatile storage or installation.
+
+Two demonstrated defects received test-first corrections:
+
+1. A reset between profile writes erased earlier verified edits but allowed
+   complete success. The regression failed with
+   `reset during apply must not report a complete profile`, exit 133.
+   Application now rereads all 144 positions and compares the complete profile
+   before reporting success.
+2. Editing held Q to A caused its release to leave Q pressed. The regression
+   failed with `editing a held key must not leave its original HID usage pressed`,
+   exit 133. Commands 0x92 and 0x93 now reject mutation with status 0x02 while
+   any debounced matrix key is down. Rejection leaves RAM unchanged. Tests cover
+   held ordinary, modifier, layer-tap, and consumer keys and verify clean release.
+
+The existing Swift/C bridge now injects matrix events through the pinned QMK
+core and captures reports. `QMKProfileTests.swift` checks exact report sequences
+for all 144 factory positions, changes mappings in all four layers, saves a
+profile, simulates app relaunch and keyboard RAM loss, reconnects, explicitly
+reapplies, and checks emitted behavior again. Before factory restore, the test
+changes every position to a value different from its default. After restore,
+all 144 read values and exact HID sequences match their compiled defaults.
+
+The ordinary r0c0 workflow emits these ten-byte reports:
+
+| State | Press | Release |
+| --- | --- | --- |
+| Factory Q | `00 00 14 00 00 00 00 00 00 00` | `00 00 00 00 00 00 00 00 00 00` |
+| Edited A | `00 00 04 00 00 00 00 00 00 00` | `00 00 00 00 00 00 00 00 00 00` |
+| RAM loss | Factory Q | Empty |
+| Explicit reapply | Edited A | Empty |
+| Factory restore | Factory Q | Empty |
+
+Existing production protocol tests exercise the electrical scanner, QMK core,
+HID transport queue, modifier chords, native arrows, consumer ordering,
+backpressure, and interrupted sequences. Added core assertions check layer
+release while an arrow remains held and the return from one-shot and held SYM.
+Swift fault cases cover lost and fragmented replies, partial application,
+reset during application, stale callbacks, incorrect identities, rejected
+readback, ignored reset acknowledgments, and corrupt or incompatible profiles.
+Ambiguous operations revoke permission and require reconnect. They do not retry
+silently or report complete success.
+
+Local commands completed with exit 0:
+
+- `bash keyboards/ck5200/scripts/test.sh`, including existing ASan/UBSan
+  production core, protocol, iAP2, rescue, watchdog, and staging regressions.
+- `bash ios/ClicksInspector/test.sh`, including legacy diagnostics and stock
+  manager checks plus the production Swift/C profile and HID workflow.
+- `bash keyboards/ck5200/scripts/check-build.sh`, two clean builds with matching
+  BIN, ELF, HEX, and normalized map.
+- `python3 keyboards/ck5200/assurance/run.py --image keyboards/ck5200/build/ck5200_qmk.bin --elf keyboards/ck5200/build/ck5200_qmk.elf`.
+  The exact new image passed execution, watchdog controls, 21 USB negative
+  controls, three USB model mutants, and artifact rejection controls.
+- `python3 scripts/check-readiness.py`.
+- `xcodebuild` with configuration `QMKKeymap` and
+  `ClicksInspectorUITests/QMKProfileUITests` on arm64 iPhone 17 Pro simulator
+  `26BA2133-1065-4700-B419-952E908D9EF5`, iOS 27.0. The result has one passed
+  test, zero failures, and zero skips. Editing, reapplied, and restored
+  screenshots were exported and inspected.
+
+The first UI attempt failed because it queried a lazy offscreen button before
+scrolling. Its failed result was retained. The test now reveals the button
+before checking permission. The corrected workflow passed without skipping a
+step or changing product behavior.
+
+The [independent review](reviews/2026-10-19-qmk-v1.md) inspected the source,
+failure evidence, compiled guards, and all 17 relocated assurance checkpoints.
+The previous profile rejected the new BIN before review. Only the reviewed
+hashes and instruction addresses changed in the assurance profile.
+
+| Artifact or resource | Verified value |
+| --- | --- |
+| BIN SHA-256 | `969e6d71a177119e19dd0a93fffee4cfc63f2c1b46c01a9ccf01d56ac353694e` |
+| ELF SHA-256 | `5aee508bdf963971609576ed25b87da6f0b118ba93f4232d5a1a9272dc0db55d` |
+| ELF runtime contract | `55ebb1bd2db791ce7ed86b740750aa5e5f458179daf0a31a9ba41931c11685ea` |
+| Flash | 26,940 of 27,136 bytes, 196 bytes free |
+| Application interval | `0x2000..0x893c`, bounded by `0x8a00` |
+| Static RAM | 4,832 bytes including 144 bytes of initialized data and eight `.noinit` bytes |
+| Stack reservation | 2,048 bytes, unchanged |
+| Allocated RAM | 6,880 of 20,480 bytes, unchanged |
+| Compiled factory array | 288 bytes at `0x84f4`, all 144 values match the iPhone factory array |
+| Guard cost | 80 flash bytes and zero RAM bytes |
+
+BIN, ELF, HEX, map, hashes, logs, source comparisons, red cases, assurance JSON
+and traces, UI result bundle, screenshots, and review are retained in the local
+candidate evidence. Hosted workflows retain firmware and iOS evidence with
+their exact source commit identities. Final run references are reported with
+the delivered commit after those workflows complete.
+
+## Next
+
+Only physical behavior remains outside this software proof. The host bridge
+uses production Swift, the C keymap handler, and QMK processing, with matrix
+hardware and host report capture substituted. Separate protocol tests exercise
+the production transport with TinyUSB callbacks simulated. Strict assurance
+executes the exact RISC-V image against a bounded USB/GPIO/watchdog model.
+None proves physical switch wiring, keycap labels, actual iPhone accessory
+compatibility, electrical timing, or safe installation. R3 remains UNMET and
+physical flashing remains NO-GO. This candidate MUST NOT authorize device work.
+
+## Earlier software-delivery evidence
 
 Host verification date: 2026-10-17. Target: CK-5200 for iPhone 15 Pro Max,
 CH32X035. This is a compiled, reproducible application candidate.

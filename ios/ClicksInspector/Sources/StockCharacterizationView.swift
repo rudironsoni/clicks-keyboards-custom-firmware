@@ -26,7 +26,11 @@ struct StockCharacterizationView: View {
     var body: some View {
         List {
             Section("Stock characterization") {
-                Text(CustomFirmwareController.diagnosticsOnly ? "DIAGNOSTICS ONLY: firmware and settings writes blocked" : "AUTHORIZED STOCK UPDATE CONFIGURATION: not for M1")
+                Text(CustomFirmwareController.keymapBuildEnabled
+                     ? "QMK RAM CONFIGURATION: stock writes and firmware updates blocked"
+                     : CustomFirmwareController.diagnosticsOnly
+                     ? "DIAGNOSTICS ONLY: firmware and settings writes blocked"
+                     : "AUTHORIZED STOCK UPDATE CONFIGURATION: not for M1")
                 Text("Observe the stock CK-5200. This mode sends only the seven demonstrated getters. It cannot update firmware or write settings.")
                 Text("\(recorder.isRecording ? "Recording" : "Stopped"): \(recorder.eventCount)/\(StockEvidenceRecorder.eventLimit) events")
                 if recorder.isRecording {

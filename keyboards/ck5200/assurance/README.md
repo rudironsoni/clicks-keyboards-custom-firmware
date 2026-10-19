@@ -21,13 +21,19 @@ artifact identity and is an assurance entry point.
 
 This profile accepts only the reviewed release:
 
-- BIN: `eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4`, 26860 bytes.
-- ELF contract: `aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7`.
-- Hosted verification is recorded in the [program evidence](../docs/firmware-assurance.md).
-- Local ELF provenance: `c452c84cc9c33a62a13a1b660ab38790bf26c24cd4ffc97f7985bb6fb93a38ba`.
-- Application bytes end at `0x88ec`, leaving 276 bytes before `0x8a00`.
+- BIN: `969e6d71a177119e19dd0a93fffee4cfc63f2c1b46c01a9ccf01d56ac353694e`, 26940 bytes.
+- ELF contract: `55ebb1bd2db791ce7ed86b740750aa5e5f458179daf0a31a9ba41931c11685ea`.
+- Candidate verification is recorded in the [delivery evidence](../docs/qmk-delivery-evidence.md).
+- Local ELF provenance: `5aee508bdf963971609576ed25b87da6f0b118ba93f4232d5a1a9272dc0db55d`.
+- Application bytes end at `0x893c`, leaving 196 bytes before `0x8a00`.
 - CHGame: `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`.
 - OpenWCH register reference: `c6253942b29ff2a3f5e2829182a874afffa45881`.
+
+The v1 candidate rejects keymap writes and factory restore while a matrix key
+is pressed. This prevents a changed mapping from stranding the original key's
+release. Both guards precede mutation in the compiled image. The change adds
+80 flash bytes and no RAM. The [independent review](../docs/reviews/2026-10-19-qmk-v1.md)
+checks all 17 relocated tracepoints against the prior executable.
 
 The existing `tools/validate_image.py` first checks BIN/ELF byte identity and
 layout. Symbols and `.text` bounds come from that ELF. Internal LTO tracepoints
@@ -43,6 +49,10 @@ CPU attributes, segment permissions, and every loadable byte.
 It excludes file offsets, unused file padding, and non-allocated `.comment`
 text and length. These do not affect the reviewed executable.
 The actual raw ELF hash remains in each report for provenance.
+
+## Prior profile history
+
+The addresses and identities below describe earlier profiles.
 
 Hosted run `39050140084` failed the original whole-ELF hash check.
 Diagnostic run `39051670366` retained the exact same hosted ELF for comparison.

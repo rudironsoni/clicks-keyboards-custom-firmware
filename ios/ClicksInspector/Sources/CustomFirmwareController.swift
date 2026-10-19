@@ -10,8 +10,16 @@ final class CustomFirmwareController: ObservableObject {
     // Only macOS host executables compiled for offline tests can exercise them.
     #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
     static let diagnosticsOnly = false
+    static let stockUpdatesEnabled = true
     #else
     static let diagnosticsOnly = true
+    static let stockUpdatesEnabled = false
+    #endif
+
+    #if QMK_RAM_KEYMAP
+    static let keymapBuildEnabled = true
+    #else
+    static let keymapBuildEnabled = false
     #endif
     #if STOCK_FIRMWARE_MANAGER || STOCK_MANAGER_OFFLINE_TESTING
     static let stockManagerEnabled = true
@@ -41,6 +49,7 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Sole controller-to-transport boundary, including the fire-and-forget reboot.
     func dispatch(_ request: [UInt8]) throws {
+        logger.debug("command \(request.count > 1 ? Int(request[1]) : -1, privacy: .public) requested with \(request.count, privacy: .public) bytes")
         try checkBuildPermission(request)
         if request.count > 1, (0xa0...0xa3).contains(request[1]) {
             guard dispatchPermit == request else { throw CustomKeyboardError.diagnosticsOnly }
@@ -51,16 +60,39 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func checkBuildPermission(_ request: [UInt8]) throws {
+        guard request.count >= 2 else { throw CustomKeyboardError.diagnosticsOnly }
         guard !sessionNeedsReconnect, let target = connectedTarget else {
             throw CustomKeyboardError.transportUnavailable
         }
-        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
-            guard !Self.diagnosticsOnly, let transaction,
+        let command = request[1]
+        if (0xa0...0xa3).contains(command) {
+            guard Self.stockUpdatesEnabled, !Self.diagnosticsOnly, let transaction,
                   transaction.target == target, transaction.generation == sessionGeneration,
                   transaction.source == stockMode, transaction.request == request,
                   transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256 else {
                 throw CustomKeyboardError.diagnosticsOnly
             }
+            return
+        }
+        if (0x90...0x93).contains(command) {
+            guard Self.keymapBuildEnabled else { throw CustomKeyboardError.diagnosticsOnly }
+            guard hasQMKIdentity else { throw CustomKeyboardError.notCustomFirmware }
+            let lengths: [UInt8: Int] = [0x90: 2, 0x91: 5, 0x92: 7, 0x93: 2]
+            guard request.count == lengths[command], Int(request[0]) == request.count else {
+                throw CustomKeyboardError.invalidProfile
+            }
+            if command == 0x91 || command == 0x92 {
+                guard request[2] < 4, request[3] < 6, request[4] < 6 else {
+                    throw CustomKeyboardError.invalidProfile
+                }
+            }
+            if command == 0x92 || command == 0x93 {
+                guard ramWritesAllowed, keymapIsVerified else { throw CustomKeyboardError.ramWritesNotAllowed }
+            }
+            return
+        }
+        if Self.keymapBuildEnabled, request == CustomKeyboardCommand.versionRequest,
+           target.model == "CK-5200", target.hardwareRevision == "1.2.0" {
             return
         }
         if Self.stockManagerEnabled {
@@ -141,6 +173,33 @@ final class CustomFirmwareController: ObservableObject {
     @Published private(set) var flashingProgress: Double = 0
     @Published private(set) var selfTestReport: SelfTestReport?
     @Published private(set) var selfTestRunning = false
+    @Published private(set) var profiles: [KeymapProfile] = []
+    @Published private(set) var desiredProfile: KeymapProfile?
+    @Published private(set) var profileMessage = "Profiles are saved on this iPhone. Keyboard changes are RAM-only."
+    @Published private(set) var keymapIsVerified = false
+    @Published private(set) var keymapOperationRunning = false
+    @Published private(set) var verifiedWrites = 0
+    @Published private(set) var plannedWrites = 0
+    @Published var ramWritesAllowed = false
+    private var library = KeymapProfileLibrary()
+    private let profilesURL: URL
+    private var profileStorageAvailable = true
+    private var keymapTask: Task<Void, Never>?
+
+    var hasQMKIdentity: Bool {
+        link != nil && !sessionNeedsReconnect && connectedTarget?.model == "CK-5200"
+            && connectedTarget?.hardwareRevision == "1.2.0"
+            && lastVersionPayload.map(CustomKeyboardIdentity.isCustomFirmware) == true
+    }
+
+    var canEditKeymap: Bool {
+        Self.keymapBuildEnabled && hasQMKIdentity && ramWritesAllowed
+            && keymapIsVerified && !keymapOperationRunning && !selfTestRunning
+    }
+
+    var needsReapply: Bool {
+        keymapIsVerified && desiredProfile.map { $0.keymap != keymap } == true
+    }
 
     private let logger = Logger(subsystem: "com.rudironsoni.clicks-inspector", category: "custom")
     private var link: KeyboardPacketLink?
@@ -164,7 +223,9 @@ final class CustomFirmwareController: ObservableObject {
             if oldValue != connectedTarget {
                 lastVersionPayload = nil
                 stockMode = nil
-                if transaction != nil { detach() }
+                keymapIsVerified = false
+                ramWritesAllowed = false
+                if transaction != nil || keymapOperationRunning { detach() }
             }
         }
     }
@@ -177,11 +238,20 @@ final class CustomFirmwareController: ObservableObject {
     var exchangeTimeoutNanos: UInt64 = 5_000_000_000
     var rebootConfirmTimeoutNanos: UInt64 = 10_000_000_000
 
-    init() {
+    init(profilesURL: URL = KeymapProfileLibrary.fileURL) {
+        self.profilesURL = profilesURL
         do { pendingUpdate = try Self.loadPendingUpdate() }
         catch {
             journalUnreadable = true
             stockObservation = "Stored transaction cannot be read. It is preserved; installation is blocked."
+        }
+        do {
+            library = try KeymapProfileLibrary.load(from: profilesURL)
+            profiles = library.profiles
+            desiredProfile = profiles.first { $0.id == library.desiredID }
+        } catch {
+            profileStorageAvailable = false
+            profileMessage = "Cannot load phone profiles: \(error). The file was preserved."
         }
     }
 
@@ -247,6 +317,7 @@ final class CustomFirmwareController: ObservableObject {
         sessionNeedsReconnect = false
         self.link = link
         let generation = sessionGeneration
+        logger.debug("session attached at generation \(generation, privacy: .public)")
         link.onFragment = { [weak self] fragment in
             guard let self, generation == self.sessionGeneration else { return }
             self.receive(fragment)
@@ -254,11 +325,15 @@ final class CustomFirmwareController: ObservableObject {
         link.onClosed = { [weak self] reason in
             guard let self, generation == self.sessionGeneration else { return }
             let rebootRequested = self.awaitingReboot
-            let wasBusy = self.flashInFlight
+            let flashWasInFlight = self.flashInFlight
+            let keymapWasInFlight = self.keymapOperationRunning
+            if keymapWasInFlight && self.plannedWrites > 0 {
+                self.profileMessage = "Link closed: \(self.verifiedWrites)/\(self.plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+            }
             self.invalidateSession(with: CustomKeyboardError.transportUnavailable)
             if rebootRequested {
                 self.phase = .updateUnverified("Session closed after reboot request. Reboot, installer execution and installation remain unproven.")
-            } else if wasBusy {
+            } else if flashWasInFlight || keymapWasInFlight {
                 self.phase = .failed("Link closed: \(reason)")
             } else {
                 self.phase = .idle
@@ -268,21 +343,34 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     func detach() {
+        logger.debug("session detach requested at generation \(self.sessionGeneration, privacy: .public)")
+        if keymapOperationRunning && plannedWrites > 0 {
+            profileMessage = "Disconnected: \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+        }
         invalidateSession(with: CustomKeyboardError.transportUnavailable)
         phase = .idle
+        logger.debug("session detached at generation \(self.sessionGeneration, privacy: .public)")
     }
 
-    /// Drop all queued output before an old operation can continue.
+    /// Drop queued output and cancel both operation types before an old callback can continue.
     private func invalidateSession(with error: Error) {
         sessionGeneration += 1
         operationTask?.cancel()
         operationTask = nil
+        keymapTask?.cancel()
+        keymapTask = nil
         transaction = nil
         dispatchPermit = nil
         stockMode = nil
         lastVersionPayload = nil
         flashInFlight = false
         sessionNeedsReconnect = true
+        info = nil
+        keymap = []
+        keymapIsVerified = false
+        ramWritesAllowed = false
+        keymapOperationRunning = false
+        selfTestRunning = false
         link?.onFragment = nil
         link?.onClosed = nil
         link?.close()
@@ -314,32 +402,38 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Full self-test: identify, read info, read and verify every key
     /// against the decoded factory layout, then round-trip a write on the
-    /// spare crossing. Publishes a report.
+    /// Left Shift crossing (2,3), restoring its original value. Publishes a report.
     func runSelfTest() {
-        guard link != nil, !selfTestRunning else { return }
+        guard canEditKeymap else { return }
         selfTestRunning = true
+        keymapOperationRunning = true
+        verifiedWrites = 0
+        plannedWrites = 2
         selfTestReport = nil
-        Task {
-            defer { selfTestRunning = false }
+        let generation = sessionGeneration
+        keymapTask = Task {
+            defer {
+                if generation == sessionGeneration {
+                    selfTestRunning = false
+                    keymapOperationRunning = false
+                }
+            }
             do {
                 var report = SelfTestReport()
 
                 // 1. Identify.
                 let versionPayload = try await perform(.version())
+                lastVersionPayload = versionPayload
                 report.checks.append(KeyboardSelfTest.verifyIdentify(versionPayload))
                 guard CustomKeyboardIdentity.isCustomFirmware(versionPayload) else {
-                    report.checks.append(SelfTestCheck(name: "Aborted", passed: false,
-                                                       detail: "Firmware is not custom; keymap checks require the custom QMK firmware"))
-                    selfTestReport = report
-                    return
+                    throw CustomKeyboardError.notCustomFirmware
                 }
 
                 // 2. Info.
                 let infoPayload = try await perform(.info())
-                guard let parsed = CustomKeyboardIdentity.info(fromInfoPayload: infoPayload) else {
-                    report.checks.append(SelfTestCheck(name: "Info", passed: false, detail: "Unparseable info reply"))
-                    selfTestReport = report
-                    return
+                guard let parsed = CustomKeyboardIdentity.info(fromInfoPayload: infoPayload),
+                      parsed == KeyboardSelfTest.expectedInfo, infoPayload[3] == 0 else {
+                    throw CustomKeyboardError.invalidProfile
                 }
                 report.checks.append(KeyboardSelfTest.verifyInfo(parsed))
                 info = parsed
@@ -361,14 +455,12 @@ final class CustomFirmwareController: ObservableObject {
                 let keymapReport = KeyboardSelfTest.verifyKeymap(keymap)
                 report.checks.append(contentsOf: keymapReport.checks)
 
-                // 4. Round-trip on the spare crossing (2,3), layer 0.
+                // 4. Temporarily remap Left Shift at (2,3), then restore its read value.
                 let original = keymap[0][2][3]
-                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: 0x0014))
-                let readBackPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
-                let readBack = readBackPayload.count == 2 ? UInt16(readBackPayload[0]) << 8 | UInt16(readBackPayload[1]) : 0
-                _ = try await perform(.setKey(layer: 0, row: 2, column: 3, keycode: original))
-                let restoredPayload = try await perform(.getKey(layer: 0, row: 2, column: 3))
-                let restored = restoredPayload.count == 2 ? UInt16(restoredPayload[0]) << 8 | UInt16(restoredPayload[1]) : 0
+                try await writeAndVerify(layer: 0, row: 2, column: 3, keycode: 0x0014)
+                let readBack = keymap[0][2][3]
+                try await writeAndVerify(layer: 0, row: 2, column: 3, keycode: original)
+                let restored = keymap[0][2][3]
                 report.checks.append(KeyboardSelfTest.verifyRoundTrip(
                     written: 0x0014, readBack: readBack, restored: restored, original: original))
                 keymap[0][2][3] = restored
@@ -376,6 +468,11 @@ final class CustomFirmwareController: ObservableObject {
                 selfTestReport = report
                 logger.info("Self-test: \(report.passCount)/\(report.totalCount) checks passed")
             } catch {
+                guard generation == sessionGeneration else { return }
+                keymapIsVerified = false
+                ramWritesAllowed = false
+                sessionNeedsReconnect = true
+                profileMessage = "Self-test stopped. A RAM write may have reached the keyboard. Reconnect to read its layout. \(error)"
                 var report = SelfTestReport()
                 report.checks.append(SelfTestCheck(name: "Transport", passed: false,
                                                   detail: "Self-test aborted: \(error)"))
@@ -390,19 +487,26 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     func identify() {
-        guard link != nil, exchange == nil, !flashInFlight, !sessionNeedsReconnect else { return }
+        guard link != nil, exchange == nil, !flashInFlight, !keymapOperationRunning,
+              !selfTestRunning, !sessionNeedsReconnect else { return }
         phase = .identifying
+        keymapIsVerified = false
+        plannedWrites = 0
+        verifiedWrites = 0
         let generation = sessionGeneration
-        operationTask = Task {
+        keymapOperationRunning = true
+        keymapTask = Task {
+            defer { if generation == sessionGeneration { keymapOperationRunning = false } }
             do {
                 try Task.checkCancellation()
                 guard generation == sessionGeneration else { return }
                 let payload = try await perform(.version())
+                try Task.checkCancellation()
                 guard generation == sessionGeneration, !sessionNeedsReconnect else { return }
                 lastVersionPayload = payload
                 stockMode = StockFirmwareMode(payload: payload)
                 let identified: Phase
-                if CustomKeyboardIdentity.isCustomFirmware(payload) {
+                if Self.keymapBuildEnabled && hasQMKIdentity {
                     identified = .customFirmware("Custom QMK firmware detected")
                 } else if payload == CustomKeyboardCommand.stockVersionPayload {
                     identified = .stockFirmware("Stock V122 detected. Physical installation is disabled.")
@@ -411,6 +515,7 @@ final class CustomFirmwareController: ObservableObject {
                 } else {
                     identified = .stockFirmware("Unrecognized firmware identity \(payload.map { String(format: "%02x", $0) }.joined()); flashing is refused")
                 }
+                logger.info("firmware mode identified: \(String(describing: identified), privacy: .public)")
                 if pendingUpdate != nil {
                     /* An unresolved update is never silently resolved by a
                      * reconnect (review 2026-10-12). */
@@ -421,16 +526,28 @@ final class CustomFirmwareController: ObservableObject {
                 } else {
                     phase = identified
                 }
+                if case .customFirmware = identified {
+                    try await loadKeymap()
+                }
             } catch {
                 guard generation == sessionGeneration else { return }
-                fail("Identify failed; \(error)")
+                keymapIsVerified = false
+                ramWritesAllowed = false
+                profileMessage = "Custom firmware identity or keymap read failed. No mapping is verified. \(error)"
+                if let pendingUpdate {
+                    stockObservation = "A new identity or keymap read failed. Installation remains unproven."
+                    phase = .updateUnverified("Previous update retained: \(pendingUpdate.outcome.rawValue). \(stockObservation)")
+                } else {
+                    fail("Identify failed; \(error)")
+                }
             }
         }
     }
 
     private func loadKeymap() async throws {
         let payload = try await perform(.info())
-        guard let parsed = CustomKeyboardIdentity.info(fromInfoPayload: payload) else {
+        guard let parsed = CustomKeyboardIdentity.info(fromInfoPayload: payload),
+              parsed == KeyboardInfo(layers: 4, rows: 6, columns: 6), payload[3] == 0 else {
             throw CustomKeyboardError.rejected(status: 0xff)
         }
         info = parsed
@@ -439,11 +556,14 @@ final class CustomFirmwareController: ObservableObject {
         for layer in 0..<parsed.layers {
             try await readKeymap(layer: UInt8(layer))
         }
-        phase = .customFirmware("Custom firmware ready; \(parsed.layers) layers, \(parsed.rows)x\(parsed.columns)")
+        keymapIsVerified = true
+        if pendingUpdate == nil {
+            phase = .customFirmware("Custom firmware ready; \(parsed.layers) layers, \(parsed.rows)x\(parsed.columns)")
+        }
     }
 
     func selectLayer(_ layer: Int) {
-        guard info != nil, layer < layers else { return }
+        guard info != nil, layer >= 0, layer < layers else { return }
         selectedLayer = layer
     }
 
@@ -460,35 +580,136 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Custom X035 keymap edits are runtime-only and lost on power loss.
     func setKey(layer: Int, row: Int, column: Int, keycode: UInt16) {
-        guard let info, layer < info.layers, row < info.rows, column < info.columns else { return }
-        Task {
+        logger.debug("key edit requested at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public), keycode \(String(format: "%04x", keycode), privacy: .public)")
+        guard canEditKeymap, (0..<layers).contains(layer), (0..<rows).contains(row),
+              (0..<columns).contains(column) else { return }
+        startKeymapOperation(total: 1) {
+            try await self.writeAndVerify(layer: layer, row: row, column: column, keycode: keycode)
+            self.profileMessage = "Key verified in keyboard RAM. Save a phone profile to keep it."
+        }
+    }
+
+    private func writeAndVerify(layer: Int, row: Int, column: Int, keycode: UInt16) async throws {
+        do {
+            _ = try await perform(.setKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column), keycode: keycode))
+            let payload = try await perform(.getKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column)))
+            guard payload == [UInt8(keycode >> 8), UInt8(keycode & 0xff)] else {
+                throw CustomKeyboardError.readbackMismatch
+            }
+            keymap[layer][row][column] = keycode
+            verifiedWrites += 1
+            logger.debug("key write/readback verified at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public)")
+        } catch {
+            logger.error("key write/readback failed at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public)")
+            throw error
+        }
+    }
+
+    private func startKeymapOperation(total: Int, operation: @escaping @MainActor () async throws -> Void) {
+        guard canEditKeymap else { return }
+        logger.debug("keymap operation started with \(total, privacy: .public) planned writes")
+        keymapOperationRunning = true
+        verifiedWrites = 0
+        plannedWrites = total
+        phase = .busy("Updating keyboard RAM")
+        let generation = sessionGeneration
+        keymapTask = Task {
+            defer { if generation == sessionGeneration { keymapOperationRunning = false } }
             do {
-                _ = try await perform(.setKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column), keycode: keycode))
-                keymap[layer][row][column] = keycode
+                try await operation()
+                try Task.checkCancellation()
+                phase = .customFirmware("Keyboard RAM readback verified")
             } catch {
-                fail("Set key failed; \(error)")
+                guard generation == sessionGeneration else { return }
+                logger.error("keymap operation stopped after \(self.verifiedWrites, privacy: .public) of \(self.plannedWrites, privacy: .public) writes")
+                keymapIsVerified = false
+                sessionNeedsReconnect = true
+                ramWritesAllowed = false
+                lastVersionPayload = nil
+                profileMessage = "Stopped: \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout. \(error)"
+                fail(profileMessage)
             }
         }
     }
 
     func resetKeymap() {
-        Task {
-            do {
-                _ = try await perform(.resetKeymap())
-                for layer in 0..<layers {
-                    try await readKeymap(layer: UInt8(layer))
-                }
-                phase = .customFirmware("Keymap reset to the factory layout")
-            } catch {
-                fail("Keymap reset failed; \(error)")
+        logger.info("factory keymap restore requested")
+        startKeymapOperation(total: 1) {
+            _ = try await self.perform(.resetKeymap())
+            for layer in 0..<self.layers {
+                try await self.readKeymap(layer: UInt8(layer))
             }
+            guard self.keymap == FactoryLayout.asRowMajor else { throw CustomKeyboardError.readbackMismatch }
+            self.verifiedWrites = 1
+            self.profileMessage = "Factory layout restored and all 144 keys verified. Phone profiles are kept."
+            self.logger.info("factory keymap restore verified across 144 keys")
+        }
+    }
+
+    func saveProfile(name: String) {
+        logger.debug("profile save requested")
+        guard keymapIsVerified, !keymapOperationRunning, profileStorageAvailable else { return }
+        do {
+            let profile = try KeymapProfile(name: name, keymap: keymap)
+            var next = library
+            next.profiles.append(profile)
+            next.desiredID = profile.id
+            try next.save(to: profilesURL)
+            library = next
+            profiles = next.profiles
+            desiredProfile = profile
+            profileMessage = "Saved \(profile.name) on this iPhone (four 6x6 layers)."
+            logger.info("profile saved; total profiles \(self.profiles.count, privacy: .public), key count 144")
+        } catch {
+            logger.error("profile save failed")
+            profileMessage = "Profile was not saved: \(error)"
+        }
+    }
+
+    func selectProfile(_ id: UUID) {
+        logger.debug("profile selection requested")
+        guard !keymapOperationRunning, profileStorageAvailable,
+              let profile = profiles.first(where: { $0.id == id }) else { return }
+        do {
+            var next = library
+            next.desiredID = id
+            try next.save(to: profilesURL)
+            library = next
+            desiredProfile = profile
+            profileMessage = "Selected \(profile.name). Apply is always manual."
+            logger.info("profile selected; total profiles \(self.profiles.count, privacy: .public)")
+        } catch {
+            logger.error("profile selection persistence failed")
+            profileMessage = "Profile selection was not saved: \(error)"
+        }
+    }
+
+    func applyDesiredProfile() {
+        guard canEditKeymap, let profile = desiredProfile else { return }
+        do { try profile.validate() } catch { profileMessage = "Invalid profile: \(error)"; return }
+        let changes = (0..<4).flatMap { layer in
+            (0..<6).flatMap { row in (0..<6).compactMap { column -> (Int, Int, Int)? in
+                keymap[layer][row][column] == profile.keymap[layer][row][column] ? nil : (layer, row, column)
+            } }
+        }
+        logger.info("profile apply requested with \(changes.count, privacy: .public) changed keys")
+        startKeymapOperation(total: changes.count) {
+            for (layer, row, column) in changes {
+                try await self.writeAndVerify(layer: layer, row: row, column: column, keycode: profile.keymap[layer][row][column])
+            }
+            for layer in 0..<self.layers {
+                try await self.readKeymap(layer: UInt8(layer))
+            }
+            guard self.keymap == profile.keymap else { throw CustomKeyboardError.readbackMismatch }
+            self.profileMessage = "Applied \(profile.name): \(changes.count) writes and all 144 keys verified in RAM."
+            self.logger.info("profile apply verified after full 144-key readback")
         }
     }
 
     /// Host-only stock transaction. Every iOS build refuses physical writes.
     /// Exact CK-5200 hardware, recognized stock/QM/RS identity and V122 hash required.
     func flash(image: [UInt8], rebootToInstall: Bool) {
-        guard !Self.diagnosticsOnly else {
+        guard Self.stockUpdatesEnabled else {
             fail(CustomKeyboardError.diagnosticsOnly.description)
             return
         }
@@ -667,11 +888,13 @@ final class CustomFirmwareController: ObservableObject {
     // MARK: Exchange plumbing
 
     private func perform(_ exchange: CustomKeyboardExchange) async throws -> [UInt8] {
+        try Task.checkCancellation()
         try checkBuildPermission(exchange.request)
         guard link != nil else { throw CustomKeyboardError.transportUnavailable }
         guard self.exchange == nil, continuation == nil else { throw CustomKeyboardError.transportUnavailable }
         let request = exchange.request
-        return try await withCheckedThrowingContinuation { continuation in
+        let generation = sessionGeneration
+        let payload: [UInt8] = try await withCheckedThrowingContinuation { continuation in
             self.exchange = exchange
             self.continuation = continuation
             timeoutTask?.cancel()
@@ -684,12 +907,18 @@ final class CustomFirmwareController: ObservableObject {
             do { try dispatch(request) }
             catch { resumePending(with: error) }
         }
+        guard generation == sessionGeneration else { throw CustomKeyboardError.transportUnavailable }
+        try Task.checkCancellation()
+        return payload
     }
 
     /// A lost reply must fail the exchange cleanly instead of hanging the
     /// UI in .busy forever (review 2026-10-11, F-7).
     private func exchangeTimedOut() {
         guard continuation != nil else { return }
+        if keymapOperationRunning && plannedWrites > 0 {
+            profileMessage = "Timed out after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+        }
         invalidateSession(with: CustomKeyboardError.timedOut)
         fail(pendingUpdate == nil
              ? CustomKeyboardError.timedOut.description
@@ -710,6 +939,9 @@ final class CustomFirmwareController: ObservableObject {
                 exchange = current
             }
         } catch {
+            if keymapOperationRunning && plannedWrites > 0 {
+                profileMessage = "Invalid response after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+            }
             invalidateSession(with: error)
             fail("Invalid response; \(error)")
         }

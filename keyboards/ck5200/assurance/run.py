@@ -19,18 +19,18 @@ BUILD = ROOT / "build/assurance"
 UPSTREAM = ROOT / "external/chgame_emulator"
 PIN = "bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48"
 WCH_PIN = "c6253942b29ff2a3f5e2829182a874afffa45881"
-BIN_HASH = "eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4"
-ELF_CONTRACT_HASH = "aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7"
+BIN_HASH = "969e6d71a177119e19dd0a93fffee4cfc63f2c1b46c01a9ccf01d56ac353694e"
+ELF_CONTRACT_HASH = "55ebb1bd2db791ce7ed86b740750aa5e5f458179daf0a31a9ba41931c11685ea"
 # Bind tracepoints to the exact BIN and the reviewed ELF contract.
 # A new binary requires a reviewed profile, never automatic acceptance.
 ANCHORS = {
-    "STARTUP_MRET": 0x7cc8, "SYSTEM_RETURN": 0x7cbc, "CONSUMED": 0x7d1e,
-    "EARLY_ARM": 0x7c24, "EARLY_CRT": 0x7c3e,
-    "TRANSPORT_RETURN": 0x7e28, "LOOP": 0x8010, "ROW_READ": 0x614c,
-    "ROW_BOUND": 0x6164, "SCAN_DONE": 0x6176, "KEYBOARD_RETURN": 0x8068,
-    "KEYBOARD_CONNECTED_RETURN": 0x804c,
-    "LOOP_BACK": 0x80c8, "SYSTICK_MRET": 0x785c, "USBFS_MRET": 0x79ea,
-    "RESCUE_LOOP": 0x7ddc, "RESCUE_BACK": 0x7e12,
+    "STARTUP_MRET": 0x7d16, "SYSTEM_RETURN": 0x7d0a, "CONSUMED": 0x7d6c,
+    "EARLY_ARM": 0x7c72, "EARLY_CRT": 0x7c8c,
+    "TRANSPORT_RETURN": 0x7e76, "LOOP": 0x805e, "ROW_READ": 0x6160,
+    "ROW_BOUND": 0x6178, "SCAN_DONE": 0x618a, "KEYBOARD_RETURN": 0x80b6,
+    "KEYBOARD_CONNECTED_RETURN": 0x809a,
+    "LOOP_BACK": 0x8116, "SYSTICK_MRET": 0x78aa, "USBFS_MRET": 0x7a38,
+    "RESCUE_LOOP": 0x7e2a, "RESCUE_BACK": 0x7e60,
 }
 SYMBOLS = {
     "ENTRY": "_start", "RESET": "handle_reset", "SYSTEM": "SystemInit",

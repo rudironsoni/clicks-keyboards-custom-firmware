@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD="$(mktemp -d "${TMPDIR:-/tmp}/ck5200-ios-tests.XXXXXX")"
 trap 'rm -rf "$BUILD"' EXIT
 cd "$ROOT"
-COMMON=(Sources/KeycodeNames.swift Sources/FactoryLayout.swift Sources/KeyboardSelfTest.swift Sources/CustomKeyboardProtocol.swift Sources/StockReadCommand.swift)
+COMMON=(Sources/KeycodeNames.swift Sources/FactoryLayout.swift Sources/KeyboardSelfTest.swift Sources/CustomKeyboardProtocol.swift Sources/StockReadCommand.swift Sources/KeymapProfile.swift)
 CONTROLLER=(Sources/CustomFirmwareController.swift Sources/StockFirmwareTransaction.swift)
 export STOCK_MANAGER_TEST_STORAGE="$BUILD/StockUpdate.json"
 run() {
@@ -24,7 +24,7 @@ run ck5200_protocol_check Sources/CustomKeyboardProtocol.swift
 run ck5200_layout_check "${COMMON[@]}"
 run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
 echo "RUN DiagnosticsOnlyTests (default build)"
-xcrun swiftc -D DIAGNOSTICS_BOUNDARY_TEST "${COMMON[@]}" "${CONTROLLER[@]}" Tests/DiagnosticsOnlyTests.swift -o "$BUILD/diagnostics"
+xcrun swiftc -D DIAGNOSTICS_BOUNDARY_TEST -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" Tests/DiagnosticsOnlyTests.swift -o "$BUILD/diagnostics"
 "$BUILD/diagnostics" Resources/iKeyboard_CK-5200_V122_120.bin
 echo "RUN ck5200_flash_check"
 xcrun swiftc -D STOCK_MANAGER_OFFLINE_TESTING -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" \
@@ -48,3 +48,9 @@ done
 for FAULT in wrong-model interrupted expired commit-failure lost-a1 lost-a2 lost-a3 partial session-swap; do
     "$BUILD/stock-manager" 2 "$FAULT" Resources/iKeyboard_CK-5200_V122_120.bin
 done
+echo "RUN QMKProfileTests (production C handler and pinned QMK)"
+bash Tests/build-qmk-bridge.sh "$BUILD"
+xcrun swiftc -D QMK_RAM_KEYMAP -module-cache-path "$BUILD/cache" -import-objc-header Tests/QMKBridge.h \
+    "${COMMON[@]}" "${CONTROLLER[@]}" Tests/QMKProfileTests.swift \
+    -L "$BUILD" -lQMKBridge -o "$BUILD/qmk-profiles"
+"$BUILD/qmk-profiles"
