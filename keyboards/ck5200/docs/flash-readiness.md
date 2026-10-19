@@ -41,8 +41,10 @@ The completed runtime and binary assurance does not establish installation
 readiness. The [current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18)
 ranks the missing OEM entry, iPhone transport, and preservation evidence.
 The exact reviewed QMK image places instructions in `[0x68D8,0x6900)`, whose
-original contents remain unknown and protected. Safe installation of that
-image is therefore unverified, even though it fits the application allocation.
+original contents and OEM ownership remain unknown. The earlier protected
+classification was a conservative model policy, not a recovered OEM reservation.
+See the [2026-10-19 correction](installation-feasibility-2026-10-19.md).
+Installer acceptance and recovery still require their own evidence.
 External adapters and replacement-loader installation do not meet the current
 constraints. R3 remains UNMET. Physical flashing remains NO-GO.
 
@@ -56,7 +58,10 @@ The [USB recovery feasibility report](../../../reports/CK5200%20USB%20recovery%2
 The adapter could avoid the direct iPhone raw-USB API limit. It does not resolve keyboard entry or preservation.
 PC17-high power-up entry is documented at chip level. Connector routing, VDD timing, loader identity, and protection remain unverified.
 System FLASH is mutable, not immutable ROM. The inspected client programs from zero, and no safe selective factory erase is established.
-The stock image's final page has 40 unknown bytes that must survive. Full interruption recovery remains unproven.
+The stock image's final page has 40 bytes absent from the V122 file. Their contents are unknown.
+The earlier requirement to preserve them was a conservative model policy, not a demonstrated OEM reservation.
+The [2026-10-19 ownership assessment](installation-feasibility-2026-10-19.md) corrects that distinction using stock startup instructions, official image growth, and the A1 capacity check.
+Full interruption recovery remains unproven.
 
 **R3 remains UNMET. Custom flashing remains NO-GO.** This file remains the sole readiness authority.
 Current work permits research and offline models only. No physical experiment, device command, reboot, probe, opening, ISP, unlock, purchase, or hardware build is authorized.

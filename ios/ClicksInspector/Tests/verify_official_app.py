@@ -34,6 +34,27 @@ def at(address, size):
     assert address - vm + size <= file_size
     return executable[offset:offset + size]
 
+def relative(address):
+    return address + struct.unpack("<i", at(address, 4))[0]
+
+def string_at(address):
+    return at(address, 128).split(b"\0", 1)[0].decode()
+
+descriptor = 0x10068F7B8
+assert string_at(relative(descriptor + 8)) == "Firmware"
+assert struct.unpack("<II", at(descriptor + 20, 8)) == (4, 2)
+fields = relative(descriptor + 16)
+assert struct.unpack("<HI", at(fields + 10, 6)) == (12, 4)
+field_names = [string_at(relative(fields + 16 + index * 12 + 8)) for index in range(4)]
+assert field_names == ["model", "firmwareRevision", "file", "sha256sum"]
+selection_fields = relative(0x10068F100 + 16)
+assert string_at(relative(0x10068F100 + 8)) == "FirmwareListItem"
+assert [string_at(relative(selection_fields + 16 + i * 12 + 8)) for i in range(3)] == ["id", "title", "source"]
+source_fields = relative(0x10068F130 + 16)
+assert string_at(relative(0x10068F130 + 8)) == "FirmwareSource"
+source_cases = [string_at(relative(source_fields + 16 + i * 12 + 8)) for i in range(4)]
+assert source_cases == ["bleLocal", "eafRemote", "bleRemote", "unsupportedRemote"]
+
 # Static Swift byte-array headers, referenced by the four updater wrappers.
 request_constants = []
 for address, value in [(0x10084DFD0, bytes.fromhex("06 a1")),
@@ -55,7 +76,34 @@ for address, word, opcode in [(0x100179DD4, 0x710286FF, 0xA1),
 references = ["https://xinyi1.clicks.tech/firmwares.json", "com.clickscompanion.protocol"]
 for value in references:
     assert value.encode() in executable
+update_calls = []
+for address, target in [(0x10017B098, 0x100179BC4),
+                        (0x10017B0CC, 0x100179BC4),
+                        (0x10017B104, 0x100179BC4),
+                        (0x10017B0DC, 0x100179E54),
+                        (0x10017B0F4, 0x10017A2B4),
+                        (0x10017B17C, 0x10017A2B4),
+                        (0x10017B19C, 0x10017A2B4),
+                        (0x10017B184, 0x10017A544),
+                        (0x10017A8F0, 0x10011158C),
+                        (0x1001115B4, 0x100581C14),
+                        (0x100179D34, 0x10058231C),
+                        (0x100181490, 0x10017ECCC),
+                        (0x10017ECDC, 0x1001CB86C),
+                        (0x1001CBA2C, 0x1005B2B00)]:
+    instruction = struct.unpack("<I", at(address, 4))[0]
+    assert instruction >> 26 == 0b100101
+    displacement = instruction & 0x3FFFFFF
+    if displacement & (1 << 25):
+        displacement -= 1 << 26
+    assert address + displacement * 4 == target
+    update_calls.append({"call": hex(address), "target": hex(target)})
+# After the A0 call the routine constructs success without testing its return.
+assert at(0x10017B188, 12) == bytes.fromhex("28 00 80 52 e8 03 00 f9 ff 23 00 39")
 print(json.dumps({"executable_sha256": hashlib.sha256(executable).hexdigest(),
                   "encryption": encryption, "comparisons": comparisons,
                   "request_constants": request_constants, "references": references,
+                  "update_calls": update_calls, "a0_return_checked_by_caller": False,
+                  "firmware_fields": field_names,
+                  "firmware_source_cases": source_cases,
                   "limit": "Static updater evidence only. See stock-manager-readiness.md for instruction-level comparison and limits. No installer execution or independent recovery is established."}, indent=2))
