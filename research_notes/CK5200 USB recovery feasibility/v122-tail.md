@@ -1,5 +1,15 @@
 # V122 final-page tail: destination contents remain unknown
 
+> **SUPERSEDED 2026-10-20:** the preservation conclusion below is corrected by
+> [memory-ownership-and-oem-transition.md](memory-ownership-and-oem-transition.md).
+> Six official images were disassembled and diffed: every consecutive OEM
+> update requires erasing the predecessor's final page (V121→V122 has 69
+> erase-forcing bytes in `[0x6800,0x6900)`), V122 writes image data through
+> V121's former tail, no stock version reads any address beyond its own image,
+> and device-specific storage (serial, config) lives at `0xF600`/`0xF700`.
+> The tail is unused application-area flash, not data that must remain
+> unchanged. This note is retained as the record of the earlier bounded result.
+
 Checked: 2026-10-17. Scope: existing local artifacts and static analysis only.
 No device access, ISP execution, or firmware command occurred.
 
