@@ -21,12 +21,19 @@ Inputs (all previously archived; hashes re-verified during this pass):
 | `iKeyboard_CK-5200_V117_120.bin` | 18,296 | `0ee35d494a6edf96183a5f4cb41e61230af9b1324da66b737bc5cc7cb5b3a58b` |
 | `iKeyboard_CK-5200_V121_120.bin` | 18,572 | `1c9ae5b2a4a838a5c62db0ce38c6d1d71c91fcc4101f0f8e37b365a746dac4aa` |
 | `iKeyboard_CK-5200_V122_120.bin` | 18,648 | `8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8` |
-| QMK candidate `12cfe69` hosted image | 26,860 | `eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4` |
+| QMK v1 candidate `12cfe69`, CI `ck5200-firmware` artifact of run `39180108400` | 26,940 | `969e6d71a177119e19dd0a93fffee4cfc63f2c1b46c01a9ccf01d56ac353694e` |
 | `.stock/clicks-app-prod-release.apk` | 32,550,542 | `fc60df6c69f0fb142892b9a8b531c60fb439b8d7e37bbde01886eea296499740` |
+| Readable iOS `Clicks` executable (`com.clickscompanion.app_3.0.2_und3fined` IPA, `cryptid 0`) | 9,771,792 | `d56a59180adad89542107924edc1cc046507f6b11730f912f2855a8c408f5c6b` |
 
 The six stock files come from the already-captured OEM firmware distribution set
 (`tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/`); V121/V122
-are byte-identical to the audited `.stock/` copies.
+are byte-identical to the audited `.stock/` copies. The QMK v1 image is the
+`ck5200-firmware` artifact of the passing CI run `39180108400` on the frozen
+`feat/ck5200-qmk-v1` branch at `12cfe69`; its extent is `[0x2000,0x893C)`.
+An earlier draft of this note mistakenly verified a 26,860-byte
+(`eef27f62…`) pre-v1 assurance build from
+`tmp/ck5200-installation-evidence-usf0t3wf/frontier/hosted-assurance/`; every
+QMK number below was recomputed against the 26,940-byte artifact.
 
 Fresh work performed for this note:
 
@@ -41,6 +48,13 @@ Fresh work performed for this note:
    reconstructed the update call path from executable code (not strings).
 6. Re-read CH32X035 RM V1.9 §20 (flash controller) and §7.5.2 (PFIC) to name every
    hardware operation the disassembly performs.
+7. Re-verified the earlier finding that the *other* retained IPA
+   (`com.clickscompanion.app_3.0.2_und3fined.ipa.ipa`) carries an unencrypted
+   (`cryptid 0`) iOS `Clicks` executable, and reconciled this note's iOS claims
+   with the earlier executable-level trace in
+   [recovery-research.md](../../keyboards/ck5200/docs/recovery-research.md).
+8. Re-ran the padding tool and all transition computations against the actual
+   QMK v1 artifact after an earlier draft mistakenly used a pre-v1 build.
 
 ## 1. Corrected memory-ownership assessment
 
@@ -153,13 +167,23 @@ Answers to the six required determinations:
    them afterwards (read-modify-write), exactly what the OEM application's own
    partial-write helper (`0x31B2`: reads 256 bytes, overlays, calls full-page
    writer `0x3174`) does for staging and config.
-6. **Safer image layout:** yes, and it is implemented in
+6. **Safer image layout:** a padding tool is implemented in
    `keyboards/ck5200/tools/pad_staging_image.py` (this branch). Padding the QMK
-   image with `0xFF` to the full app-area end `0x8A00` makes the destination
-   content under *every* possible installer copy model identical, because the
-   staged session then covers whole pages and explicit `0xFF` equals erase
-   residue. It weakens nothing: the app never reads beyond its linked image
-   end (proven in §1.3), and `0xFF` is the erased state.
+   image with `0xFF` to the full app-area end `0x8A00` removes the *copy-model*
+   ambiguity only. Precisely scoped: **if** the boot stage accepts the staged
+   session (length `0x6A00` passes the application's A1 check, and staging fit
+   holds) **and** commits it with the same semantics as the OEM flow, then the
+   destination content no longer depends on whether its copy is length-exact or
+   page-rounded, because the staged session covers whole pages and explicit
+   `0xFF` equals erase residue. Padding does **not** establish that the boot
+   stage accepts a `0x6A00`-length image (its own validation rules are unknown),
+   does not make the padded file byte-identical to the official artifact (its
+   hash differs: the v1 image padded to `0x8A00` hashes
+   `458472f6f65adbe77a395715f6334e5a86efb5c33d852f9e75f508f68725cb19`), and is
+   not an installer compatibility guarantee. It is a host-side staging choice
+   that is valid at every layer we can inspect: the linked firmware image is
+   unchanged, the application never reads beyond its linked image end (proven
+   in §1.3), and `0xFF` is the erased state.
 
 **Corrected requirement.** The old rule ("the 40 bytes must remain unchanged")
 described an impossible invariant: the OEM's own updates erase them. The
@@ -175,10 +199,23 @@ path.
 
 ### 2.1 Host side: OEM Android updater (DEX, jadx 1.5.6)
 
-The iOS `Clicks` binaries (main app and extension) are App Store encrypted
-(`LC_ENCRYPTION_INFO_64`, `cryptid 1`), so the iOS updater flow is not statically
-readable from the IPA. The Android app implements the same update protocol over
-the same device commands; its DEX is fully readable.
+Two retained Clicks 3.0.2 packages exist. The `com.clickscompanion.app_6466761655_3.0.2`
+IPA (and its app extension) is App Store encrypted (`LC_ENCRYPTION_INFO_64`,
+`cryptid 1`) and not statically readable. The `com.clickscompanion.app_3.0.2_und3fined`
+IPA carries an unencrypted (`cryptid 0`) `Clicks` executable
+(SHA-256 `d56a5918…`, re-verified in this pass), which the earlier investigation
+[recovery-research.md](../../keyboards/ck5200/docs/recovery-research.md) already
+traced at instruction level: the manifest URLs `firmwares.json` and
+`firmwares-p.json`, `EAFService.loadFirmwares`/`downloadFirmware`, and the
+`EASession` stream-write path (accessor `0x100178698`, writer `0x1001CB86C`,
+`write:maxLength:` at `0x1001CBA2C`). That trace explicitly left the update-packet
+construction and the CK-5200 model selection unresolved, and this pass did not
+resolve the packet construction in the iOS binary either (no `0xA1`/`0xA2`/
+`0xA3`/`0xA0` immediate materialization was found; the Swift encoder likely
+builds frames through non-greppable paths). The Android app implements the same
+update protocol over the same device commands, and its DEX supplies the missing
+pieces; everything below is therefore reconstructed from executable code, and
+the device-side disassembly independently confirms every frame.
 
 Call path, with decompiled class names:
 
@@ -263,7 +300,7 @@ app contains no other protocol surface.
 
 ## 3. Recovery routes with the corrected evidence
 
-### 3.1 What the update chain now proves about interruption safety
+### 3.1 What the update chain now proves, and what it cannot, about interruption
 
 The staging+marker design is a persistent, application-independent update queue:
 
@@ -273,22 +310,55 @@ The staging+marker design is a persistent, application-independent update queue:
   `0xFF` (invalid marker or corrupted staged image) — the boot stage must ignore
   an invalid marker, and a corrupted staging session can be re-run from the app.
 - A power loss after a valid A3 marker but during the boot stage's destination
-  copy leaves the marker valid and the staged image intact. **[INFERENCE]** The
-  boot stage re-reads the marker on every boot, so the next power-up re-commits.
-  This is not proven: it is the only architecture that makes the OEM design
-  meaningful (the keyboard is USB-powered; unplugging the iPhone mid-update is
-  an ordinary user event a shipping product must survive), and the marker's
-  erased-state default (`0xFFFFFFFF`, an impossible length) is exactly the
-  idempotent retry contract such a design requires. It remains unverified
-  because the boot stage's code is absent.
+  copy leaves the marker valid and the staged image intact **only if** the boot
+  stage consumes the marker in the retry-friendly order.
+
+**[INFERENCE, not established]** The boot stage re-reads the marker on every boot
+and re-commits a staged image after an interrupted copy. Supporting arguments:
+the keyboard is USB-powered, so unplugging the iPhone mid-update is an ordinary
+user event a shipping product must survive; and the marker's erased-state default
+(`0xFFFFFFFF`, an impossible length) is exactly the idempotent retry contract
+such a design requires. **Falsified-by-construction counterexamples that this
+hypothesis cannot exclude**, because the boot stage's code is absent:
+
+1. The boot stage may clear or rewrite the marker *before* copying. Power loss
+   during the copy then leaves no valid marker and a partially written
+   application, with no known re-entry.
+2. The boot stage may validate the staged image against a manifest, checksum,
+   or version window that an unauthorized or padded image fails, and may clear
+   the marker on rejection.
+3. The boot stage may have no retry at all; the staging architecture would then
+   protect only against host-side transfer faults, not commit faults.
+
+**Retraction.** An earlier report of this investigation proposed, as a "safe
+observation", staging the current stock image with A1/A2/A3 and power-cycling
+in place of A0 to observe marker retry. That proposal was wrong and is
+retracted: A3 writes the valid installation marker, so power-cycling arms the
+same boot-stage installation path that A0 would, over the same application
+area. It is a firmware write experiment, not a read-only observation; seeing the
+keyboard boot stock afterwards would prove only that the boot stage commits a
+complete staged session, not that it recovers from an interrupted copy; and
+under the marker-clearing counterexample above it could leave the only keyboard
+with an invalid marker and a partially copied application. Do not execute it.
+
+The equally important failure mode is **not** interruption at all: a QMK image
+that installs completely but cannot start its USB/iAP2 stack. If the boot stage
+consumed the marker on the successful commit, retrying the (possibly still
+staged) QMK image cannot return the keyboard to stock, and no iPhone-reachable
+service is known to exist when the application cannot run. Interrupted-copy
+retry and unbootable-complete-install are therefore both unbounded risks until
+the boot stage's behavior is known.
 
 ### 3.2 Destination outcomes for the two transitions, per installer model
 
-Installing the QMK candidate (`[0x2000,0x88EC)`) over stock V122: 105 pages
-written, **all 105 require erase** (first page has 71 forcing bytes; the stock
-final page `[0x6800,0x6900)` has 149). The 40-byte tail is erased and rewritten
-with QMK image bytes under every copy model. This is the same operation class the
-OEM's own updates perform on that page.
+Installing the QMK v1 candidate (`[0x2000,0x893C)`, 26,940 bytes) over stock
+V122: 106 pages written, **all 106 require erase** (first page has 77 forcing
+bytes; the stock final page `[0x6800,0x6900)` has 251 of 256 bytes differing,
+153 forcing). The 40-byte tail is erased and rewritten with QMK image bytes
+under every copy model. This is the same operation class the OEM's own updates
+perform on that page. The QMK image's own final page `[0x8900,0x8A00)` supplies
+60 bytes and leaves a 196-byte tail, which the padding tool replaces with
+explicit `0xFF`.
 
 Restoring stock V122 over QMK: 73 pages `[0x2000,0x68D8)`. Final-page tail
 outcomes:
@@ -296,7 +366,7 @@ outcomes:
 | Installer copy model | Tail `[0x68D8,0x6900)` after restore |
 | --- | --- |
 | Copies exactly `length` bytes | `0xFF` (erase residue) |
-| Copies whole pages from staging (marker-shifted) | 36×`0xFF` + 4 bytes of stale staging content, which after a padded-QMK session are QMK image bytes at file offsets 18684..18688 (`9306a02a` for this candidate) |
+| Copies whole pages from staging (marker-shifted) | 36×`0xFF` + 4 bytes of stale staging content, which after a padded-QMK session are QMK v1 image bytes at file offsets 18684..18688 (`8700b296` for this artifact) |
 | Read-modify-writes the destination final page | the destination tail preserved (QMK bytes) |
 
 In every row the restored device runs stock from `[0x2000,0x68D8)`, and the tail
@@ -334,18 +404,28 @@ which are now precise: marker validation and retry semantics, copy granularity
 
 The 40-byte tail, previously the largest concrete unknown, is now classified
 with OEM evidence: it is unused application-area flash whose content no stock
-code reads and whose page every official update erases. With the page-padded
-QMK layout, the QMK install's destination content is identical under every
-possible installer model. The residual risk of a QMK install is no longer
-"we might destroy unknown required data"; it is:
+code reads and whose page every official update erases. This removes the
+"we might destroy unknown required data" objection. It does **not** demonstrate
+safe installation. What remains unbounded, in the order the install decision
+must weigh them:
 
-1. the boot stage's mid-commit interruption behavior (§3.1, plausible retry,
-   unproven), and
-2. the QMK image's unproven first boot on physical hardware (software-model
-   assurance only; M2 rescue covers a running-but-degraded app, not a dead one).
+1. **Boot-stage commit semantics are unknown in both directions.** Whether it
+   accepts a `0x6A00`-length (padded) session at all, whether it validates the
+   image, whether it clears the marker before or after copying, and whether it
+   retries after an interrupted copy are all open (§3.1, including the
+   counterexamples).
+2. **A completed but unbootable QMK installation has no demonstrated
+   recovery.** If the boot stage consumed the marker on the successful commit,
+   no known iPhone-reachable service exists while the application cannot run,
+   and staging is not itself a restore path unless the application is alive to
+   stage one. The padding tool and the retry hypothesis do not address this.
+3. **The QMK image has never booted on physical hardware.** Software-model
+   assurance covers a running-but-degraded app (M2 rescue); it cannot cover a
+   dead one, and it cannot bound risk 2.
 
-Both are decision risks for the install authorization, not open technical
-questions this evidence can close. [flash-readiness.md](../../keyboards/ck5200/docs/flash-readiness.md)
+These are decision inputs for the install authorization, not open questions
+this or any held artifact can close without the boot stage's implementation.
+[flash-readiness.md](../../keyboards/ck5200/docs/flash-readiness.md)
 remains the sole authorization authority; this note changes evidence, not
 authorization.
 
@@ -357,13 +437,30 @@ authorization.
    writes image data through V121's former tail, no version reads any tail, and
    device data lives at `0xF600`/`0xF700`. The unknown tail is ordinary unused
    application-area flash. The page-padded layout removes the remaining
-   installer-model ambiguity for the QMK side.
+   installer-model ambiguity for the QMK side, conditional on boot-stage
+   acceptance.
 2. **[CORRECTION] to the ADR's architecture table**
    (`0001-independent-iphone-recovery.md`, §2 "Existing installer retries a
-   retained staged stock image"): this is now the primary recovery hypothesis,
-   with the marker's erased-state default and the USB-powered interruption
-   argument as supporting evidence, still unverified.
-3. Confirmed (no correction needed): the earlier reading of the staging
+   retained staged stock image"): this remains a hypothesis, now with the
+   marker's erased-state default and the USB-powered interruption argument as
+   supporting evidence, and now with its falsifying orderings stated
+   explicitly (§3.1). Still unverified.
+3. **[CORRECTION] to this note's own first draft (2026-10-20):**
+   - It verified a 26,860-byte pre-v1 assurance build (`eef27f62…`) instead of
+     the actual QMK v1 artifact (26,940 bytes, `969e6d71…`, extent
+     `[0x2000,0x893C)`); all QMK numbers were recomputed and the branch was
+     rebased onto `12cfe69`.
+   - It stated that destination content is identical "under every possible
+     installer copy model" without the acceptance precondition; the claim is
+     now scoped (§1.4.6).
+   - It proposed a stock-staging power-cycle "observation"; retracted as a
+     firmware write experiment (§3.1).
+   - It treated "iOS executable analysis unavailable" as a property of both
+     retained packages; one package is unencrypted and already traced at
+     instruction level (§2.1).
+   - It framed mid-commit interruption as the only unbounded install risk;
+     a completed-but-unbootable installation is equally unbounded (§3.4).
+4. Confirmed (no correction needed): the earlier reading of the staging
    mechanics, the `0x31B2`/`0x3174` helpers, the `0x6A00` size contract, and the
    `0x8A00`/`0xF500` staging bounds all match this pass's independent
    disassembly.

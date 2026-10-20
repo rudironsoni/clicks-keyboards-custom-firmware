@@ -89,9 +89,10 @@ def test_cli_rejects_oversize_image(tmp_path, capsys):
 
 
 def test_cli_pads_real_candidate_extent(tmp_path, capsys):
-    """A synthetic candidate with the real extent [0x2000,0x88EC): the padded
-    session must end exactly at 0x8A00 and inside the last legal staging page."""
-    image = bytes([0x00]) * (0x88EC - APP_BASE)
+    """The actual QMK v1 artifact (12cfe69, CI run 39180108400): 26,940 bytes,
+    extent [0x2000,0x893C). The padded session must end exactly at 0x8A00 and
+    inside the last legal staging page."""
+    image = bytes([0x00]) * (0x893C - APP_BASE)
     src = tmp_path / "candidate.bin"
     src.write_bytes(image)
     out = tmp_path / "padded.bin"
@@ -106,6 +107,7 @@ def test_cli_pads_real_candidate_extent(tmp_path, capsys):
     padded = out.read_bytes()
     assert len(padded) == MAX_IMAGE_SIZE
     assert APP_BASE + len(padded) == APP_LIMIT
+    assert padded[0x693C:] == b"\xff" * (MAX_IMAGE_SIZE - 0x693C)   # 196-byte pad
     staged_end = m.STAGING_BASE + 4 + len(padded)
     assert (staged_end & ~0xFF) == 0xF400       # last staging page in bounds
     assert staged_end <= m.STAGING_LIMIT + 1
