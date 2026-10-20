@@ -250,7 +250,9 @@ final class CustomFirmwareController: ObservableObject {
             if FileManager.default.fileExists(atPath: url.path) {
                 let handle = try FileHandle(forWritingTo: url)
                 defer { try? handle.close() }
-                _ = try? handle.seekToEnd()
+                // A failed seek must not silently rewind the log over earlier
+                // evidence (review 2026-10-21, P3-1).
+                try handle.seekToEnd()
                 try handle.write(data)
                 try handle.write(Data("\n".utf8))
             } else {
@@ -414,9 +416,13 @@ final class CustomFirmwareController: ObservableObject {
     /// The journal's uncertainty is correct and stays: this NEVER records
     /// that the application was rewritten. It records the observation that
     /// ended the trial (for example the post-reboot identity payload and
-    /// typing behavior), unblocks future transactions, and keeps every
-    /// original field plus the audit log. Use only after the trial's
-    /// evidence bundle has been captured.
+    /// typing behavior), clears the controller gate for a future transaction,
+    /// and logs a `trialConcluded` event whose detail retains the observation.
+    /// The trial UI intentionally keeps its install control off while this
+    /// journal record exists, so one concluded record means one physical
+    /// trial per record. The journal slot is reused only by a future
+    /// transaction; the resolution's evidence persists in the audit log.
+    /// Use only after the trial's evidence bundle has been captured.
     func concludePendingUpdate(observation: String) {
         guard var record = pendingUpdate, !record.isResolved else { return }
         record.resolution = PendingUpdate.Resolution(
@@ -427,7 +433,7 @@ final class CustomFirmwareController: ObservableObject {
             try persist(record)
             logUpdateAudit("trialConcluded",
                            detail: "observation: \(observation); installation remains unproven")
-            phase = .updateUnverified("Trial concluded. Installation remains unproven by construction; the record and audit log are retained.")
+            phase = .updateUnverified("Trial concluded. Installation remains unproven by construction. The install control stays off for this journal record; the resolution is retained in the audit log.")
         } catch {
             journalUnreadable = true
             stockObservation = "The trial record could not be updated. It is preserved; installation remains unproven."
@@ -453,6 +459,14 @@ final class CustomFirmwareController: ObservableObject {
             let rebootRequested = self.awaitingReboot
             let flashWasInFlight = self.flashInFlight
             let keymapWasInFlight = self.keymapOperationRunning
+            if flashWasInFlight {
+                /* The realistic mid-trial interruption must be in the audit
+                 * evidence bundle (review 2026-10-21, P2-2). */
+                self.logUpdateAudit("sessionClosed",
+                                    detail: "reason: \(reason); update was in flight; "
+                                        + "rebootRequested \(rebootRequested); journal "
+                                        + "\(self.pendingUpdate?.outcome.rawValue ?? "none")")
+            }
             if keymapWasInFlight && self.plannedWrites > 0 {
                 self.profileMessage = "Link closed: \(self.verifiedWrites)/\(self.plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
             }
@@ -968,8 +982,13 @@ final class CustomFirmwareController: ObservableObject {
                         record.rebootRequested = true
                         try persist(record)
                     }
-                    logUpdateAudit("rebootDispatched", command: 0xa0,
-                                   request: CustomKeyboardCommand.rebootRequest)
+                    /* Fail-closed audit (review 2026-10-21, P2-1): this event
+                     * guards the direct A0 dispatch branch below, which does
+                     * not pass through perform()'s dispatch audit. */
+                    guard logUpdateAudit("rebootDispatched", command: 0xa0,
+                                         request: CustomKeyboardCommand.rebootRequest) else {
+                        throw CustomKeyboardError.auditUnavailable
+                    }
                     if mode == .stock {
                         // V122 replies 04 02 A0 00. An ACK still proves no copying.
                         let payload = try await perform(.reboot())
@@ -1130,6 +1149,10 @@ final class CustomFirmwareController: ObservableObject {
                 exchange = current
             }
         } catch {
+            /* Byte-persist the rejected fragment (review 2026-10-21, P3-4):
+             * a malformed reply is evidence too, not only an error message. */
+            logUpdateAudit("replyRejected", reply: fragment,
+                           detail: "fragment rejected by the accumulator: \(error)")
             if keymapOperationRunning && plannedWrites > 0 {
                 profileMessage = "Invalid response after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
             }

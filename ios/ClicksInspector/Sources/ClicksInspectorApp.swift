@@ -184,7 +184,7 @@ private struct CustomFirmwareSection: View {
                         custom.concludePendingUpdate(
                             observation: "Post-update observation: reconnect identity \(custom.lastVersionPayload.map { $0.map { String(format: "%02x", $0) }.joined() } ?? "none") at \(Date().formatted()).")
                     }
-                    Text("Concluding closes the trial operationally and unblocks future transactions. It never claims the application was rewritten; the record and audit log are retained.")
+                    Text("Concluding closes the trial operationally and clears the controller gate for a future transaction. It never claims the application was rewritten; the install control stays off for this journal record, and the resolution persists in the audit log.")
                         .font(.caption)
                 }
             }
@@ -215,11 +215,13 @@ private struct CustomFirmwareSection: View {
                     Text("Unknown firmware mode. Installation is refused.")
                         .font(.caption)
                 }
-                Text(custom.pendingUpdate != nil
-                     ? "A previous update record is unresolved; installation stays blocked until it is reconciled."
-                     : (CustomFirmwareController.stockFlashTrial
-                        ? "Only the exact official CK-5200 V122 image can be installed. QMK installation remains disabled in every configuration."
-                        : "Physical installation is disabled in this configuration. Only the dedicated M4 StockFlashTrial configuration can enable it, under the reviewed trial procedure."))
+                Text(custom.pendingUpdate.map { pending in
+                    pending.isResolved
+                     ? "A concluded trial record exists. The install control stays off for it by design (one physical trial per record); the resolution is retained in the audit log."
+                     : "A previous update record is unresolved; installation stays blocked until the trial is concluded after capturing its evidence."
+                } ?? (CustomFirmwareController.stockFlashTrial
+                      ? "Only the exact official CK-5200 V122 image can be installed. QMK installation remains disabled in every configuration."
+                      : "Physical installation is disabled in this configuration. Only the dedicated M4 StockFlashTrial configuration can enable it, under the reviewed trial procedure."))
                     .font(.caption)
                 Text("Transfer, commit acknowledgement, reboot request, stock observed, and installation proven are separate states. This app cannot prove the original installer's copy operation.")
                     .font(.caption)

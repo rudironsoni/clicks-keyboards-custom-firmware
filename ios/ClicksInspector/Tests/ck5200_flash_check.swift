@@ -750,7 +750,7 @@ struct FlashCheck {
         }
 
 #if STOCK_FLASH_TRIAL
-        /* S16: staging-only abort (review 2026-10-20). While the controller
+        /* S17: staging-only abort (review 2026-10-20). While the controller
          * is provably stalled mid-A2, aborting must stop the transfer
          * immediately (no further A2, no A3) and leave no journal record. */
         do {
@@ -782,7 +782,7 @@ struct FlashCheck {
             expect(!controller.stagingAbortAvailable, "abort is withdrawn once the session has ended")
         }
 
-        /* S17: audit fail-closed (review 2026-10-20). If the audit log cannot
+        /* S18: audit fail-closed (review 2026-10-20). If the audit log cannot
          * be persisted, no update frame may be dispatched. The log written so
          * far is preserved across the check. */
         do {
@@ -841,7 +841,8 @@ struct FlashCheck {
                 expected += [("commitUnknownRecorded", nil),
                              ("dispatch", 0xa3), ("dispatchAccepted", 0xa3), ("reply", 0xa3),
                              ("commitAcknowledged", 0xa3), ("rebootDispatched", 0xa0),
-                             ("dispatch", 0xa0), ("dispatchAccepted", 0xa0), ("reply", 0xa0)]
+                             ("dispatch", 0xa0), ("sessionClosed", nil),
+                             ("dispatchAccepted", 0xa0), ("reply", 0xa0)]
                 expect(events.count >= expected.count,
                        "the first transaction is fully logged (\(events.count) events, expected at least \(expected.count))")
                 var prefixOK = events.count >= expected.count
@@ -880,6 +881,10 @@ struct FlashCheck {
                        "the concluded trial is logged")
                 expect(events.contains { $0.event == "abortRequested" },
                        "the staging abort is logged")
+                expect(events.contains { $0.event == "sessionClosed" },
+                       "link closure during an update is logged with its cause (review 2026-10-21, P2-2)")
+                expect(events.contains { $0.event == "replyRejected" },
+                       "rejected reply fragments are persisted byte-for-byte (review 2026-10-21, P3-4)")
                 if let a1reply = events.first(where: { $0.event == "reply" && $0.command == 0xa1
                     && !($0.replyHex ?? "").isEmpty }) {
                     expect(a1reply.replyHex == "00006a00",

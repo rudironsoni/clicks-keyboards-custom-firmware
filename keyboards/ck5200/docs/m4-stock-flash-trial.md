@@ -39,7 +39,7 @@ All findings from the 2026-10-20 review were corrected before this record:
    keeps the original outcome, never claims the application was rewritten,
    unblocks the next transaction, and is logged. `markPendingUpdateVerified()`
    still refuses; the UI offers "Conclude trial (evidence captured)".
-   Host suite: **246 checks pass, zero failures**, including the full flash
+   Host suite: **248 checks pass, zero failures**, including the full flash
    path compiled under the trial flag.
 6. **V121 downgrade: NOT APPROVED** per Rudi's 2026-10-20 direction. It stays
    a documented option only; implementing it would be a separate decision and
@@ -61,7 +61,7 @@ All findings from the 2026-10-20 review were corrected before this record:
 | Capability | State |
 | --- | --- |
 | Gated trial configuration (`StockFlashTrial`) | Implemented; builds for iOS simulator and generic iPhone; V122-only, identity-checked, QMK writes still impossible |
-| Transaction flow (A1/A2/A3/A0) | Host integration suite passes byte-for-byte under the trial flag: **246 checks, zero failures** |
+| Transaction flow (A1/A2/A3/A0) | Host integration suite passes byte-for-byte under the trial flag: **248 checks, zero failures** |
 | Audit logging | Every exchange and lifecycle event persisted byte-for-byte (`StockUpdateAudit.jsonl`), fail-closed before dispatch, completeness-verified |
 | Staging-only abort | Implemented, regression-tested mid-stall; refused once A3 is dispatched |
 | Post-trial reconciliation | `concludePendingUpdate` closes a trial with evidence, never claiming a rewrite; blocks cleared honestly |
@@ -129,7 +129,7 @@ official V122 artifact.
 
 ## Trial procedure (for review before approval)
 
-1. Run the host suite: `bash ios/ClicksInspector/test.sh` (219 checks).
+1. Run the host suite: `bash ios/ClicksInspector/test.sh` (248 checks).
 2. Build the trial app: `ClicksInspector` scheme, `StockFlashTrial`
    configuration, signed for Rudi's iPhone. Confirm the red trial banner.
 3. (Mac fallback step, read-only) With the keyboard attached to the Mac,
@@ -139,7 +139,10 @@ official V122 artifact.
 4. Reattach the keyboard to the iPhone; confirm the accessory session and
    stock V122 identity in the app.
 5. Prepare the official image (button 1), then install (button 2) after the
-   risk acknowledgement. Do not interrupt power during the session.
+   risk acknowledgement. Do not interrupt power during the session, and do
+   not background the app: backgrounding closes the accessory session
+   mid-trial (before A3 it only abandons staging; from the A3 commit point
+   the journal record governs the state).
 6. Record: complete `StockUpdateAudit.jsonl` (retrieved from the app
    container), the in-app phase messages, post-reboot reconnect behavior,
    typing test, and the retained `StockUpdate.json` journal state.
@@ -149,6 +152,52 @@ official V122 artifact.
 8. Abort rules: the staging-only abort control is valid before A3 only.
    After A3 the operation is committed-or-unknown and must be left to settle;
    observation only.
+
+## Audit-event guarantees (review 2026-10-21, P3-5)
+
+Fail-closed (a write failure aborts the trial before the frame leaves, or
+fails the session): `dispatch` (before any update frame is sent, including the
+direct A0 branch), `reply` (a reply that cannot be persisted fails the
+session), and `rebootDispatched` (guards the direct A0 dispatch).
+
+Best-effort (a write failure logs to the console and continues; the durable
+safety record is unaffected): the lifecycle events `trialStart`,
+`commitUnknownRecorded`, `commitAcknowledged`, `dispatchAccepted`,
+`dispatchFailed`, `sessionClosed`, `replyRejected`, `updateFailed`,
+`abortRequested`, and `trialConcluded`. The `StockUpdate.json` journal, not
+the audit log, is the durable commit-unknown record: it is written before A3
+and survives independent of the audit log.
+
+## Independent review disposition, 2026-10-21
+
+The scoped independent review of the physical-trial path (commissioned per
+Rudi's 2026-10-20 direction) returned: **no P1 blockers; 2 P2 findings; 9 P3
+notes; core gates confirmed** (no non-trial configuration can send A0-A3, no
+image other than the exact V122 artifact can be staged or committed, abort
+semantics safe and bounded, conclude-trial honest). The reviewer re-ran the
+host suite independently.
+
+Both P2 findings were fixed and regression-tested before this record:
+
+- **P2-1** (the QMK/RS-to-stock A0 branch bypassed the fail-closed audit):
+  the `rebootDispatched` write now guards the direct dispatch with
+  `auditUnavailable`.
+- **P2-2** (link closure, the realistic mid-trial interruption, was never
+  recorded): a `sessionClosed` event is now logged when the link dies with an
+  update in flight, with the reason and journal outcome; the first-transaction
+  audit-order regression covers its position.
+
+P3 notes fixed: `seekToEnd` errors no longer swallowed (P3-1); the
+conclude/unblock/retention texts now state the one-trial-per-record UI
+behavior and the journal-slot reuse honestly (P3-2, P3-3); rejected reply
+fragments are persisted byte-for-byte as `replyRejected` (P3-4); this
+fail-closed/best-effort table documents the audit guarantees (P3-5); the
+stale check count corrected (P3-6); the duplicate scenario labels renumbered
+(P3-7); the backgrounding warning added to step 5 (P3-8); the unused
+`customFirmwareFlashingEnabled` constant removed and its comment corrected to
+describe the structural enforcement (P3-9).
+
+Host suite after the review fixes: **248 checks, zero failures.**
 
 ## Decision requested from Rudi
 

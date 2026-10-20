@@ -90,14 +90,12 @@ struct KeyboardInfo: Equatable {
 /// keyboards/ck5200/tools/preflight_check.sh). Custom QMK flashing is closed
 /// until a separately reviewed CH32X035 image is authorized: the bundled QMK
 /// image targets the correct family now, but it has no independent recovery
-/// evidence and no review authorization, so the controller refuses every
-/// image that is not the authorized stock artifact while
-/// customFirmwareFlashingEnabled is false, independent of the UI.
+/// evidence and no review authorization. Enforcement is structural and
+/// independent of any UI state: `PreparedStockImage` refuses every image whose
+/// hash is not `authorizedStockSHA256`, and the per-frame dispatch permit
+/// re-checks the accepted transaction's image hash.
 enum CustomKeyboardImageAuthorization {
     static let authorizedStockSHA256 = "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
-
-    /// Closed until a separately reviewed CH32X035 image exists.
-    static let customFirmwareFlashingEnabled = false
 }
 
 /// Structural validation of a CK-5200 application image, the same checks

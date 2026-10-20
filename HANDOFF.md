@@ -36,7 +36,7 @@ Further recordings require a specific need in a separately scoped task. Do not r
 **M4 (first physical stock firmware flash) remains the current task.** The
 2026-10-20 review corrections are applied on
 `feat/ck5200-m4-stock-flash-trial`: audit defect fixed with completeness and
-abort regressions, fail-closed audit, conclude-trial reconciliation, 246 host
+abort regressions, fail-closed audit, conclude-trial reconciliation, independent review disposed, 248 host
 checks green. The V121 downgrade is explicitly not approved.
 
 Remaining before an execution decision: Rudi's one GUI signing action for the

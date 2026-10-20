@@ -14,7 +14,7 @@ This file owns the current readiness and authorization status. Other guides must
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
 | M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
-| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED; review corrections applied 2026-10-21 (audit defect fixed, fail-closed audit, completeness and abort regressions, conclude-trial reconciliation; 246 host checks). Signed-device build needs one GUI signing action (keychain ACL); Mac descriptor capture pending keyboard attachment. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). V121 downgrade NOT approved. |
+| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED; review corrections applied 2026-10-21 (audit defect fixed, fail-closed audit, completeness and abort regressions, conclude-trial reconciliation, independent review disposed; 248 host checks). Signed-device build needs one GUI signing action (keychain ACL); Mac descriptor capture pending keyboard attachment. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). V121 downgrade NOT approved. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -62,7 +62,7 @@ on 2026-10-21 on branch `feat/ck5200-m4-stock-flash-trial`:
   asserted.
 - `concludePendingUpdate` closes a finished trial operationally without ever
   claiming the application was rewritten; the record and audit log are kept.
-- Host suite: 246 checks, zero failures, including the full flash path
+- Host suite: 248 checks, zero failures, including the full flash path
   compiled under the trial flag.
 - The V121 downgrade is explicitly NOT approved.
 - The signed-device build is prepared; signing requires one GUI action on
