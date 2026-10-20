@@ -2,7 +2,8 @@
 
 Status: **SOFTWARE READY, TRIAL PREPARED. Physical execution requires Rudi's
 separate explicit approval.** Prepared 2026-10-20, branch
-`feat/ck5200-tail-ownership-evidence`.
+`feat/ck5200-m4-stock-flash-trial`. Corrections pass applied 2026-10-21 after
+Rudi's review; see "Review corrections" below.
 
 This is the milestone the earlier sequence skipped: prove our application can
 reinstall the official stock firmware on the real keyboard before any custom
@@ -10,15 +11,62 @@ QMK installation is considered. The immediate assignment (Rudi, 2026-10-20):
 implement and verify the trial software, prepare the device trial, and perform
 no physical firmware write without separate approval.
 
+## Review corrections, 2026-10-21 (Rudi's M4 review)
+
+All findings from the 2026-10-20 review were corrected before this record:
+
+1. **Audit first-event overwrite (defect):** the initial audit write used two
+   atomic writes, and the second (newline) destroyed the first event. Fixed to
+   a single atomic write of record plus terminator. Regression-tested: a fresh
+   log's first event must be `trialStart`.
+2. **Audit completeness is now tested:** a fresh-log run must contain the
+   COMPLETE first transaction, byte-for-byte and in exact order: `trialStart`,
+   the A1 dispatch/accepted/reply triple, 583 ordered A2 triples with offsets
+   advancing 0, 32, 64, … (final 24-byte chunk included), the commit-unknown
+   point, the A3 triple, commit acknowledgement, reboot dispatch, and the A0
+   triple. Failed exchanges retain their raw outgoing frame
+   (`dispatch`/`dispatchAccepted`/`dispatchFailed` events), and the A0 reply is
+   logged even while the session is torn down.
+3. **Audit is fail-closed:** no update frame may be dispatched unless its
+   audit entry persisted first (`auditUnavailable` aborts the trial). Tested
+   by corrupting the audit path: zero frames reach the device.
+4. **Abort regression:** the staging abort is exercised while the controller
+   is deterministically stalled mid-A2 (no further A2, no A3, no journal
+   record, control withdrawn after), and its refusal after the A3 boundary is
+   asserted against the commit-unknown record.
+5. **Post-trial reconciliation:** `concludePendingUpdate(observation:)`
+   operationally closes a finished trial: it records the observation evidence,
+   keeps the original outcome, never claims the application was rewritten,
+   unblocks the next transaction, and is logged. `markPendingUpdateVerified()`
+   still refuses; the UI offers "Conclude trial (evidence captured)".
+   Host suite: **246 checks pass, zero failures**, including the full flash
+   path compiled under the trial flag.
+6. **V121 downgrade: NOT APPROVED** per Rudi's 2026-10-20 direction. It stays
+   a documented option only; implementing it would be a separate decision and
+   review.
+7. **Signed-device validation:** the StockFlashTrial app builds for the
+   physical iPhone (unsigned, host-verified). CLI signing is blocked by this
+   machine's keychain ACL (`errSecInternalComponent` for non-GUI `codesign`),
+   so the one remaining manual step is a GUI signing action:
+   `ios/ClicksInspector/sign-trial-app.sh` prepares everything up to the
+   keychain approval, and the fallback is Xcode GUI → Product → Run with the
+   StockFlashTrial configuration. Device install, launch, banner, and consent
+   checks then follow this procedure.
+8. **Mac descriptor capture:** ran read-only; the CK-5200 was not attached.
+   Rudi's step: plug the keyboard into the Mac and rerun
+   `keyboards/ck5200/tools/mac_usb_capture.sh` (one command).
+
 ## What exists now
 
 | Capability | State |
 | --- | --- |
-| Gated trial configuration (`StockFlashTrial`) | Implemented; builds for iOS simulator; V122-only, identity-checked, QMK writes still impossible |
-| Transaction flow (A1/A2/A3/A0) | Host integration suite passes byte-for-byte under the trial flag: 219 checks, zero failures |
-| Audit logging | Every update exchange and lifecycle event persisted byte-for-byte (`StockUpdateAudit.jsonl`), validated by host checks |
-| Staging-only abort | Implemented; refused once A3 is dispatched |
-| Mac read-only USB inspection | `tools/mac_usb_capture.sh` ready for Rudi to run with the keyboard attached |
+| Gated trial configuration (`StockFlashTrial`) | Implemented; builds for iOS simulator and generic iPhone; V122-only, identity-checked, QMK writes still impossible |
+| Transaction flow (A1/A2/A3/A0) | Host integration suite passes byte-for-byte under the trial flag: **246 checks, zero failures** |
+| Audit logging | Every exchange and lifecycle event persisted byte-for-byte (`StockUpdateAudit.jsonl`), fail-closed before dispatch, completeness-verified |
+| Staging-only abort | Implemented, regression-tested mid-stall; refused once A3 is dispatched |
+| Post-trial reconciliation | `concludePendingUpdate` closes a trial with evidence, never claiming a rewrite; blocks cleared honestly |
+| Signed-device build | App builds for the physical iPhone; signing needs one GUI action (keychain ACL) via `ios/ClicksInspector/sign-trial-app.sh` or Xcode GUI |
+| Mac read-only USB inspection | `tools/mac_usb_capture.sh` ran read-only; CK-5200 not attached; Rudi's one-command step |
 | Physical execution | NOT PERFORMED. Awaiting approval. |
 
 ## The gate

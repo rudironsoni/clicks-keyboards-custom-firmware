@@ -31,25 +31,30 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
-## Current stopping point, 2026-10-20
+## Current stopping point, 2026-10-21
 
-**M4 (first physical stock firmware flash) is the current task** per Rudi's
-2026-10-20 direction. The stock-to-stock sequence was always the first real
-flashing milestone; the safety gate must no longer be a permanent stopping
-point. The dedicated `StockFlashTrial` configuration, audit logging, and
-staging-only abort are implemented and host-verified; the trial procedure and
-risk record live in
+**M4 (first physical stock firmware flash) remains the current task.** The
+2026-10-20 review corrections are applied on
+`feat/ck5200-m4-stock-flash-trial`: audit defect fixed with completeness and
+abort regressions, fail-closed audit, conclude-trial reconciliation, 246 host
+checks green. The V121 downgrade is explicitly not approved.
+
+Remaining before an execution decision: Rudi's one GUI signing action for the
+signed-device build (keychain ACL), the Mac descriptor capture with the
+keyboard attached (one command), his visual confirmation of the trial banner
+and consent control, and the independent review disposition. Then the V122
+stock-to-stock decision with the residual brick risk stated in
 [keyboards/ck5200/docs/m4-stock-flash-trial.md](keyboards/ck5200/docs/m4-stock-flash-trial.md).
 
-The Mac operating model is now: iPhone primary (stock and QMK installs,
-updates, keymaps, profiles), Mac emergency fallback (inspection first;
-restoration only if later established). `tools/mac_usb_capture.sh` captures
-USB descriptors read-only.
+The operating model stays: iPhone primary (stock and QMK installs, updates,
+keymaps, profiles), Mac emergency fallback (read-only inspection first;
+restoration only if ever established).
 
-**No physical firmware write is authorized yet.** Executing the prepared trial
-requires Rudi's explicit approval. The flash memory-ownership corrections and
-the boot-stage questions (vendor inquiry 0a-0f, UNSG) remain the governing
-evidence.
+**No physical firmware write is authorized.** The flash memory-ownership
+corrections and the boot-stage questions (vendor inquiry 0a-0f, UNSG) remain
+the governing evidence.
+
+## Current stopping point, 2026-10-20
 
 ## Current stopping point, 2026-10-17
 

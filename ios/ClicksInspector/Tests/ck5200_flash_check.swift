@@ -67,6 +67,17 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
     var versionPayload: [UInt8] = [0x01, 0x20, 0x01, 0x22]
     var dropA3ReplyOnce = false
     private var a3Dropped = false
+    /* Deterministic mid-staging stall (review 2026-10-20): after a2Count
+     * exceeds holdA2After, the reply is withheld until releaseA2Hold() so a
+     * test can act while the controller is provably mid-transaction. */
+    var holdA2After: Int?
+    private var heldA2Reply: [UInt8]?
+    func releaseA2Hold() {
+        if let held = heldA2Reply {
+            heldA2Reply = nil
+            reply(held)
+        }
+    }
     /* P0 disconnection-during-A3 (review 2026-10-13): the keyboard commits
      * and the session dies before the acknowledgment is delivered. */
     var dieOnA3Commit = false
@@ -133,6 +144,10 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
             }
             if let die = closeAfterA2Count, a2Count >= die {
                 dieMidFlash()
+                return
+            }
+            if let hold = holdA2After, a2Count > hold {
+                heldA2Reply = [0x08, 0x02, 0xa2, 0x00] + be32bytes(replyOffset)
                 return
             }
             reply([0x08, 0x02, 0xa2, 0x00] + be32bytes(replyOffset))
@@ -274,6 +289,18 @@ struct FlashCheck {
         let customImage = loadFile(args[2])
         defer { CustomFirmwareController.resetPendingUpdateForTesting() }
 
+#if STOCK_FLASH_TRIAL
+        // Fresh-log discipline (review 2026-10-20): the trial binary starts
+        // with an EMPTY audit log so the COMPLETE first transaction can be
+        // asserted exactly, including the defect regression that the first
+        // event survives the initial write.
+        if let storage = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
+            let auditURL = URL(fileURLWithPath: storage).deletingLastPathComponent()
+                .appendingPathComponent("StockUpdateAudit.jsonl")
+            try? FileManager.default.removeItem(at: auditURL)
+        }
+#endif
+
         /* S1: structural validation still accepts both bundled images and
          * rejects garbage; the GATE is separate and checked below. */
         do { try CustomKeyboardImageValidation.validate(image: stockImage); expect(true, "bundled stock image passes structural validation") }
@@ -392,6 +419,23 @@ struct FlashCheck {
             /* Manual acknowledgement cannot erase installation uncertainty. */
             controller.markPendingUpdateVerified()
             expect(controller.pendingUpdate != nil, "manual verification cannot clear the record")
+
+            /* Review 2026-10-20: operational closure. Concluding records the
+             * observation, keeps the original outcome, never claims
+             * installation, and unblocks the next transaction. */
+            controller.concludePendingUpdate(observation: "host-check observation")
+            expect(controller.pendingUpdate?.isResolved == true,
+                   "concluding records a resolution without deleting the record")
+            expect(controller.pendingUpdate?.outcome == .sentRebootPending,
+                   "concluding preserves the original outcome")
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("a concluded trial no longer blocks a new transaction", timeout: 10) {
+                if case .updateUnverified = controller.phase { return relink.a0Seen }
+                return false
+            }
+            expect(relink.a0Seen, "the new transaction runs to its own A0")
+            expect(controller.pendingUpdate?.isResolved != true,
+                   "the new transaction creates its own fresh unresolved record")
         }
 
         /* S5: reentrancy: two rapid submissions must start exactly one
@@ -637,6 +681,14 @@ struct FlashCheck {
                    "the uncertain A3 outcome is recorded after a disconnection")
             expect(controller.pendingUpdate?.outcome == .commitUnknown,
                    "the record says commit-unknown, not sent (got \(String(describing: controller.pendingUpdate?.outcome)))")
+            /* Review 2026-10-20: once the commit-unknown record exists, the
+             * staging abort must be refused; the commit may already have
+             * happened and the record governs that state. */
+            expect(!controller.stagingAbortAvailable,
+                   "abort is refused after the A3 boundary (record exists)")
+            controller.requestStagingAbort()
+            expect(controller.pendingUpdate?.outcome == .commitUnknown,
+                   "a refused abort does not touch the commit-unknown record")
 
             /* Relaunch: a fresh controller must surface the unresolved
              * transaction, and a second flash must be refused. */
@@ -698,8 +750,78 @@ struct FlashCheck {
         }
 
 #if STOCK_FLASH_TRIAL
-        // M4 trial audit trail: every update exchange and lifecycle event
-        // must be persisted for the physical trial's evidence record.
+        /* S16: staging-only abort (review 2026-10-20). While the controller
+         * is provably stalled mid-A2, aborting must stop the transfer
+         * immediately (no further A2, no A3) and leave no journal record. */
+        do {
+            let link = ScriptedDeviceLink(image: stockImage)
+            link.holdA2After = 2
+            let controller = makeController(link: link)
+            controller.exchangeTimeoutNanos = 2_000_000_000
+            await waitUntil("identify reports stock firmware (abort run)", timeout: 5) {
+                if case .stockFirmware = controller.phase { return true }
+                return false
+            }
+            controller.flash(image: stockImage, rebootToInstall: true)
+            await waitUntil("staging stalls mid-transfer", timeout: 10) { link.a2Count >= 3 }
+            expect(controller.stagingAbortAvailable,
+                   "abort is offered while staging is stalled mid-transaction")
+            controller.requestStagingAbort()
+            /* Releasing the held reply lets the cancelled task resume and
+             * unwind at its next checkpoint, proving the abort, not the
+             * timeout, ended the transfer. */
+            link.releaseA2Hold()
+            await waitUntil("an aborted staging transfer fails without a commit", timeout: 10) {
+                if case .failed = controller.phase { return true }
+                return false
+            }
+            expect(link.a3Count == 0, "abort sends no A3 commit (got \(link.a3Count))")
+            expect(link.a2Count == 3,
+                   "no further A2 frames are dispatched after the abort (got \(link.a2Count))")
+            expect(controller.pendingUpdate == nil, "abort leaves no unresolved record")
+            expect(!controller.stagingAbortAvailable, "abort is withdrawn once the session has ended")
+        }
+
+        /* S17: audit fail-closed (review 2026-10-20). If the audit log cannot
+         * be persisted, no update frame may be dispatched. The log written so
+         * far is preserved across the check. */
+        do {
+            if let storage = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
+                let auditURL = URL(fileURLWithPath: storage).deletingLastPathComponent()
+                    .appendingPathComponent("StockUpdateAudit.jsonl")
+                let backupURL = auditURL.appendingPathExtension("s17-backup")
+                try? FileManager.default.removeItem(at: backupURL)
+                var hadLog = false
+                if FileManager.default.fileExists(atPath: auditURL.path) {
+                    try? FileManager.default.moveItem(at: auditURL, to: backupURL)
+                    hadLog = true
+                }
+                defer {
+                    try? FileManager.default.removeItem(at: auditURL)
+                    if hadLog { try? FileManager.default.moveItem(at: backupURL, to: auditURL) }
+                }
+                try? FileManager.default.createDirectory(at: auditURL, withIntermediateDirectories: true)
+                let link = ScriptedDeviceLink(image: stockImage)
+                let controller = makeController(link: link)
+                await waitUntil("identify reports stock firmware (audit-fail run)", timeout: 5) {
+                    if case .stockFirmware = controller.phase { return true }
+                    return false
+                }
+                controller.flash(image: stockImage, rebootToInstall: true)
+                await waitUntil("an unwritable audit log fails the trial", timeout: 10) {
+                    if case .failed = controller.phase { return true }
+                    return false
+                }
+                expect(link.a1Count == 0,
+                       "no update frame is dispatched without a persisted audit entry (A1 count \(link.a1Count))")
+                expect(controller.pendingUpdate == nil, "an audit failure creates no commit record")
+            }
+        }
+
+        /* M4 trial audit trail, strengthened (review 2026-10-20): a fresh
+         * log must retain the COMPLETE first transaction byte-for-byte and
+         * in order, including the defect regression that the very first
+         * event survives the initial write. */
         if let storage = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
             let auditURL = URL(fileURLWithPath: storage).deletingLastPathComponent()
                 .appendingPathComponent("StockUpdateAudit.jsonl")
@@ -707,21 +829,61 @@ struct FlashCheck {
                 let events = text.split(separator: "\n").filter { !$0.isEmpty }
                     .compactMap { try? JSONDecoder().decode(AuditProbe.self, from: Data($0.utf8)) }
                 expect(!events.isEmpty, "trial audit log records update events")
-                expect(events.contains { $0.event == "trialStart" }, "trialStart recorded with image and target identity")
-                expect(events.contains { $0.event == "exchange" && $0.command == 0xa1 }, "A1 exchange frames recorded")
-                expect(events.contains { $0.event == "exchange" && $0.command == 0xa2 }, "A2 exchange frames recorded")
-                expect(events.contains { $0.event == "exchange" && $0.command == 0xa3 }, "A3 exchange frames recorded")
-                expect(events.contains { $0.event == "commitUnknownRecorded" }, "commit-unknown record point logged")
-                expect(events.contains { $0.event == "commitAcknowledged" }, "commit acknowledgement logged")
-                expect(events.contains { $0.event == "rebootDispatched" }, "reboot request logged")
-                expect(events.contains { $0.event == "updateFailed" }, "failed scenarios are logged")
-                if let a2 = events.first(where: { $0.event == "exchange" && $0.command == 0xa2
-                    && !($0.requestHex ?? "").isEmpty }) {
-                    expect(a2.requestHex!.count == 76, "A2 request frames recorded byte-for-byte (38 bytes)")
+                expect(events.first?.event == "trialStart",
+                       "defect regression: the first event of a fresh log is retained")
+                var expected: [(String, Int?)] = [("trialStart", nil),
+                                                 ("dispatch", 0xa1), ("dispatchAccepted", 0xa1), ("reply", 0xa1)]
+                for _ in 0..<583 {
+                    expected.append(("dispatch", 0xa2))
+                    expected.append(("dispatchAccepted", 0xa2))
+                    expected.append(("reply", 0xa2))
                 }
-                if let reply = events.first(where: { $0.event == "exchange" && $0.command == 0xa1
+                expected += [("commitUnknownRecorded", nil),
+                             ("dispatch", 0xa3), ("dispatchAccepted", 0xa3), ("reply", 0xa3),
+                             ("commitAcknowledged", 0xa3), ("rebootDispatched", 0xa0),
+                             ("dispatch", 0xa0), ("dispatchAccepted", 0xa0), ("reply", 0xa0)]
+                expect(events.count >= expected.count,
+                       "the first transaction is fully logged (\(events.count) events, expected at least \(expected.count))")
+                var prefixOK = events.count >= expected.count
+                if prefixOK {
+                    for (index, want) in expected.enumerated() {
+                        if events[index].event != want.0 || events[index].command != want.1 {
+                            prefixOK = false
+                            break
+                        }
+                    }
+                }
+                expect(prefixOK,
+                       "the first transaction appears in exact order: trialStart, A1 pair, 583 ordered A2 pairs, commit point, A3 pair, commit ack, reboot, A0 pair")
+                let a2Dispatches = events.prefix(expected.count).filter {
+                    $0.event == "dispatch" && $0.command == 0xa2
+                }
+                expect(a2Dispatches.count == 583,
+                       "exactly 583 A2 data frames are dispatched in the first transaction (got \(a2Dispatches.count))")
+                let a2Hexes = a2Dispatches.compactMap { $0.requestHex }
+                if a2Hexes.count == 583 {
+                    var offsetOK = true
+                    for (index, hex) in a2Hexes.enumerated() where
+                        UInt32(hex.dropFirst(4).prefix(8), radix: 16) != UInt32(index * 32) {
+                        offsetOK = false
+                        break
+                    }
+                    expect(offsetOK, "A2 offsets advance exactly 0,32,64,... in dispatch order")
+                    expect(a2Hexes.last?.count == (6 + 18648 - 582 * 32) * 2,
+                           "the final A2 frame is the 24-byte tail chunk (got \(a2Hexes.last?.count ?? 0) hex chars)")
+                }
+                expect(events.contains { $0.event == "dispatchAccepted" },
+                       "accepted dispatches are marked as sent")
+                expect(events.contains { $0.event == "updateFailed" },
+                       "failed scenarios are logged")
+                expect(events.contains { $0.event == "trialConcluded" },
+                       "the concluded trial is logged")
+                expect(events.contains { $0.event == "abortRequested" },
+                       "the staging abort is logged")
+                if let a1reply = events.first(where: { $0.event == "reply" && $0.command == 0xa1
                     && !($0.replyHex ?? "").isEmpty }) {
-                    expect(reply.replyHex == "00006a00", "A1 reply recorded byte-for-byte (advertised maximum)")
+                    expect(a1reply.replyHex == "00006a00",
+                           "A1 reply recorded byte-for-byte (advertised maximum)")
                 }
             } else {
                 expect(false, "the trial audit log exists at \(auditURL.path)")

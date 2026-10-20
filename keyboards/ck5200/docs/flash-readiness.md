@@ -14,7 +14,7 @@ This file owns the current readiness and authorization status. Other guides must
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
 | M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
-| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED. Dedicated `StockFlashTrial` configuration implemented, host-verified (219 checks) and simulator-built; audit logging, staging-only abort, and identity gates in place. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). |
+| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED; review corrections applied 2026-10-21 (audit defect fixed, fail-closed audit, completeness and abort regressions, conclude-trial reconciliation; 246 host checks). Signed-device build needs one GUI signing action (keychain ACL); Mac descriptor capture pending keyboard attachment. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). V121 downgrade NOT approved. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -47,32 +47,35 @@ image is therefore unverified, even though it fits the application allocation.
 External adapters and replacement-loader installation do not meet the current
 constraints. R3 remains UNMET. Physical flashing remains NO-GO.
 
-## M4 milestone status, 2026-10-20
+## M4 milestone status, 2026-10-21
 
-Rudi directed the immediate engineering priority on 2026-10-20: M4, first
-physical stock firmware flash, before any further custom-recovery research.
-The sequence is stock flashing first, recovery validation second, QMK
-installation third.
+Rudi's 2026-10-20 review of the M4 delivery accepted the implementation and
+required corrections before authorizing any physical write. All were applied
+on 2026-10-21 on branch `feat/ck5200-m4-stock-flash-trial`:
 
-Implemented on branch `feat/ck5200-tail-ownership-evidence`:
-
-- The dedicated `StockFlashTrial` build configuration is the only iOS
-  configuration that can physically write, and only the official V122
-  artifact on verified CK-5200 hardware 1.2.0 stock identity.
-- The host integration suite passes under the trial flag: 219 checks, zero
-  failures, including byte-for-byte audit-trail validation of every update
-  exchange.
-- Default Debug and Release builds remain diagnostics-only; QMK installation
-  remains impossible in every configuration.
-- The Mac fallback's first step is prepared as a read-only descriptor capture
-  (`tools/mac_usb_capture.sh`); no Mac restoration path is established.
+- The audit first-event overwrite defect is fixed and regression-tested
+  (a fresh log retains its complete first transaction, 583 ordered A2
+  frames included, byte-for-byte).
+- The audit is fail-closed: no update frame may be dispatched unless its
+  audit entry persisted first.
+- The staging abort is exercised mid-stall and its post-A3 refusal is
+  asserted.
+- `concludePendingUpdate` closes a finished trial operationally without ever
+  claiming the application was rewritten; the record and audit log are kept.
+- Host suite: 246 checks, zero failures, including the full flash path
+  compiled under the trial flag.
+- The V121 downgrade is explicitly NOT approved.
+- The signed-device build is prepared; signing requires one GUI action on
+  this machine (keychain ACL blocks non-GUI codesign):
+  `ios/ClicksInspector/sign-trial-app.sh` or Xcode GUI Product → Run.
+- The Mac descriptor capture ran read-only; the CK-5200 was not attached.
+  Rudi's one-command step reruns it.
 
 **No physical firmware write has been performed. Execution of the prepared
 trial requires Rudi's explicit approval recorded in
-[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** That approval decision
-also covers the optional V121 transition for stronger replacement evidence.
-The memory-ownership corrections and boot-stage unknowns from the 2026-10-20
-investigation remain governing evidence for the risk assessment.
+[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** An independent review of
+the physical-trial path was commissioned per his direction; its findings and
+disposition are recorded in the M4 document.
 
 ## R3 investigation status, 2026-10-16
 

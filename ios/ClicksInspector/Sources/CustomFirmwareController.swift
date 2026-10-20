@@ -167,6 +167,16 @@ final class CustomFirmwareController: ObservableObject {
             /// A3 acknowledged. The separate rebootRequested field records A0 intent.
             case sentRebootPending
         }
+        /// Operational closure of a finished trial (review 2026-10-20):
+        /// records the observation evidence that ended the trial WITHOUT
+        /// claiming the application was rewritten. A resolved record no
+        /// longer blocks a new transaction; its contents and the audit log
+        /// are retained. Installation remains unproven by construction.
+        struct Resolution: Codable, Equatable {
+            let date: Date
+            let observation: String
+            let statement: String
+        }
         let imageSHA256: String
         let imageSize: Int
         let date: Date
@@ -174,6 +184,9 @@ final class CustomFirmwareController: ObservableObject {
         var sourceMode: StockFirmwareMode? = nil
         var transferredBytes: Int? = nil
         var rebootRequested: Bool? = nil
+        var resolution: Resolution? = nil
+
+        var isResolved: Bool { resolution != nil }
     }
 
     private static let pendingUpdateKey = "ck5200.pendingUpdate"
@@ -214,14 +227,22 @@ final class CustomFirmwareController: ObservableObject {
             .appendingPathComponent("ClicksInspector/StockUpdateAudit.jsonl")
     }
 
+    /// Returns false when the event could not be persisted. Callers that
+    /// gate a physical frame on audit success must treat false as a hard
+    /// stop (review 2026-10-20: audit write failure must not silently
+    /// continue the trial).
+    @discardableResult
     private func logUpdateAudit(_ event: String, command: Int? = nil,
                                 request: [UInt8]? = nil, reply: [UInt8]? = nil,
-                                detail: String? = nil) {
+                                detail: String? = nil) -> Bool {
         func hex(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
         let record = StockUpdateAuditEvent(
             date: Date(), event: event, command: command,
             requestHex: request.map(hex), replyHex: reply.map(hex), detail: detail)
-        guard let data = try? JSONEncoder().encode(record) else { return }
+        guard let data = try? JSONEncoder().encode(record) else {
+            logger.error("audit log encode failed for \(event, privacy: .public)")
+            return false
+        }
         do {
             let url = Self.updateAuditURL
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
@@ -233,11 +254,15 @@ final class CustomFirmwareController: ObservableObject {
                 try handle.write(data)
                 try handle.write(Data("\n".utf8))
             } else {
-                try data.write(to: url, options: .atomic)
-                try Data("\n".utf8).write(to: url, options: .atomic)
+                // Single atomic write of record AND terminator: two separate
+                // atomic writes overwrite the first event with the newline
+                // (review 2026-10-20 defect).
+                try (data + Data("\n".utf8)).write(to: url, options: .atomic)
             }
+            return true
         } catch {
             logger.error("audit log write failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -381,7 +406,32 @@ final class CustomFirmwareController: ObservableObject {
         guard pendingUpdate != nil else { return }
         // Kept as a fail-closed API for old callers. User acknowledgement and
         // a same-version response cannot prove that the installer copied bytes.
-        phase = .updateUnverified("Installation cannot be marked verified manually. The transaction record is retained.")
+        phase = .updateUnverified("Installation cannot be marked verified manually. The transaction record is retained. Use 'Conclude trial' to close it operationally; installation stays unproven.")
+    }
+
+    /// Operational closure of a finished trial (review 2026-10-20).
+    ///
+    /// The journal's uncertainty is correct and stays: this NEVER records
+    /// that the application was rewritten. It records the observation that
+    /// ended the trial (for example the post-reboot identity payload and
+    /// typing behavior), unblocks future transactions, and keeps every
+    /// original field plus the audit log. Use only after the trial's
+    /// evidence bundle has been captured.
+    func concludePendingUpdate(observation: String) {
+        guard var record = pendingUpdate, !record.isResolved else { return }
+        record.resolution = PendingUpdate.Resolution(
+            date: Date(),
+            observation: observation,
+            statement: "Trial concluded from observed evidence. Application rewrite remains unproven.")
+        do {
+            try persist(record)
+            logUpdateAudit("trialConcluded",
+                           detail: "observation: \(observation); installation remains unproven")
+            phase = .updateUnverified("Trial concluded. Installation remains unproven by construction; the record and audit log are retained.")
+        } catch {
+            journalUnreadable = true
+            stockObservation = "The trial record could not be updated. It is preserved; installation remains unproven."
+        }
     }
 
     var layers: Int { info?.layers ?? 0 }
@@ -594,13 +644,18 @@ final class CustomFirmwareController: ObservableObject {
                     identified = .stockFirmware("Unrecognized firmware identity \(payload.map { String(format: "%02x", $0) }.joined()); flashing is refused")
                 }
                 logger.info("firmware mode identified: \(String(describing: identified), privacy: .public)")
-                if pendingUpdate != nil {
+                if let pending = pendingUpdate {
                     /* An unresolved update is never silently resolved by a
-                     * reconnect (review 2026-10-12). */
-                    stockObservation = stockMode == .stock
-                        ? "Stock V122 responds after reconnect. This does not prove installer execution or application replacement."
-                        : "Expected stock V122 is not observed. Installation remains unproven."
-                    phase = .updateUnverified("Previous update retained: \(pendingUpdate!.outcome.rawValue). \(stockObservation)")
+                     * reconnect (review 2026-10-12). A concluded trial shows
+                     * its resolution instead. */
+                    if pending.isResolved {
+                        stockObservation = "Concluded trial: \(pending.resolution?.observation ?? ""). Installation remains unproven by construction."
+                    } else if stockMode == .stock {
+                        stockObservation = "Stock V122 responds after reconnect. This does not prove installer execution or application replacement. Conclude the trial after capturing the evidence bundle."
+                    } else {
+                        stockObservation = "Expected stock V122 is not observed. Installation remains unproven."
+                    }
+                    phase = .updateUnverified("Previous update retained: \(pending.outcome.rawValue). \(stockObservation)")
                 } else {
                     phase = identified
                 }
@@ -799,8 +854,8 @@ final class CustomFirmwareController: ObservableObject {
             fail("Stored transaction is unreadable; installation is blocked.")
             return
         }
-        if pendingUpdate != nil {
-            phase = .updateUnverified("A previous update (sha256 \(pendingUpdate!.imageSHA256.prefix(12))…) is unresolved. A version response cannot clear it; further installation is blocked.")
+        if let pending = pendingUpdate, !pending.isResolved {
+            phase = .updateUnverified("A previous update (sha256 \(pending.imageSHA256.prefix(12))…) is unresolved. A version response cannot clear it; conclude the trial after capturing its evidence.")
             return
         }
         /* Synchronous single-operation guard, before any Task is created:
@@ -1000,6 +1055,14 @@ final class CustomFirmwareController: ObservableObject {
         guard self.exchange == nil, continuation == nil else { throw CustomKeyboardError.transportUnavailable }
         let request = exchange.request
         let generation = sessionGeneration
+        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+            // Fail-closed audit (review 2026-10-20): no update frame may
+            // leave this device unless its audit entry persisted first. If
+            // the subsequent dispatch refuses, a corrective event is logged.
+            guard logUpdateAudit("dispatch", command: Int(request[1]), request: request) else {
+                throw CustomKeyboardError.auditUnavailable
+            }
+        }
         let payload: [UInt8] = try await withCheckedThrowingContinuation { continuation in
             self.exchange = exchange
             self.continuation = continuation
@@ -1010,14 +1073,31 @@ final class CustomFirmwareController: ObservableObject {
                 self?.exchangeTimedOut()
             }
             dispatchPermit = request
-            do { try dispatch(request) }
-            catch { resumePending(with: error) }
+            do {
+                try dispatch(request)
+                if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+                    logUpdateAudit("dispatchAccepted", command: Int(request[1]),
+                                   detail: "frame sent to the transport")
+                }
+            } catch {
+                if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+                    logUpdateAudit("dispatchFailed", command: Int(request[1]),
+                                   detail: "frame was NOT sent: \(error)")
+                }
+                resumePending(with: error)
+            }
+        }
+        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+            // Evidence completeness (review 2026-10-20): the device's reply is
+            // logged even when the session is being torn down (A0 closes the
+            // session by design). The audit records the observation; the
+            // generation guard below still discards stale results.
+            guard logUpdateAudit("reply", command: Int(request[1]), reply: payload) else {
+                throw CustomKeyboardError.auditUnavailable
+            }
         }
         guard generation == sessionGeneration else { throw CustomKeyboardError.transportUnavailable }
         try Task.checkCancellation()
-        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
-            logUpdateAudit("exchange", command: Int(request[1]), request: request, reply: payload)
-        }
         return payload
     }
 

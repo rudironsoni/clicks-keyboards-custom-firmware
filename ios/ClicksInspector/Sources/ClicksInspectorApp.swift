@@ -179,6 +179,14 @@ private struct CustomFirmwareSection: View {
                 Text(custom.stockObservation)
                 Text("A version reply or typing test cannot prove application replacement. The record cannot be cleared by marking it verified.")
                     .font(.caption)
+                if let pending = custom.pendingUpdate, !pending.isResolved {
+                    Button("Conclude trial (evidence captured)") {
+                        custom.concludePendingUpdate(
+                            observation: "Post-update observation: reconnect identity \(custom.lastVersionPayload.map { $0.map { String(format: "%02x", $0) }.joined() } ?? "none") at \(Date().formatted()).")
+                    }
+                    Text("Concluding closes the trial operationally and unblocks future transactions. It never claims the application was rewritten; the record and audit log are retained.")
+                        .font(.caption)
+                }
             }
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware

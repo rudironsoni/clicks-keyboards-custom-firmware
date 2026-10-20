@@ -37,6 +37,7 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
     case invalidProfile
     case readbackMismatch
     case ramWritesNotAllowed
+    case auditUnavailable
 
     var description: String {
         switch self {
@@ -70,6 +71,8 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
             "Keyboard readback does not match the requested layout"
         case .ramWritesNotAllowed:
             "Read the keyboard layout and enable RAM writes for this session first"
+        case .auditUnavailable:
+            "The update audit log could not be persisted; the trial stops before any further frame"
         }
     }
 }
