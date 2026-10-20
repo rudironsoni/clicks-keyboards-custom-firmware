@@ -14,6 +14,7 @@ This file owns the current readiness and authorization status. Other guides must
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
 | M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
+| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED. Dedicated `StockFlashTrial` configuration implemented, host-verified (219 checks) and simulator-built; audit logging, staging-only abort, and identity gates in place. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -45,6 +46,33 @@ original contents remain unknown and protected. Safe installation of that
 image is therefore unverified, even though it fits the application allocation.
 External adapters and replacement-loader installation do not meet the current
 constraints. R3 remains UNMET. Physical flashing remains NO-GO.
+
+## M4 milestone status, 2026-10-20
+
+Rudi directed the immediate engineering priority on 2026-10-20: M4, first
+physical stock firmware flash, before any further custom-recovery research.
+The sequence is stock flashing first, recovery validation second, QMK
+installation third.
+
+Implemented on branch `feat/ck5200-tail-ownership-evidence`:
+
+- The dedicated `StockFlashTrial` build configuration is the only iOS
+  configuration that can physically write, and only the official V122
+  artifact on verified CK-5200 hardware 1.2.0 stock identity.
+- The host integration suite passes under the trial flag: 219 checks, zero
+  failures, including byte-for-byte audit-trail validation of every update
+  exchange.
+- Default Debug and Release builds remain diagnostics-only; QMK installation
+  remains impossible in every configuration.
+- The Mac fallback's first step is prepared as a read-only descriptor capture
+  (`tools/mac_usb_capture.sh`); no Mac restoration path is established.
+
+**No physical firmware write has been performed. Execution of the prepared
+trial requires Rudi's explicit approval recorded in
+[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** That approval decision
+also covers the optional V121 transition for stronger replacement evidence.
+The memory-ownership corrections and boot-stage unknowns from the 2026-10-20
+investigation remain governing evidence for the risk assessment.
 
 ## R3 investigation status, 2026-10-16
 

@@ -31,6 +31,26 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
+## Current stopping point, 2026-10-20
+
+**M4 (first physical stock firmware flash) is the current task** per Rudi's
+2026-10-20 direction. The stock-to-stock sequence was always the first real
+flashing milestone; the safety gate must no longer be a permanent stopping
+point. The dedicated `StockFlashTrial` configuration, audit logging, and
+staging-only abort are implemented and host-verified; the trial procedure and
+risk record live in
+[keyboards/ck5200/docs/m4-stock-flash-trial.md](keyboards/ck5200/docs/m4-stock-flash-trial.md).
+
+The Mac operating model is now: iPhone primary (stock and QMK installs,
+updates, keymaps, profiles), Mac emergency fallback (inspection first;
+restoration only if later established). `tools/mac_usb_capture.sh` captures
+USB descriptors read-only.
+
+**No physical firmware write is authorized yet.** Executing the prepared trial
+requires Rudi's explicit approval. The flash memory-ownership corrections and
+the boot-stage questions (vendor inquiry 0a-0f, UNSG) remain the governing
+evidence.
+
 ## Current stopping point, 2026-10-17
 
 The focused follow-up selects **outcome 2: exact vendor dependency**.
