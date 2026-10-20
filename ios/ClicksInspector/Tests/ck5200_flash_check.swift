@@ -20,6 +20,17 @@
  */
 import Foundation
 
+#if STOCK_FLASH_TRIAL
+/// Probe for the M4 trial audit trail (StockUpdateAudit.jsonl). The trial
+/// build must persist exact TX/RX frames and lifecycle events.
+private struct AuditProbe: Codable {
+    let event: String
+    let command: Int?
+    let requestHex: String?
+    let replyHex: String?
+}
+#endif
+
 private var checkFailures = 0
 
 private func expect(_ condition: Bool, _ what: String) {
@@ -685,6 +696,38 @@ struct FlashCheck {
             }
             relaunched.markPendingUpdateVerified()
         }
+
+#if STOCK_FLASH_TRIAL
+        // M4 trial audit trail: every update exchange and lifecycle event
+        // must be persisted for the physical trial's evidence record.
+        if let storage = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
+            let auditURL = URL(fileURLWithPath: storage).deletingLastPathComponent()
+                .appendingPathComponent("StockUpdateAudit.jsonl")
+            if let text = try? String(contentsOf: auditURL, encoding: .utf8) {
+                let events = text.split(separator: "\n").filter { !$0.isEmpty }
+                    .compactMap { try? JSONDecoder().decode(AuditProbe.self, from: Data($0.utf8)) }
+                expect(!events.isEmpty, "trial audit log records update events")
+                expect(events.contains { $0.event == "trialStart" }, "trialStart recorded with image and target identity")
+                expect(events.contains { $0.event == "exchange" && $0.command == 0xa1 }, "A1 exchange frames recorded")
+                expect(events.contains { $0.event == "exchange" && $0.command == 0xa2 }, "A2 exchange frames recorded")
+                expect(events.contains { $0.event == "exchange" && $0.command == 0xa3 }, "A3 exchange frames recorded")
+                expect(events.contains { $0.event == "commitUnknownRecorded" }, "commit-unknown record point logged")
+                expect(events.contains { $0.event == "commitAcknowledged" }, "commit acknowledgement logged")
+                expect(events.contains { $0.event == "rebootDispatched" }, "reboot request logged")
+                expect(events.contains { $0.event == "updateFailed" }, "failed scenarios are logged")
+                if let a2 = events.first(where: { $0.event == "exchange" && $0.command == 0xa2
+                    && !($0.requestHex ?? "").isEmpty }) {
+                    expect(a2.requestHex!.count == 76, "A2 request frames recorded byte-for-byte (38 bytes)")
+                }
+                if let reply = events.first(where: { $0.event == "exchange" && $0.command == 0xa1
+                    && !($0.replyHex ?? "").isEmpty }) {
+                    expect(reply.replyHex == "00006a00", "A1 reply recorded byte-for-byte (advertised maximum)")
+                }
+            } else {
+                expect(false, "the trial audit log exists at \(auditURL.path)")
+            }
+        }
+#endif
 
         print(checkFailures == 0 ? "ok" : "==== \(checkFailures) failure(s) ====")
         exit(checkFailures == 0 ? 0 : 1)

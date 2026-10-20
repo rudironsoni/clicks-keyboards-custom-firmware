@@ -73,6 +73,13 @@ jobs:
             -scheme ClicksInspector -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+      - name: Build unsigned M4 stock flash trial configuration
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration StockFlashTrial \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/stock-flash-trial-build.log
       - name: Test recording, export, and deletion in Simulator
         run: |
           set -o pipefail

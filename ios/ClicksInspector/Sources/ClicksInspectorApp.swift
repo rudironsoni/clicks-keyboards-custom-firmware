@@ -145,6 +145,14 @@ private struct CustomFirmwareSection: View {
 
     var body: some View {
         Section("Verified stock firmware manager") {
+            if CustomFirmwareController.stockFlashTrial {
+                Text("STOCK FLASH TRIAL BUILD")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                Text("This is the authorized M4 trial configuration. It can physically rewrite the keyboard's application firmware with the official V122 image. Recovery from a failed installation is NOT established. Do not use without the reviewed trial procedure.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             Button("Prepare official CK-5200 V122") {
                 if let image = Self.stockImage() { custom.prepareStock(image) }
             }
@@ -152,7 +160,9 @@ private struct CustomFirmwareSection: View {
             Text(custom.stockPreparation).accessibilityIdentifier("stockManager.preparation")
             Text("Stock to stock: functioning updater required. QM/RS to stock: functioning authenticated application service required. Unbootable to stock: R3 unmet.")
                 .font(.caption)
-            Text("Physical installation is disabled in every iPhone build. A separate explicit authorization and recovery decision are required.")
+            Text(CustomFirmwareController.stockFlashTrial
+                 ? "Trial configuration active: installation is enabled below, only after the explicit risk acknowledgement and the reviewed procedure."
+                 : "Default configurations physically disable installation. The dedicated M4 StockFlashTrial configuration is required for the authorized trial.")
                 .font(.caption)
             switch custom.phase {
             case .idle: Text("No session.")
@@ -180,10 +190,14 @@ private struct CustomFirmwareSection: View {
                 // would promise an operation the controller rejects.
                 if custom.stockMode != nil {
                     if let image = Self.stockImage() {
-                        Button("Install official stock V122 (disabled)") {
-                            confirmation = .restoreStock(image)
+                        if CustomFirmwareController.stockFlashTrial {
+                            Button("Install official stock V122") {
+                                confirmation = .restoreStock(image)
+                            }
+                        } else {
+                            Button("Install official stock V122 (disabled)") {}
+                                .disabled(true)
                         }
-                        .disabled(true)
                     } else {
                         Text("Bundled stock image missing from the app bundle.")
                             .font(.caption)
@@ -193,21 +207,40 @@ private struct CustomFirmwareSection: View {
                     Text("Unknown firmware mode. Installation is refused.")
                         .font(.caption)
                 }
-                Text("Only the exact official CK-5200 V122 image is accepted for preparation. QMK installation is out of scope.")
+                Text(custom.pendingUpdate != nil
+                     ? "A previous update record is unresolved; installation stays blocked until it is reconciled."
+                     : (CustomFirmwareController.stockFlashTrial
+                        ? "Only the exact official CK-5200 V122 image can be installed. QMK installation remains disabled in every configuration."
+                        : "Physical installation is disabled in this configuration. Only the dedicated M4 StockFlashTrial configuration can enable it, under the reviewed trial procedure."))
                     .font(.caption)
                 Text("Transfer, commit acknowledgement, reboot request, stock observed, and installation proven are separate states. This app cannot prove the original installer's copy operation.")
                     .font(.caption)
             }
+            if custom.stagingAbortAvailable {
+                Button("Abort update (staging only)", role: .destructive) {
+                    custom.requestStagingAbort()
+                }
+                Text("Aborting stops staging new pages. It is refused once the commit (A3) has been requested, because the device may already have committed.")
+                    .font(.caption)
+            }
         }
         .sheet(item: $confirmation) { confirmation in
-            let (title, detail): (String, String) = {
+            let (title, detail, acknowledgement): (String, String, String?) = {
                 switch confirmation {
                 case .restoreStock(let image):
-                    ("Re-flash stock firmware",
-                     "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.")
+                    if CustomFirmwareController.stockFlashTrial {
+                        ("Re-flash stock firmware (M4 trial)",
+                         "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it. This is a real flash operation with nonzero risk: the keyboard's application firmware is rewritten, and if the installation fails, no recovery path is established for this device.",
+                         "I understand this rewrites the keyboard's firmware, that a same-version reply cannot prove the rewrite happened, and that recovery from a failed install is not established.")
+                    } else {
+                        ("Re-flash stock firmware",
+                         "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.",
+                         nil)
+                    }
                 }
             }()
-            ConfirmationView(title: title, detail: detail) {
+            ConfirmationView(title: title, detail: detail,
+                              acknowledgementRequired: acknowledgement) {
                 switch confirmation {
                 case .restoreStock(let image):
                     custom.flash(image: image, rebootToInstall: true)
@@ -230,13 +263,19 @@ private struct CustomFirmwareSection: View {
 private struct ConfirmationView: View {
     let title: String
     let detail: String
+    var acknowledgementRequired: String? = nil
     let confirm: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var acknowledged = false
 
     var body: some View {
         VStack(spacing: 16) {
             Text(title).font(.headline)
             Text(detail).font(.subheadline)
+            if let acknowledgement = acknowledgementRequired {
+                Toggle(acknowledgement, isOn: $acknowledged)
+                    .font(.caption)
+            }
             HStack {
                 Button("Cancel") { dismiss() }
                 Button("Flash", role: .destructive) {
@@ -244,6 +283,7 @@ private struct ConfirmationView: View {
                     confirm()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(acknowledgementRequired != nil && !acknowledged)
             }
         }
         .padding()

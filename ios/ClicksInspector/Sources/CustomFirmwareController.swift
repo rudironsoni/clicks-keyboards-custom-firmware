@@ -6,14 +6,33 @@ import OSLog
 /// Host tests exercise stock, QM and RS transactions with physical writes disabled.
 @MainActor
 final class CustomFirmwareController: ObservableObject {
-    // No shipped iOS configuration can enable writes, including the legacy flag.
-    // Only macOS host executables compiled for offline tests can exercise them.
+    // No default iOS configuration can enable writes, including the legacy flag.
+    // Two deliberate paths exist:
+    //  - macOS host executables compiled for offline tests
+    //    (STOCK_MANAGER_OFFLINE_TESTING), which never run on a device;
+    //  - the dedicated M4 "StockFlashTrial" build configuration
+    //    (STOCK_FLASH_TRIAL), the ONLY iOS configuration that may physically
+    //    write, and only the authentic V122 stock image. See
+    //    keyboards/ck5200/docs/m4-stock-flash-trial.md for the authorization
+    //    record and the abort rules.
     #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
+    static let diagnosticsOnly = false
+    static let stockUpdatesEnabled = true
+    #elseif STOCK_FLASH_TRIAL
     static let diagnosticsOnly = false
     static let stockUpdatesEnabled = true
     #else
     static let diagnosticsOnly = true
     static let stockUpdatesEnabled = false
+    #endif
+
+    #if STOCK_FLASH_TRIAL
+    /// True only in the dedicated M4 trial configuration. Drives the visible
+    /// trial banner, the enabled install control, and the explicit
+    /// risk acknowledgement in the confirmation sheet.
+    static let stockFlashTrial = true
+    #else
+    static let stockFlashTrial = false
     #endif
 
     #if QMK_RAM_KEYMAP
@@ -40,7 +59,10 @@ final class CustomFirmwareController: ObservableObject {
     func prepareStock(_ bytes: [UInt8]) {
         do {
             preparedStock = try PreparedStockImage(bytes)
-            stockPreparation = "Verified official CK-5200 V122: 18,648 bytes, SHA-256 \(preparedStock!.sha256). Physical installation is disabled."
+            stockPreparation = "Verified official CK-5200 V122: 18,648 bytes, SHA-256 \(preparedStock!.sha256). "
+                + (Self.stockFlashTrial
+                   ? "Trial build: installation is enabled after the risk acknowledgement."
+                   : "Physical installation is disabled in this configuration.")
         } catch {
             preparedStock = nil
             stockPreparation = "Preparation failed: \(error)"
@@ -156,7 +178,7 @@ final class CustomFirmwareController: ObservableObject {
 
     private static let pendingUpdateKey = "ck5200.pendingUpdate"
     private static var journalURL: URL {
-        #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
+        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
         if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
             return URL(fileURLWithPath: path)
         }
@@ -165,6 +187,59 @@ final class CustomFirmwareController: ObservableObject {
             .appendingPathComponent("ClicksInspector/StockUpdate.json")
     }
     private var journalUnreadable = false
+
+    /// M4 trial audit trail: exact TX/RX frames and lifecycle events for
+    /// every update-command exchange, persisted as JSON lines beside the
+    /// journal. The stock image is a public artifact in this repository, so
+    /// recording full frame bytes loses no secret. The log is append-only;
+    /// nothing interprets it during the trial. See
+    /// keyboards/ck5200/docs/m4-stock-flash-trial.md.
+    private struct StockUpdateAuditEvent: Codable {
+        let date: Date
+        let event: String
+        let command: Int?
+        let requestHex: String?
+        let replyHex: String?
+        let detail: String?
+    }
+
+    private static var updateAuditURL: URL {
+        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
+        if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
+            return URL(fileURLWithPath: path).deletingLastPathComponent()
+                .appendingPathComponent("StockUpdateAudit.jsonl")
+        }
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ClicksInspector/StockUpdateAudit.jsonl")
+    }
+
+    private func logUpdateAudit(_ event: String, command: Int? = nil,
+                                request: [UInt8]? = nil, reply: [UInt8]? = nil,
+                                detail: String? = nil) {
+        func hex(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
+        let record = StockUpdateAuditEvent(
+            date: Date(), event: event, command: command,
+            requestHex: request.map(hex), replyHex: reply.map(hex), detail: detail)
+        guard let data = try? JSONEncoder().encode(record) else { return }
+        do {
+            let url = Self.updateAuditURL
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: url.path) {
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                _ = try? handle.seekToEnd()
+                try handle.write(data)
+                try handle.write(Data("\n".utf8))
+            } else {
+                try data.write(to: url, options: .atomic)
+                try Data("\n".utf8).write(to: url, options: .atomic)
+            }
+        } catch {
+            logger.error("audit log write failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var keymap: [[[UInt16]]] = [] // [layer][row][col]
@@ -211,8 +286,9 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Synchronous single-operation guard, set and cleared on the main
     /// actor before any Task runs, so two rapid submissions cannot both
-    /// pass (review 2026-10-12).
-    private var flashInFlight = false
+    /// pass (review 2026-10-12). Published so the M4 trial UI can offer
+    /// staging-only abort exactly while it is safe.
+    @Published private(set) var flashInFlight = false
 
     /// The connected keyboard's reported identity, and the version payload
     /// from the last successful identify. Flashing requires both (review
@@ -256,7 +332,7 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     /// Host-test hook: clear the persisted unresolved-update record.
-    #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
+    #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
     static func resetPendingUpdateForTesting() {
         UserDefaults.standard.removeObject(forKey: pendingUpdateKey)
         try? FileManager.default.removeItem(at: journalURL)
@@ -509,7 +585,9 @@ final class CustomFirmwareController: ObservableObject {
                 if Self.keymapBuildEnabled && hasQMKIdentity {
                     identified = .customFirmware("Custom QMK firmware detected")
                 } else if payload == CustomKeyboardCommand.stockVersionPayload {
-                    identified = .stockFirmware("Stock V122 detected. Physical installation is disabled.")
+                    identified = .stockFirmware(Self.stockFlashTrial
+                        ? "Stock V122 detected. Trial build: installation is enabled below."
+                        : "Stock V122 detected. Physical installation is disabled in this configuration.")
                 } else if stockMode == .rescue {
                     identified = .stockFirmware("RS 00 01 application rescue detected. This is not independent boot recovery.")
                 } else {
@@ -759,6 +837,9 @@ final class CustomFirmwareController: ObservableObject {
         let imageSHA256 = prepared.sha256
         let generation = sessionGeneration
         transaction = StockFirmwareTransaction(image: prepared, source: mode, target: target, generation: generation)
+        logUpdateAudit("trialStart", detail: "image sha256 \(imageSHA256), \(image.count) bytes; "
+            + "target \(target.model) firmware \(target.firmwareRevision) hardware \(target.hardwareRevision); "
+            + "mode \(String(describing: mode)); rebootToInstall \(rebootToInstall)")
         phase = .busy("Starting update session")
         operationTask = Task {
             defer {
@@ -799,6 +880,7 @@ final class CustomFirmwareController: ObservableObject {
                  * leave this record behind. A3 is never retried; a validated
                  * acknowledgment is the only thing that advances the record. */
                 try recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .commitUnknown)
+                logUpdateAudit("commitUnknownRecorded", detail: "A3 dispatch follows; any interruption from here leaves the record")
                 let finishReply: [UInt8]
                 do {
                     finishReply = try await perform(.finishUpdate(size: image.count))
@@ -816,6 +898,8 @@ final class CustomFirmwareController: ObservableObject {
                     throw CustomKeyboardError.updateRejected(at: "committed size \(committed), expected \(image.count)", status: 0x01)
                 }
                 try transaction?.accept(finishReply)
+                logUpdateAudit("commitAcknowledged", command: 0xa3, reply: finishReply,
+                               detail: "committed size \(committed) of \(image.count)")
                 /* Validated acknowledgment: advance the record. The record
                  * itself stays until explicitly reconciled: a successful
                  * commit still proves nothing about installation. */
@@ -829,6 +913,8 @@ final class CustomFirmwareController: ObservableObject {
                         record.rebootRequested = true
                         try persist(record)
                     }
+                    logUpdateAudit("rebootDispatched", command: 0xa0,
+                                   request: CustomKeyboardCommand.rebootRequest)
                     if mode == .stock {
                         // V122 replies 04 02 A0 00. An ACK still proves no copying.
                         let payload = try await perform(.reboot())
@@ -858,6 +944,8 @@ final class CustomFirmwareController: ObservableObject {
                  * do not overwrite it with the generic transport error. */
                 let offset = transaction?.offset ?? 0
                 let rebootRequested = awaitingReboot
+                logUpdateAudit("updateFailed", detail: "staging stopped at \(offset) acknowledged bytes; "
+                    + "rebootRequested \(rebootRequested); error \(error)")
                 invalidateSession(with: error)
                 if case .updateUnverified = phase { return }
                 if case .failed = phase { return }
@@ -876,6 +964,24 @@ final class CustomFirmwareController: ObservableObject {
               let transaction, transaction.generation == generation else {
             throw CustomKeyboardError.transportUnavailable
         }
+    }
+
+    /// Abort an in-flight STAGING transfer (A1/A2). Once A3 has been
+    /// dispatched the commit may already have happened on the device, so
+    /// aborting then is refused; the pending-update record governs that
+    /// state instead. Cancelling stops new frames; an in-flight exchange
+    /// ends through its normal timeout and the session is invalidated.
+    /// Staging writes only touch the keyboard's scratch area
+    /// `[0x8A00,0xF500)`, so an abandoned staging session is harmless.
+    func requestStagingAbort() {
+        guard Self.stockUpdatesEnabled, flashInFlight, pendingUpdate == nil else { return }
+        logUpdateAudit("abortRequested", detail: "staging-only abort; no commit was requested")
+        operationTask?.cancel()
+    }
+
+    /// True while an A1/A2 staging transfer can still be safely abandoned.
+    var stagingAbortAvailable: Bool {
+        Self.stockUpdatesEnabled && flashInFlight && pendingUpdate == nil
     }
 
     /// Session closure is an observation, not evidence of installer execution.
@@ -909,6 +1015,9 @@ final class CustomFirmwareController: ObservableObject {
         }
         guard generation == sessionGeneration else { throw CustomKeyboardError.transportUnavailable }
         try Task.checkCancellation()
+        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+            logUpdateAudit("exchange", command: Int(request[1]), request: request, reply: payload)
+        }
         return payload
     }
 
@@ -916,6 +1025,8 @@ final class CustomFirmwareController: ObservableObject {
     /// UI in .busy forever (review 2026-10-11, F-7).
     private func exchangeTimedOut() {
         guard continuation != nil else { return }
+        logUpdateAudit("exchangeTimedOut",
+                       detail: "reply never arrived; the exchange is abandoned and the session invalidated")
         if keymapOperationRunning && plannedWrites > 0 {
             profileMessage = "Timed out after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
         }

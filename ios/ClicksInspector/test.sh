@@ -31,6 +31,14 @@ xcrun swiftc -D STOCK_MANAGER_OFFLINE_TESTING -module-cache-path "$BUILD/cache" 
     Tests/ck5200_flash_check.swift -o "$BUILD/flash"
 "$BUILD/flash" Resources/iKeyboard_CK-5200_V122_120.bin Resources/ck5200_qmk.bin
 
+# M4 StockFlashTrial: the dedicated iOS trial configuration must exercise the
+# same guarded transaction flow, and its audit trail must record every
+# exchange and lifecycle event byte-for-byte.
+echo "RUN ck5200_flash_check (StockFlashTrial)"
+xcrun swiftc -D STOCK_FLASH_TRIAL -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" \
+    Tests/ck5200_flash_check.swift -o "$BUILD/flash-trial"
+"$BUILD/flash-trial" Resources/iKeyboard_CK-5200_V122_120.bin Resources/ck5200_qmk.bin
+
 # Even the old write flag and the new manager configuration cannot write.
 for FLAGS in STOCK_UPDATE_AUTHORIZED STOCK_FIRMWARE_MANAGER; do
     xcrun swiftc -D "$FLAGS" -D DIAGNOSTICS_BOUNDARY_TEST -module-cache-path "$BUILD/cache" \
