@@ -95,6 +95,11 @@ jobs:
           .venv/bin/python tools/validate_image.py build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
           sha256sum build/ck5200_qmk.bin build/ck5200_qmk.elf
 
+      - name: Run CK-5200 host Python tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest keyboards/ck5200/tests -q
+
       - uses: actions/upload-artifact@v4
         with:
           name: ck5200-firmware

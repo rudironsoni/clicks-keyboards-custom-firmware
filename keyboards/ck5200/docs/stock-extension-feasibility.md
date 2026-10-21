@@ -129,19 +129,118 @@ both 32-bit-aligned, both inside the one-time registration path.
 - Keymap writes on-device would use the stock RMW helper semantics (256-byte
   page granularity, erase-then-program) and inherit its interruption window.
 
-## 5. Open items for the next increments
+## 5. Deliverable 2: the functional engine (implemented and tested)
 
-1. Reconstruct the exact builder-callback invocation ABI from the scan path
-   (`0x24AA–0x26D8` call site into the stored pointer) and the `a2` argument
-   semantics at `0x2796`.
-2. Compile and measure the three-layer engine (deliverable 2): tap, hold,
-   toggle, one-shot activation; Esc/Tab/arrows/modifier/release correctness
-   against the QMK port as reference.
-3. Appended-code placement rules: the extension at `0x6900` must not collide
-   with a page-rounded OEM copy of a larger stock image; document the
-   assumption (a future official image larger than `0x6900` bytes overlaps
-   the extension region and invalidates the layout — check against the
-   manifest sizes at each update).
+`stock_extension/ck5200_keymap_engine.c/.h` — a host-testable, pure-C99
+three-layer, 36-position keymap engine implementing the extension side of
+the hook:
+
+- Per-position definition: usage on each of base/SYM/NAV layers, held
+  modifier bits, optional layer-switch role, activation mode, tap usage and
+  tap window.
+- Configurable activation, all four modes implemented and tested: **TAP**
+  (layer while held; a quick solo release emits the tap usage for exactly
+  one report cycle; a second key inside the window suppresses the tap),
+  **HOLD** (layer only while held), **TOGGLE** (press flips on, same key
+  flips off), **ONESHOT** (armed on press, survives the key's release with
+  an expiry countdown, consumed by exactly one subsequent press).
+- Release correctness: each held position remembers the usage it
+  contributed, so releasing under a different layer clears the right usage;
+  no stuck keys after layer switches (asserted in both directions).
+- Reports: modifier bitmask plus up to six usages, recomputed from scratch
+  every tick (idempotent).
+
+The behavioral suite (`tests/ck5200_keymap_engine_test.c`, 36 checks, run
+via `tests/test_keymap_engine.py`) covers: the stock-default keymap
+transcribed from the capability ledger (letters, SYM digits, GUI/Ctrl
+modifiers compose), the goal NAV remap (Esc on the spare 2/08, Tab, Undo =
+GUI+Z, Redo = GUI+SHIFT+Z, stock arrows preserved), modifier chords,
+four-key rollover, partial releases, and all four activation modes.
+
+**Builder ABI, reconstructed from the scan path** (`0x2536–0x2542` and
+`0x259E–0x25A6`): the scanner invokes the registered builder and layer
+callbacks with identical arguments — `a0` = key-state object
+(`scan_obj+0x14`), `a1` = the 6-byte matrix (`scan_obj+0xE`), `a2` = 6.
+The builder pointer lives at `scan_obj+0x1C`, the layer handler at
+`scan_obj+0x18`. An extension builder must match this ABI exactly; the
+engine's tick interface maps onto it directly.
+
+## 6. Deliverable 3: measured storage design
+
+Measured with the pinned toolchain (`xpack-riscv-none-elf-gcc-15.2.0-1`,
+`rv32imac_zicsr`, `-Os`, medlow, function/data sections):
+
+| Component | Size |
+| --- | --- |
+| Engine `.text` (compiled for target) | **772 bytes** |
+| Engine `.data`/`.bss` | 0 (engine state is caller-allocated) |
+| Callback shim (ABI bridge + report send; to be written) | estimated 200–400 bytes |
+| One three-layer keymap record (36 × 3 × 2 bytes) | 216 bytes |
+| Two keymap records | 432 bytes |
+| **Total extension footprint (estimate)** | **≈ 1.4–1.6 KiB** |
+
+Budget check (asserted by `test_keymap_engine.py::test_engine_riscv_footprint_budget`,
+engine ≤ 1024 bytes): the extension fits inside the 8,488-byte unused
+application capacity `[0x68D8,0x8A00)` with more than 7 KiB headroom.
+
+Flash behavior: keymap writes use the stock RMW page semantics (256-byte
+page granularity, erase-then-program) and inherit its interruption window;
+writes happen only on real changes. **OEM update survival is not claimed.**
+An official update that copies the stock image to `[0x2000, image_end)`
+overwrites the extension region — which doubles as a de-facto stock
+restore path through the ordinary Clicks app updater, subject to the same
+unknown boot-stage copy semantics as every other update; that restore path
+is unverified and must not be relied upon. Update-surviving keymap storage
+would need the settings page or another region outside the application
+image, under its own analysis.
+
+## 7. Deliverable 4: evidence-based comparison with QMK
+
+| Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
+| --- | --- | --- |
+| Behavioral evidence | 36-check engine suite: stock-default equivalence, NAV remap goal (Esc/Tab/Undo/Redo/arrows), all four activation modes, release correctness | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
+| Image footprint | ≈ 20.1 KiB total (V122 + ≤1.6 KiB extension) | 26,940 bytes verified |
+| OEM stack | Preserved byte-for-byte: USB, iAP2, MFi authentication, OEM updater protocol all untouched | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
+| Integration risk | Concentrated and small: 8-byte registration patch (reversible, tested), one callback ABI bridge, placement vs. future official images (a larger official image than `0x6900` bytes would overlap the extension region) | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
+| Stock restore | Official Clicks update overwrites the extension (de-facto restore, unverified) — same staging path as the M4 trial | Same M4 staging path (V122 restage), same unknown boot-stage caveats |
+| Recovery dependency | **Identical for both: R3 unmet. Neither image may be installed until independent recovery is authorized.** | Same |
+| Capability ceiling | Three layers × 36 positions, four activation modes, modifier chords | The full QMK engine (more layers, tap-hold timing rules, combos, macros) |
+
+Assessment: the two routes are complementary, not competing. The
+stock-derived extension is the minimal-risk path to the original goal
+(Esc/Tab/Undo/Redo and cursor keys on configurable positions with the OEM
+behavior and authentication intact); QMK remains the functional reference
+and the only route to capabilities beyond the small engine's ceiling.
+Per the milestone contract: if the stock-derived route cannot fit or
+cannot preserve OEM behavior reliably, switch to QMK with the failure
+documented. The measurements above show it fits with wide margin; the
+remaining stock-route risk is behavioral (the callback shim and the
+report-send path must be written and tested against the OEM send routine,
+not merely sized).
+
+## 8. Open items (updated 2026-10-22)
+
+1. ~~Builder-callback invocation ABI~~ **DONE**: `(a0 = key-state object,
+   a1 = matrix[6], a2 = 6)`; builder at `scan_obj+0x1C`, layer handler at
+   `+0x18` (§5).
+2. ~~Engine implementation and measurement~~ **DONE**: three layers, 36
+   positions, four activation modes; 36-check behavioral suite; 772-byte
+   target footprint (§5, §6).
+3. Appended-code placement rules: the extension at `0x6900` must not
+   collide with a page-rounded OEM copy of a larger stock image; a future
+   official image larger than `0x6900` bytes overlaps the extension region
+   and invalidates the layout — check against the manifest sizes at each
+   update.
+4. The callback shim: write the ABI bridge (unpack `(a0, a1, a2)`, run the
+   engine, emit the report through the OEM send routine at `0x278C` or an
+   equivalent verified path), measure it, and extend the behavioral suite
+   with a full-pipeline harness (scripted scans → builder → report).
+5. Stock-default byte-equivalence beyond the boot-report subset: the
+   engine's default keymap models the ledger's boot-report outputs;
+   consumer-page usages, the 0x83 sticky-modifier latching (0x2A54), and
+   the currency emission path are OEM behaviors the extension must either
+   replicate or delegate (by composing with the OEM builder), to be decided
+   in the shim design.
 4. Behavioral equivalence harness: stock-default keymap → byte-identical
    reports vs. the unpatched OEM builder, run offline against scripted scans.
 

@@ -58,10 +58,16 @@ delivered: interception proven and demonstrated in
 with the reversible 8-byte registration redirect and its offline patcher
 (`tools/stock_extension_patch.py`, 5 tests, part of a 26-check local run).
 
-Remaining in the extension milestone: the builder-callback ABI
-reconstruction, the compiled three-layer engine with behavioral tests
-(deliverable 2), the storage design measurement (deliverable 3), and the
-QMK comparison (deliverable 4). All physical operations remain unauthorized.
+2026-10-22: milestone deliverables 2–4 completed offline — the builder ABI
+reconstructed from the scan path, the three-layer/36-position engine
+implemented with all four activation modes and a 36-check behavioral suite
+(35 host tests total, zero failures), the target footprint measured at 772
+bytes (total extension ≈1.5 KiB inside the 8,488-byte capacity), and the
+QMK comparison recorded. Firmware CI now runs the host Python tests.
+Remaining before any installable claim: the callback shim, the
+full-pipeline harness, and the unchanged R3 recovery gate.
+
+All physical operations remain unauthorized.
 
 ## Current stopping point, 2026-10-21 (M4 software closed)
 
