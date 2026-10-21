@@ -34,16 +34,28 @@ IDENTITY="${SIGN_IDENTITY:-253C9440F58480C7D11CD873256C8D8CE9C2EFD0}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/m4sign.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-# 1. Extract the profile's entitlements (codesign supplies the derived keys).
+# 1. Extract the profile's entitlements. The application-identifier
+#    (team.bundle-id) is REQUIRED for device install (iOS 27 MIInstaller
+#    error 63 rejects apps without it); everything in the profile's
+#    entitlements is passed through unchanged.
 security cms -D -i "$PROFILE" > "$WORK/profile.plist"
-python3 - "$WORK/profile.plist" "$WORK/entitlements.plist" <<'PY'
+python3 - "$WORK/profile.plist" "$WORK/entitlements.plist" "$APP/Info.plist" <<'PY'
 import plistlib, sys
-p = plistlib.load(open(sys.argv[1], 'rb'))
-ents = dict(p.get('Entitlements', {}))
-ents.pop('application-identifier', None)
+profile = plistlib.load(open(sys.argv[1], 'rb'))
+ents = dict(profile.get('Entitlements', {}))
+info = plistlib.load(open(sys.argv[3], 'rb'))
+team = (profile.get('TeamIdentifier') or [''])[0]
+appid = ents.get('application-identifier', '')
+if appid == team + '.*':
+    # A wildcard profile carries the literal 'team.*' application-identifier.
+    # iOS device install requires the explicit app id (MIInstaller error 63),
+    # and an upgrade over an existing install must match the installed
+    # identifier exactly (error 64). Narrow the entitlement to this app's
+    # bundle identifier: still within what the wildcard profile grants.
+    ents['application-identifier'] = team + '.' + info['CFBundleIdentifier']
 plistlib.dump(ents, open(sys.argv[2], 'wb'))
 print("entitlements:", sorted(ents.keys()))
-print("profile team:", p.get('TeamIdentifier'), "devices:", len(p.get('ProvisionedDevices', [])))
+print("profile team:", profile.get('TeamIdentifier'), "devices:", len(profile.get('ProvisionedDevices', [])))
 PY
 
 # 2. Embed the profile and drop any stale signature.
