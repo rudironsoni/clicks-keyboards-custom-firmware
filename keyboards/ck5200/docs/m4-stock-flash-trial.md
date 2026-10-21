@@ -130,6 +130,10 @@ official V122 artifact.
 ## Trial procedure (for review before approval)
 
 1. Run the host suite: `bash ios/ClicksInspector/test.sh` (248 checks).
+   The complete hosted iOS workflow passed at `7585e58` (run `39553836693`,
+   all 23 steps: Swift tests, diagnostics, simulator, and StockFlashTrial
+   builds, simulator and stock-manager UI tests, and QMK profile
+   regressions).
 2. Build the trial app: `ClicksInspector` scheme, `StockFlashTrial`
    configuration, signed for Rudi's iPhone. Confirm the red trial banner.
 3. (Mac fallback step, read-only) With the keyboard attached to the Mac,

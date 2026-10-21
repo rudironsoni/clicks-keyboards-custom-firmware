@@ -63,7 +63,12 @@ on 2026-10-21 on branch `feat/ck5200-m4-stock-flash-trial`:
 - `concludePendingUpdate` closes a finished trial operationally without ever
   claiming the application was rewritten; the record and audit log are kept.
 - Host suite: 248 checks, zero failures, including the full flash path
-  compiled under the trial flag.
+  compiled under the trial flag. The complete hosted iOS workflow (Swift
+  tests, diagnostics, simulator, and StockFlashTrial builds, simulator UI
+  tests, stock-manager UI tests, QMK profile regressions) passed at
+  `7585e58`, CI run `39553836693` (30m31s, all steps green); the firmware
+  workflow passed at `9e83272`, whose only successor change is this Swift
+  test file.
 - The V121 downgrade is explicitly NOT approved.
 - The signed-device build is prepared; signing requires one GUI action on
   this machine (keychain ACL blocks non-GUI codesign):
