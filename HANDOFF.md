@@ -39,11 +39,12 @@ Further recordings require a specific need in a separately scoped task. Do not r
 abort regressions, fail-closed audit, conclude-trial reconciliation, independent review disposed, 248 host
 checks green. The V121 downgrade is explicitly not approved.
 
-Remaining before an execution decision: Rudi's one GUI signing action for the
-signed-device build (keychain ACL), the Mac descriptor capture with the
-keyboard attached (one command), his visual confirmation of the trial banner
-and consent control, and the independent review disposition. Then the V122
-stock-to-stock decision with the residual brick risk stated in
+**M4 software is COMPLETE and closed by Rudi, 2026-10-21** (both workflows
+green at `499c13b`). Do not add implementation work. The remaining sequence is
+physical preflight without flashing: the read-only Mac USB capture with the
+CK-5200 attached, the signed StockFlashTrial build inspected on his iPhone
+(banner, identity, V122 hash, consent dialog; no Flash press), then his one
+explicit V122-to-V122 trial decision with the residual brick risk stated in
 [keyboards/ck5200/docs/m4-stock-flash-trial.md](keyboards/ck5200/docs/m4-stock-flash-trial.md).
 
 The operating model stays: iPhone primary (stock and QMK installs, updates,

@@ -76,11 +76,22 @@ on 2026-10-21 on branch `feat/ck5200-m4-stock-flash-trial`:
 - The Mac descriptor capture ran read-only; the CK-5200 was not attached.
   Rudi's one-command step reruns it.
 
+**M4 software gate CLOSED by Rudi on 2026-10-21:** he independently verified
+both workflows green at the same branch tip (`499c13b`) and closed software
+development for M4. No further implementation work is requested. The missing
+evidence is physical-device validation only, in this order: (1) the read-only
+Mac USB capture with the CK-5200 attached
+(`keyboards/ck5200/tools/mac_usb_capture.sh`); (2) the signed StockFlashTrial
+build installed and inspected on his iPhone without flashing (red trial
+banner, CK-5200 hardware 1.2.0, stock 1.2.2, V122 image SHA-256 `8ee86935…`,
+consent dialog); (3) one explicit V122-to-V122 trial decision, accepting the
+stated residual risk.
+
 **No physical firmware write has been performed. Execution of the prepared
 trial requires Rudi's explicit approval recorded in
-[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** An independent review of
-the physical-trial path was commissioned per his direction; its findings and
-disposition are recorded in the M4 document.
+[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** The independent review
+of the physical-trial path was commissioned per his direction; its findings
+and disposition are recorded in the M4 document.
 
 ## R3 investigation status, 2026-10-16
 
