@@ -15,7 +15,8 @@ This file owns the current readiness and authorization status. Other guides must
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
 | M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
 | M4 first physical stock flash | SOFTWARE GATE CLOSED 2026-10-21; the StockFlashTrial app was additionally installed and launched on Rudi's physical iPhone over Wi-Fi (no firmware write; no flash pressed). Physical firmware execution remains unauthorized and separate. [Trial record](m4-stock-flash-trial.md). |
-| Stock settings protocol (evidence phase) | IN PROGRESS on `docs/ck5200-stock-settings-protocol`. Static contract for `0x81–0x8D` and the 36-position capability ledger compiled from V122 + ClicksFT ([protocol](stock-settings-protocol.md), [ledger](stock-capability-ledger.md)). No settings write, no zero-mask query, and no new read executed: everything beyond the accepted getter baseline requires a separate authorization decision. |
+| Stock settings protocol (evidence phase) | COMPLETE as a static baseline: `0x81–0x8D` contract and 36-position capability ledger ([protocol](stock-settings-protocol.md), [ledger](stock-capability-ledger.md)). No settings write, no zero-mask query executed: everything beyond the accepted getter baseline requires a separate authorization decision. |
+| Programmable stock-extension feasibility | IN PROGRESS (offline only). Interception design proven and demonstrated: the minimal 8-byte registration redirect at `0x2A3A/0x2A42` (pinned-image hash-gated, bit-for-bit reversible, tested); caller census, ABIs, storage geometry, and open items in [stock-extension-feasibility.md](stock-extension-feasibility.md). A patched image is a research artifact; installation remains blocked by R3. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -135,7 +136,15 @@ The [USB recovery feasibility report](../../../reports/CK5200%20USB%20recovery%2
 The adapter could avoid the direct iPhone raw-USB API limit. It does not resolve keyboard entry or preservation.
 PC17-high power-up entry is documented at chip level. Connector routing, VDD timing, loader identity, and protection remain unverified.
 System FLASH is mutable, not immutable ROM. The inspected client programs from zero, and no safe selective factory erase is established.
-The stock image's final page has 40 unknown bytes that must survive. Full interruption recovery remains unproven.
+[CORRECTION 2026-10-21, flash-ownership evidence] The final stock page's 40
+tail bytes are no longer "unknown bytes that must survive": the six-version
+erase-necessity analysis and the serial/config findings
+([memory-ownership-and-oem-transition.md](../../../research_notes/CK5200%20USB%20recovery%20feasibility/memory-ownership-and-oem-transition.md))
+classified them as ordinary unused application-area flash that no stock code
+reads and that every OEM update erases. The still-unverified subject is
+different and must not be conflated: the boot stage's marker consumption,
+copy semantics, and interruption behavior remain unknown, and full
+interruption recovery remains unproven.
 
 **R3 remains UNMET. Custom flashing remains NO-GO.** This file remains the sole readiness authority.
 Current work permits research and offline models only. No physical experiment, device command, reboot, probe, opening, ISP, unlock, purchase, or hardware build is authorized.

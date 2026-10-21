@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Research tool: apply or reverse the stock-extension registration redirect.
+
+Replaces the two instruction words that construct the V122 report-builder
+callback pointer (lui a2,0x2 / addi a2,a2,0x796 = 0x2796) with words that
+build the extension address 0x6900 (lui a2,0x6 / addi a2,a2,0x900), so the
+scanner registration stores the extension as the HID report builder.
+
+OFFLINE RESEARCH ARTIFACT ONLY. A patched image is not authorized for
+installation; the R3 recovery gate is unchanged. See
+keyboards/ck5200/docs/stock-extension-feasibility.md.
+"""
+import argparse
+import hashlib
+import json
+import pathlib
+import sys
+
+BASE = 0x2000
+IMAGE_SHA256 = "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
+
+# Registration-site words (linked 0x2A3A / 0x2A42; file offsets 0xA3A/0xA42).
+PATCH_SITES = {
+    0x2A3A: {"original": 0x00002637, "extension": 0x00007637},  # lui a2, 0x2 -> lui a2, 0x7
+    0x2A42: {"original": 0x79660613, "extension": 0x90060613},  # addi a2, 0x796 -> addi a2, a2, -0x700
+}
+# Resulting pointer values: 0x2000+0x796 = 0x2796 (OEM) / 0x7000-0x700 = 0x6900
+# (extension). The addi immediate is SIGNED 12-bit: 0x900 does not fit as +2304,
+# so the decomposition uses 0x7<<12 minus 0x700.
+EXTENSION_BUILDER = 0x6900
+OEM_BUILDER = 0x2796
+
+
+def _word(data: bytes, linked: int) -> int:
+    off = linked - BASE
+    return int.from_bytes(data[off:off + 4], "little")
+
+
+def check_image(data: bytes) -> None:
+    got = hashlib.sha256(data).hexdigest()
+    if got != IMAGE_SHA256:
+        raise SystemExit(f"refused: image sha256 {got} is not the pinned V122 artifact")
+
+
+def apply_patch(data: bytes, direction: str) -> bytes:
+    out = bytearray(data)
+    for linked, pair in PATCH_SITES.items():
+        want = pair["original"] if direction == "patch" else pair["extension"]
+        got = _word(out, linked)
+        if got != want:
+            raise SystemExit(
+                f"refused: word at {hex(linked)} is {got:08x}, expected {want:08x} "
+                f"(already {'patched' if direction == 'reverse' else 'unpatched'}?)")
+        out[linked - BASE:linked - BASE + 4] = (
+            pair["extension"] if direction == "patch" else pair["original"]
+        ).to_bytes(4, "little")
+    return bytes(out)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("image", type=pathlib.Path, help="pinned V122 .bin")
+    parser.add_argument("out", type=pathlib.Path, help="output .bin (patched or reversed)")
+    parser.add_argument("manifest", type=pathlib.Path, help="JSON manifest to write")
+    parser.add_argument("--reverse", action="store_true",
+                         help="reverse the patch (output = original V122)")
+    args = parser.parse_args()
+
+    data = args.image.read_bytes()
+    # Forward patches start from the pinned V122 artifact. Reversal starts
+    # from a patched artifact whose per-site words are verified instead.
+    if not args.reverse:
+        check_image(data)
+    direction = "reverse" if args.reverse else "patch"
+    result = apply_patch(data, direction)
+
+    args.out.write_bytes(result)
+    manifest = {
+        "tool": "stock_extension_patch.py",
+        "direction": direction,
+        "source_sha256": hashlib.sha256(data).hexdigest(),
+        "result_sha256": hashlib.sha256(result).hexdigest(),
+        "base": BASE,
+        "sites": [
+            {"linked": hex(linked), "file_offset": hex(linked - BASE),
+             "original_word": f"{p['original']:08x}", "extension_word": f"{p['extension']:08x}",
+             "applied_word": f"{(p['extension'] if direction == 'patch' else p['original']):08x}"}
+            for linked, p in PATCH_SITES.items()
+        ],
+        "oem_builder": hex(OEM_BUILDER),
+        "extension_builder": hex(EXTENSION_BUILDER),
+        "authorization": ("OFFLINE RESEARCH ARTIFACT. Not authorized for "
+                          "installation; R3 gate unchanged."),
+    }
+    args.manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"{direction}: {len(result)} bytes, sha256 {manifest['result_sha256']}")
+    for site in manifest["sites"]:
+        print(f"  {site['linked']} (file {site['file_offset']}): {site['original_word']}"
+              f" -> {site['applied_word']}" if direction == "patch" else
+              f"  {site['linked']} (file {site['file_offset']}): {site['extension_word']}"
+              f" -> {site['applied_word']}")
+    print(f"builder pointer: {hex(OEM_BUILDER)} -> {hex(EXTENSION_BUILDER)}"
+          if direction == "patch" else
+          f"builder pointer: {hex(EXTENSION_BUILDER)} -> {hex(OEM_BUILDER)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

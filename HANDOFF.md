@@ -1,5 +1,9 @@
 # CK-5200 handoff
 
+> **Authoritative current workstream:** the newest dated stopping-point
+> section in this file. All earlier stopping-point sections are historical
+> records of their dates, not competing claims about the present.
+
 The authoritative current gate is [flash-readiness.md](keyboards/ck5200/docs/flash-readiness.md).
 This replaces the obsolete first-flash instructions. Git history preserves them as historical evidence only.
 
@@ -44,10 +48,20 @@ Static evidence delivered on `docs/ck5200-stock-settings-protocol`:
 [stock-capability-ledger.md](keyboards/ck5200/docs/stock-capability-ledger.md)
 (the 36-position classification and the no-remapping boundary).
 
-Remaining in the milestone, all gated on explicit decisions: whether to
-allow the `04 83 00 00` flag query (statically proven no-write), the
-iOS-assisted ceiling tests (Clicks Mode, modifier remapping, Shortcuts —
-no USB writes), and only then any single-setting write/restore trial.
+Rudi's 2026-10-21 review of `ec9f869` accepted the settings work as a
+baseline and set the next milestone: offline programmable stock-extension
+feasibility (no keyboard writes), with the record corrections applied (the
+40-byte tail claim superseded; both firmware-change routes preserved in the
+ledger; this file's authoritative-workstream note added). First increment
+delivered: interception proven and demonstrated in
+[stock-extension-feasibility.md](keyboards/ck5200/docs/stock-extension-feasibility.md)
+with the reversible 8-byte registration redirect and its offline patcher
+(`tools/stock_extension_patch.py`, 5 tests, part of a 26-check local run).
+
+Remaining in the extension milestone: the builder-callback ABI
+reconstruction, the compiled three-layer engine with behavioral tests
+(deliverable 2), the storage design measurement (deliverable 3), and the
+QMK comparison (deliverable 4). All physical operations remain unauthorized.
 
 ## Current stopping point, 2026-10-21 (M4 software closed)
 
@@ -95,7 +109,11 @@ M1, M2, and M3 stay closed within their recorded scopes.
 Chip-level PC17 power-up entry is documented. Actual connector routes, early CC/data states, VDD timing, safe bias, and retained BOOT remain unknown.
 The factory loader is mutable System FLASH, not immutable ROM.
 The inspected `wchisp` programs from zero. No preservation-safe selective factory erase or USB RAM-helper route is established.
-Protection state, the final page's 40 unknown bytes, all other device-specific state, and power-loss recovery remain critical blockers.
+Protection state, device-specific state at `0xF600`/`0xF700`, and power-loss
+recovery remain critical blockers. The former "40 unknown tail bytes" concern
+is corrected by the flash-ownership evidence: the tail is ordinary unused
+application flash erased by every OEM update; the open risk is the boot
+stage's unknown marker/copy/interruption behavior, not those bytes.
 OEM startup and retained staging could also affect a directly restored application. Their behavior remains unknown.
 
 Next: obtain model-matched vendor/source evidence. Both scoped independent agent reviews are closed.

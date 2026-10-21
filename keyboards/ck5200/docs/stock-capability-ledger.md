@@ -104,16 +104,20 @@ configuration inputs above are the only runtime-selected behaviors. There is
 no per-key usage table, no write command for key assignments, and no
 command that stores a keycode for any matrix position. Consequences:
 
-- Arbitrary "any key → any HID usage" remapping is **not implementable** on
-  stock V122. The Power Keyboard CP-1000's 72-byte per-key record protocol
-  has no counterpart here; sending its `0x24`/`0x25` frames to the CK-5200
-  would hit none of the decoded handlers.
+- Arbitrary "any key → any HID usage" remapping is **not implementable on
+  unmodified stock V122**. That is a statement about the shipped firmware,
+  not about the hardware: the correct full statement is that arbitrary
+  remapping requires firmware change, reachable by two distinct routes:
+  (1) a patched or extended OEM-derived application (offline modification
+  of the V122 image, preserving the OEM USB/iAP2/authentication stack), or
+  (2) replacement firmware such as the existing QMK port. Neither route is
+  equivalent to configuring unmodified V122, and neither is authorized.
 - The realistic stock ceiling is: the eight behavior flags, brightness and
   timing settings, currency/layout selection, native Cursor Mode, and the
   SYM layer — exactly what the official app exposes.
 - Capabilities beyond that (arbitrary assignments, tap-hold, combos, layers,
-  device-persistent custom keymaps) require new firmware (the existing QMK
-  port), which stays unauthorized.
+  device-persistent custom keymaps) fall to the firmware-change routes
+  above; their feasibility is a separate investigation.
 
 ## 5. iOS-assisted extensions (no firmware writes)
 
