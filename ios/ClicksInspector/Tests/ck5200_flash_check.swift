@@ -864,14 +864,21 @@ struct FlashCheck {
                 let a2Hexes = a2Dispatches.compactMap { $0.requestHex }
                 if a2Hexes.count == 583 {
                     var offsetOK = true
-                    for (index, hex) in a2Hexes.enumerated() where
-                        UInt32(hex.dropFirst(4).prefix(8), radix: 16) != UInt32(index * 32) {
-                        offsetOK = false
-                        break
+                    for (index, hex) in a2Hexes.enumerated() {
+                        let sentOffset: UInt32? = UInt32(hex.dropFirst(4).prefix(8), radix: 16)
+                        let wantOffset: UInt32 = UInt32(index) * 32
+                        if sentOffset != wantOffset {
+                            offsetOK = false
+                            break
+                        }
                     }
                     expect(offsetOK, "A2 offsets advance exactly 0,32,64,... in dispatch order")
-                    expect(a2Hexes.last?.count == (6 + 18648 - 582 * 32) * 2,
-                           "the final A2 frame is the 24-byte tail chunk (got \(a2Hexes.last?.count ?? 0) hex chars)")
+                    let expectedLastFrameHexLength = (6 + 24) * 2
+                    let actualLastFrameHexLength = a2Hexes.last?.count ?? 0
+                    expect(
+                        actualLastFrameHexLength == expectedLastFrameHexLength,
+                        "final A2 frame: expected 60 hex chars, got \(actualLastFrameHexLength)"
+                    )
                 }
                 expect(events.contains { $0.event == "dispatchAccepted" },
                        "accepted dispatches are marked as sent")
