@@ -31,7 +31,25 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
-## Current stopping point, 2026-10-21
+## Current stopping point, 2026-10-21 (settings protocol)
+
+**Stock configuration protocol — evidence phase** is the current workstream
+per Rudi's 2026-10-21 direction. M4 software stays closed (the trial app is
+installed on his iPhone; physical firmware execution remains unauthorized).
+No implementation and no physical writes are authorized.
+
+Static evidence delivered on `docs/ck5200-stock-settings-protocol`:
+[stock-settings-protocol.md](keyboards/ck5200/docs/stock-settings-protocol.md)
+(the `0x81–0x8D` contract with the zero-mask 0x83 static proof) and
+[stock-capability-ledger.md](keyboards/ck5200/docs/stock-capability-ledger.md)
+(the 36-position classification and the no-remapping boundary).
+
+Remaining in the milestone, all gated on explicit decisions: whether to
+allow the `04 83 00 00` flag query (statically proven no-write), the
+iOS-assisted ceiling tests (Clicks Mode, modifier remapping, Shortcuts —
+no USB writes), and only then any single-setting write/restore trial.
+
+## Current stopping point, 2026-10-21 (M4 software closed)
 
 **M4 (first physical stock firmware flash) remains the current task.** The
 2026-10-20 review corrections are applied on

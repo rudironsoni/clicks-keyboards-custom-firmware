@@ -14,7 +14,8 @@ This file owns the current readiness and authorization status. Other guides must
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
 | M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
-| M4 first physical stock flash | SOFTWARE READY, TRIAL PREPARED; review corrections applied 2026-10-21 (audit defect fixed, fail-closed audit, completeness and abort regressions, conclude-trial reconciliation, independent review disposed; 248 host checks). Signed-device build needs one GUI signing action (keychain ACL); Mac descriptor capture pending keyboard attachment. Physical execution of the V122-only trial requires Rudi's separate explicit approval. [Trial procedure and risk record](m4-stock-flash-trial.md). V121 downgrade NOT approved. |
+| M4 first physical stock flash | SOFTWARE GATE CLOSED 2026-10-21; the StockFlashTrial app was additionally installed and launched on Rudi's physical iPhone over Wi-Fi (no firmware write; no flash pressed). Physical firmware execution remains unauthorized and separate. [Trial record](m4-stock-flash-trial.md). |
+| Stock settings protocol (evidence phase) | IN PROGRESS on `docs/ck5200-stock-settings-protocol`. Static contract for `0x81–0x8D` and the 36-position capability ledger compiled from V122 + ClicksFT ([protocol](stock-settings-protocol.md), [ledger](stock-capability-ledger.md)). No settings write, no zero-mask query, and no new read executed: everything beyond the accepted getter baseline requires a separate authorization decision. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -46,6 +47,37 @@ original contents remain unknown and protected. Safe installation of that
 image is therefore unverified, even though it fits the application allocation.
 External adapters and replacement-loader installation do not meet the current
 constraints. R3 remains UNMET. Physical flashing remains NO-GO.
+
+## Stock settings protocol milestone, 2026-10-21
+
+Rudi's 2026-10-21 principal-engineer direction: the stock firmware already
+implements a configurable settings surface (`0x81–0x8D`, persistent record at
+`0x0800F700`), so the next milestone is a stock-configuration evidence and
+capability-boundary workstream. M4 stays closed; no physical writes and no
+implementation are authorized yet.
+
+Delivered statically on branch `docs/ck5200-stock-settings-protocol`:
+
+- [stock-settings-protocol.md](stock-settings-protocol.md): the
+  instruction-level contract for `0x81–0x8D` (frames, validation, stores,
+  side effects, replies, dirty-flag and page-commit semantics), the 12-byte
+  flash record layout, the ClicksFT cross-check with confirmed discrepancies,
+  and the static proof that the zero-mask `04 83 00 00` query writes nothing.
+- [stock-capability-ledger.md](stock-capability-ledger.md): the 36 matrix
+  positions classified (fixed / mode-dependent / config-driven / consumer),
+  the complete stock-configurable behavior set (flags bits 0–7, brightness,
+  timeouts, currency, layout), the decoded currency emission path with its
+  Mac-standard gestures, and the hard boundary: no per-key remapping
+  facility exists in V122.
+
+The StockFlashTrial app was also installed and launched on Rudi's physical
+iPhone over Wi-Fi on 2026-10-21 (deployment only; no firmware command was
+sent and no flash was pressed). The on-device visual checks of the trial
+build remain his pending step; see the M4 record.
+
+Authorization unchanged: the accepted getter baseline is the only physical
+read evidence; the zero-mask query, any settings write, V121, QMK, and any
+firmware reflash all require separate explicit decisions.
 
 ## M4 milestone status, 2026-10-21
 
