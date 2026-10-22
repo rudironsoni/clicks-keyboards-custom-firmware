@@ -56,3 +56,40 @@ def test_engine_riscv_footprint_budget(tmp_path):
     # stay far inside the 8,488-byte unused application capacity.
     assert text <= 1024, f"engine .text grew to {text} bytes (budget 1024)"
     print(f"engine riscv .text = {text} bytes")
+
+
+def test_shim_and_serialization_suite(tmp_path):
+    """Correctness milestone: the host shim harness and the packed
+    serialization round-trip must compile warning-clean and pass."""
+    binary = tmp_path / "shim_test"
+    subprocess.run(
+        ["cc", "-std=c99", "-Wall", "-Werror", "-Os", "-DCK_SHIM_HOST",
+         "-I", str(ROOT / "stock_extension"), "-I", str(ROOT / "tests"),
+         str(ENGINE),
+         str(ROOT / "stock_extension/ck5200_keymap_serialize.c"),
+         str(ROOT / "stock_extension/ck5200_extension_shim.c"),
+         str(ROOT / "tests/ck5200_extension_shim_test.c"),
+         "-o", str(binary)],
+        check=True)
+    result = subprocess.run([str(binary)], capture_output=True, text=True)
+    passes = result.stdout.count("PASS ")
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.rstrip().endswith("ok")
+    assert passes >= 18, f"expected >= 18 shim/serialization checks, saw {passes}"
+
+
+def test_linked_extension_image_build():
+    """Correctness milestone: the fully linked research image builds and
+    stays inside the application-area capacity. Skipped without the
+    pinned toolchain (CI installs it before the host tests run)."""
+    if not list(ROOT.glob(".toolchains/xpack-riscv-none-elf-gcc-*")):
+        pytest.skip("pinned riscv toolchain not installed")
+    script = ROOT / "stock_extension/build_extension_image.sh"
+    result = subprocess.run(["bash", str(script)],
+                             capture_output=True, text=True, timeout=600)
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = (ROOT / "build/stock_extension/build-report.txt").read_text()
+    assert "headroom" in report
+    headroom = int([l for l in report.splitlines()
+                    if "headroom" in l][0].split("headroom ")[1])
+    assert headroom > 0, report

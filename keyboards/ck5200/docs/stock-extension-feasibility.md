@@ -129,72 +129,114 @@ both 32-bit-aligned, both inside the one-time registration path.
 - Keymap writes on-device would use the stock RMW helper semantics (256-byte
   page granularity, erase-then-program) and inherit its interruption window.
 
-## 5. Deliverable 2: the functional engine (implemented and tested)
+## 5. Deliverable 2: the functional engine (v2, implemented and tested)
 
-`stock_extension/ck5200_keymap_engine.c/.h` — a host-testable, pure-C99
-three-layer, 36-position keymap engine implementing the extension side of
-the hook:
+`stock_extension/ck5200_keymap_engine.c/.h` — host-testable, pure C99.
+The 2026-10-22 correctness review required a v2; both its P1 model
+findings are fixed at instruction level of the model:
 
-- Per-position definition: usage on each of base/SYM/NAV layers, held
-  modifier bits, optional layer-switch role, activation mode, tap usage and
-  tap window.
-- Configurable activation, all four modes implemented and tested: **TAP**
-  (layer while held; a quick solo release emits the tap usage for exactly
-  one report cycle; a second key inside the window suppresses the tap),
-  **HOLD** (layer only while held), **TOGGLE** (press flips on, same key
-  flips off), **ONESHOT** (armed on press, survives the key's release with
-  an expiry countdown, consumed by exactly one subsequent press).
-- Release correctness: each held position remembers the usage it
-  contributed, so releasing under a different layer clears the right usage;
-  no stuck keys after layer switches (asserted in both directions).
-- Reports: modifier bitmask plus up to six usages, recomputed from scratch
-  every tick (idempotent).
+- **Per-layer actions** (P1 fix): usage, modifiers, and activation are
+  independently configurable on each of the three layers. A press
+  resolves to ONE immutable action snapshot held for the life of the
+  press, so a NAV Undo (GUI+Z) can never alter base-layer M — asserted by
+  dedicated no-regression tests.
+- **Elapsed-millisecond timing** (P1 fix): the caller supplies `now_ms`;
+  tap windows and one-shot expiry are absolute deadlines, never callback
+  counts. `ck_engine_next_deadline()` exposes the next time-driven
+  update so the shim can schedule a tick with NO matrix change — the
+  suite proves a tap's release frame arrives without any further key
+  event.
+- **Overlapping activators**: a press-order stack; releasing one
+  activator falls back to the next still held (tested in both orders).
+- **Base transparency**: an empty action on a layer inherits the
+  base-layer action (matches the ledger's "-" columns) and lets
+  base-defined activators — e.g. a toggle — still work while their layer
+  is active.
+- **Input boundary**: rows are masked to the six column bits; bits
+  `0x40/0x80` cannot index out of bounds (tested).
+- **Validation**: `ck_keymap_validate()` flags out-of-page usages and bad
+  layer targets; the runtime structurally cannot emit a corrupted byte.
 
-The behavioral suite (`tests/ck5200_keymap_engine_test.c`, 36 checks, run
-via `tests/test_keymap_engine.py`) covers: the stock-default keymap
-transcribed from the capability ledger (letters, SYM digits, GUI/Ctrl
-modifiers compose), the goal NAV remap (Esc on the spare 2/08, Tab, Undo =
-GUI+Z, Redo = GUI+SHIFT+Z, stock arrows preserved), modifier chords,
-four-key rollover, partial releases, and all four activation modes.
+**Corrected stock baseline** (P1 fix): position 2/03 (row 2, mask 0x08)
+is **Left Shift**, not a spare key — V122 `0x2AE6` (`andi a0, a6, 0x8` on
+row 2, latch-exclusivity mask `0x17` at `0x2AF6`), the factory layout,
+and the QMK decode all agree. The capability ledger carries a dated
+correction; the shared fixture (`tests/ck5200_default_keymap.h`, one
+fixture for both test binaries so corrections cannot diverge) models it
+as the Shift modifier on every layer.
 
-**Builder ABI, reconstructed from the scan path** (`0x2536–0x2542` and
-`0x259E–0x25A6`): the scanner invokes the registered builder and layer
-callbacks with identical arguments — `a0` = key-state object
-(`scan_obj+0x14`), `a1` = the 6-byte matrix (`scan_obj+0xE`), `a2` = 6.
-The builder pointer lives at `scan_obj+0x1C`, the layer handler at
-`scan_obj+0x18`. An extension builder must match this ABI exactly; the
-engine's tick interface maps onto it directly.
+Suites (both hosted in firmware CI): the engine suite
+(`tests/ck5200_keymap_engine_test.c`) runs **258 checks** including the
+full 108-combination layer-position sweep, release-across-layer-switch
+correctness in both directions, all four activation modes with
+millisecond timing, modifier chords, and partial releases. The shim and
+serialization suite
+(`tests/ck5200_extension_shim_test.c`) runs 21 checks.
 
-## 6. Deliverable 3: measured storage design
+**Builder ABI** (unchanged, proven): `(a0 = key-state object,
+a1 = matrix[6], a2 = 6)`; builder pointer at `scan_obj+0x1C`, layer
+handler at `+0x18`.
 
-Measured with the pinned toolchain (`xpack-riscv-none-elf-gcc-15.2.0-1`,
-`rv32imac_zicsr`, `-Os`, medlow, function/data sections):
+## 6. Deliverable 3: measured storage design (v2 measurements)
+
+All numbers below are measured, not estimated:
 
 | Component | Size |
 | --- | --- |
-| Engine `.text` (compiled for target) | **772 bytes** |
-| Engine `.data`/`.bss` | 0 (engine state is caller-allocated) |
-| Callback shim (ABI bridge + report send; to be written) | estimated 200–400 bytes |
-| One three-layer keymap record (36 × 3 × 2 bytes) | 216 bytes |
-| Two keymap records | 432 bytes |
-| **Total extension footprint (estimate)** | **≈ 1.4–1.6 KiB** |
+| Engine `.text` (pinned RISC-V toolchain, `-Os`) | 772 bytes (CI budget ≤ 1024) |
+| **Serialized default keymap record** (packed format v1) | **350 bytes** |
+| Complete linked extension (engine + shim + serializer + freestanding + embedded record) | **2,624 bytes** at `0x6900` |
+| Complete research image (patched V122 + extension) | **21,272 bytes**, extent `0x7318` |
+| Application-area capacity `[0x2000,0x8A00)` | 27,136 bytes — **headroom 5,864** |
 
-Budget check (asserted by `test_keymap_engine.py::test_engine_riscv_footprint_budget`,
-engine ≤ 1024 bytes): the extension fits inside the 8,488-byte unused
-application capacity `[0x68D8,0x8A00)` with more than 7 KiB headroom.
+The v1 figure of 216 bytes per record counted only usages (review
+finding P2). The designed packed format (magic, version, entry count,
+then one entry per non-empty action: position, layer, flags, usage or
+activation+target, conditional mods/tap fields) measures 350 bytes for
+the full default transcription and shrinks proportionally for delta
+profiles. Deserialization is fail-closed: truncated, bad-magic,
+out-of-page-usage, bad-target, and trailing-byte records are all
+rejected without partial loading (tested).
 
-Flash behavior: keymap writes use the stock RMW page semantics (256-byte
-page granularity, erase-then-program) and inherit its interruption window;
-writes happen only on real changes. **OEM update survival is not claimed.**
-An official update that copies the stock image to `[0x2000, image_end)`
-overwrites the extension region — which doubles as a de-facto stock
-restore path through the ordinary Clicks app updater, subject to the same
-unknown boot-stage copy semantics as every other update; that restore path
-is unverified and must not be relied upon. Update-surviving keymap storage
-would need the settings page or another region outside the application
-image, under its own analysis.
+`stock_extension/build_extension_image.sh` reproduces the linked image
+end to end: hash-gated patch, generated record, target compilation,
+link with the research linker script (`extension.ld`, `oem_send`
+provided at the proven `0x278C`), binary extraction, and a capacity
+assertion.
 
-## 7. Deliverable 4: evidence-based comparison with QMK
+## 7. Deliverable 4 plus: the callback shim and linked image
+
+The shim (`stock_extension/ck5200_extension_shim.c`) is the builder the
+patched registration points at. It **replaces** the OEM builder for the
+keyboard-page report — it never calls the OEM builder, so an altered key
+replaces the OEM action rather than emitting both (asserted: exactly one
+frame per tick). With the default keymap it emits stock-equivalent
+frames through the engine; with remaps it emits the configured output.
+The host harness proves: default frames (`type 020B`, mods, usage),
+replacement semantics, and the time-driven tap release through
+`ck_shim_next_deadline`.
+
+**Pinned open items before any executable claim on the real path**
+(deliberately not guessed in code, per the review):
+
+1. The exact OEM report framing consumed by the send routine at
+   `0x278C`: field `[2]` and the length formula at `0x2856–0x285E` are
+   not fully decoded; the shim emits the decoded core with `[2]` zeroed.
+2. The RAM address of the OEM 1 ms tick counter: the device build uses a
+   per-call placeholder (`CK_TIME_UNPINNED`); the host harness supplies
+   injected time and is the timing-verification path.
+3. Real-image data placement: the research linker keeps `.data`/`.bss`
+   after the flash sections for measurement only; a real image needs the
+   engine state placed in RAM (and initialized) — via RAM sections with
+   a startup hook or by relocating the engine state into an OEM-writable
+   RAM location.
+4. The decisive offline verification: execute the patched V122 pipeline
+   in the chgame-based bounded assurance model (a NEW V122 profile; the
+   existing gate is hash-pinned to the QMK binary and must not be
+   modified) and compare complete HID reports against the engine
+   across scripted scans, including stock-default byte-equivalence.
+
+## 8. Deliverable 4: evidence-based comparison with QMK
 
 | Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
 | --- | --- | --- |
@@ -218,33 +260,41 @@ remaining stock-route risk is behavioral (the callback shim and the
 report-send path must be written and tested against the OEM send routine,
 not merely sized).
 
-## 8. Open items (updated 2026-10-22)
+## 9. Open items (updated 2026-10-22, v2 increment)
 
-1. ~~Builder-callback invocation ABI~~ **DONE**: `(a0 = key-state object,
-   a1 = matrix[6], a2 = 6)`; builder at `scan_obj+0x1C`, layer handler at
-   `+0x18` (§5).
-2. ~~Engine implementation and measurement~~ **DONE**: three layers, 36
-   positions, four activation modes; 36-check behavioral suite; 772-byte
-   target footprint (§5, §6).
-3. Appended-code placement rules: the extension at `0x6900` must not
-   collide with a page-rounded OEM copy of a larger stock image; a future
-   official image larger than `0x6900` bytes overlaps the extension region
-   and invalidates the layout — check against the manifest sizes at each
-   update.
-4. The callback shim: write the ABI bridge (unpack `(a0, a1, a2)`, run the
-   engine, emit the report through the OEM send routine at `0x278C` or an
-   equivalent verified path), measure it, and extend the behavioral suite
-   with a full-pipeline harness (scripted scans → builder → report).
-5. Stock-default byte-equivalence beyond the boot-report subset: the
-   engine's default keymap models the ledger's boot-report outputs;
-   consumer-page usages, the 0x83 sticky-modifier latching (0x2A54), and
-   the currency emission path are OEM behaviors the extension must either
-   replicate or delegate (by composing with the OEM builder), to be decided
-   in the shim design.
+1. ~~Builder-callback invocation ABI~~ **DONE** (`0x2536–0x2542`,
+   `0x259E–0x25A6`): `(a0 = key-state object, a1 = matrix[6], a2 = 6)`;
+   builder at `scan_obj+0x1C`, layer handler at `+0x18`.
+2. ~~Engine implementation and measurement~~ **DONE v2**: per-layer
+   actions, immutable press snapshots, activator stack, millisecond
+   timing with deadlines, base transparency, boundary masking; 258-check
+   engine suite plus the 21-check shim/serialization suite; 772-byte
+   target `.text` (§5).
+3. ~~Serialized storage design~~ **DONE**: packed format v1 measured at
+   350 bytes per default record, fail-closed deserialization, linked
+   extension 2,624 bytes, complete image 21,272 bytes with 5,864 bytes
+   headroom (§6).
+4. Appended-code placement rules: a future official image larger than
+   `0x6900` bytes overlaps the extension region and invalidates the
+   layout — check against the manifest sizes at each update.
+5. The OEM report framing consumed by `0x278C` (field `[2]`, length
+   formula at `0x2856–0x285E`) and the OEM 1 ms tick RAM address: pinned
+   open items in the shim (§7); both must be decoded before any
+   executable claim on the real send path.
+6. Real-image RAM placement and initialization for the extension state
+   (the research linker keeps `.data`/`.bss` after flash sections for
+   measurement only).
+7. The decisive offline verification: a NEW V122 execution profile on the
+   chgame bounded assurance model (the existing gate is hash-pinned to
+   the QMK binary and must not be modified) driving the patched pipeline
+   end to end and comparing complete HID reports against the engine —
+   including stock-default byte-equivalence and remapped keys replacing,
+   not duplicating, OEM output. The engine and shim suites verify the
+   model logic; this step verifies the actual V122 execution path.
 4. Behavioral equivalence harness: stock-default keymap → byte-identical
    reports vs. the unpatched OEM builder, run offline against scripted scans.
 
-## 6. Demonstrated offline patcher (research artifact)
+## 10. Demonstrated offline patcher (research artifact)
 
 `keyboards/ck5200/tools/stock_extension_patch.py` applies or reverses the
 8-byte registration redirect against the hash-verified V122 image and emits

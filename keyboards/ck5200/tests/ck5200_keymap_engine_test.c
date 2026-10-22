@@ -1,8 +1,7 @@
 /*
- * Behavioral tests for the CK-5200 stock-extension keymap engine.
- * Offline research artifact for the programmable stock-extension
- * feasibility milestone (deliverable 2). See
- * keyboards/ck5200/docs/stock-extension-feasibility.md.
+ * Behavioral tests for the CK-5200 stock-extension keymap engine v2.
+ * Offline research artifact for the correctness-and-integration milestone.
+ * See keyboards/ck5200/docs/stock-extension-feasibility.md.
  *
  * Compile and run (host, no deps):
  *   cc -std=c99 -Wall -Werror -Os -I stock_extension \
@@ -15,14 +14,13 @@
 #include <stdio.h>
 #include <string.h>
 
-/* HID usage codes used below. */
 enum {
     U_NONE = 0x00,
     U_A = 0x04, U_B = 0x05, U_C = 0x06, U_D = 0x07, U_E = 0x08, U_F = 0x09,
-    U_G = 0x0A, U_H = 0x0B, U_I = 0x0C, U_J = 0x0D, U_K = 0x0E,
-    U_L = 0x0F, U_M = 0x10, U_N = 0x11, U_O = 0x12, U_P = 0x13,
-    U_Q = 0x14, U_R = 0x15, U_S = 0x16, U_T = 0x17, U_U = 0x18,
-    U_V = 0x19, U_W = 0x1A, U_X = 0x1B, U_Y = 0x1C, U_Z = 0x1D,
+    U_G = 0x0A, U_H = 0x0B, U_I = 0x0C, U_J = 0x0D, U_K = 0x0E, U_L = 0x0F,
+    U_M = 0x10, U_N = 0x11, U_O = 0x12, U_P = 0x13, U_Q = 0x14, U_R = 0x15,
+    U_S = 0x16, U_T = 0x17, U_U = 0x18, U_V = 0x19, U_W = 0x1A, U_X = 0x1B,
+    U_Y = 0x1C, U_Z = 0x1D,
     U_0 = 0x27, U_1 = 0x1E, U_2 = 0x1F, U_3 = 0x20, U_4 = 0x21,
     U_5 = 0x22, U_6 = 0x23, U_7 = 0x24, U_8 = 0x25, U_9 = 0x26,
     U_ENTER = 0x28, U_ESC = 0x29, U_BACKSPACE = 0x2A, U_TAB = 0x2B,
@@ -32,9 +30,11 @@ enum {
 };
 
 static int failures = 0;
+static int passes = 0;
 #define CHECK(cond, what)                                                  \
     do {                                                                   \
         if (cond) {                                                        \
+            passes++;                                                      \
             printf("PASS %s\n", what);                                     \
         } else {                                                           \
             failures++;                                                    \
@@ -42,389 +42,480 @@ static int failures = 0;
         }                                                                  \
     } while (0)
 
-/* Row/col to matrix bytes: col c in row r sets bit (1 << c) in matrix[r].
- * ck_pos(r, c) is the engine's position index; matrix rows mirror the
- * ledger's r/b notation. */
-static void key(ck_engine_t *e, uint8_t matrix[CK_ROWS], int row, int col,
-                bool down, uint8_t *mods, uint8_t usages[CK_REPORT_KEYS],
-                uint8_t *count)
+typedef struct {
+    ck_engine_t e;
+    uint8_t matrix[CK_ROWS];
+    uint32_t now;
+    uint8_t mods, usages[CK_REPORT_KEYS], count;
+} rig_t;
+
+/* The single shared stock transcription (see ck5200_default_keymap.h):
+ * one fixture for the engine and shim test binaries, so corrections
+ * cannot diverge between them. */
+#include "ck5200_default_keymap.h"
+
+static void rig_init(rig_t *r, const ck_keymap_t *map)
 {
-    if (down)
-        matrix[row] |= (uint8_t)(1u << col);
-    else
-        matrix[row] &= (uint8_t)~(1u << col);
-    ck_engine_tick(e, matrix, mods, usages, count);
+    memset(r, 0, sizeof(*r));
+    ck_engine_init(&r->e, map);
 }
 
-static bool report_is(uint8_t mods, const uint8_t *us, uint8_t count,
-                      uint8_t want_mods, const uint16_t *want, uint8_t want_count)
+static void tick(rig_t *r)
 {
-    if (mods != want_mods || count != want_count)
+    ck_engine_tick(&r->e, r->matrix, r->now,
+                   &r->mods, r->usages, &r->count);
+}
+
+static void key(rig_t *r, int row, int col, bool down)
+{
+    if (down)
+        r->matrix[row] |= (uint8_t)(1u << col);
+    else
+        r->matrix[row] &= (uint8_t)~(1u << col);
+    tick(r);
+}
+
+static void advance(rig_t *r, uint32_t ms)
+{
+    r->now += ms;
+    tick(r);   /* time-driven tick: no matrix change required */
+}
+
+static bool report_is(rig_t *r, uint8_t want_mods, const uint16_t *want, uint8_t n)
+{
+    if (r->mods != want_mods || r->count != n)
         return false;
-    for (uint8_t i = 0; i < count; i++)
-        if (us[i] != (uint8_t)want[i])
+    for (uint8_t i = 0; i < n; i++)
+        if (r->usages[i] != (uint8_t)want[i])
             return false;
     return true;
 }
 
-/* ------------------------------------------------------------------ */
-/* Default keymap: the stock ledger transcription (base/SYM/NAV).       */
-/* Consumers, GUI/Ctrl modifiers, and the Clicks key keep their stock   */
-/* definitions; the engine models the boot-report subset.                */
-/* ------------------------------------------------------------------ */
 
-static void stock_keymap(ck_keymap_t *m)
-{
-    memset(m, 0, sizeof(*m));
-    ck_key_def_t *k;
-#define SET(r, c, base, sym, nav)             \
-    do {                                      \
-        k = &m->keys[ck_pos(r, c)];           \
-        k->usage[CK_LAYER_BASE] = (base);     \
-        k->usage[CK_LAYER_SYM] = (sym);       \
-        k->usage[CK_LAYER_NAV] = (nav);        \
-    } while (0)
+/* ---------------- default behavior ---------------- */
 
-    /* Row 0: q u k Backspace Enter (0/20 = consumer, not modeled) */
-    SET(0, 0, U_Q, U_1, U_NONE);
-    SET(0, 1, U_U, U_7, U_NONE);
-    SET(0, 2, U_K, U_QUOTE, U_DOWN);
-    SET(0, 3, U_BACKSPACE, U_NONE, U_NONE);
-    SET(0, 4, U_ENTER, U_NONE, U_NONE);
-    /* Row 1: w i d l v (1/20 = consumer) */
-    SET(1, 0, U_W, U_2, U_UP);
-    SET(1, 1, U_I, U_8, U_UP);
-    SET(1, 2, U_D, U_SEMI, U_RIGHT);
-    SET(1, 3, U_L, U_QUOTE, U_RIGHT);
-    SET(1, 4, U_V, U_SLASH, U_NONE);
-    /* Row 2: e o f [2/08 UNUSED] b LeftGUI */
-    SET(2, 0, U_E, U_3, U_NONE);
-    SET(2, 1, U_O, U_9, U_NONE);
-    SET(2, 2, U_F, U_SEMI, U_NONE);
-    SET(2, 3, U_NONE, U_NONE, U_NONE);   /* the spare crossing */
-    SET(2, 4, U_B, U_1, U_NONE);
-    k = &m->keys[ck_pos(2, 5)];
-    k->usage[CK_LAYER_BASE] = U_NONE; k->mods = CK_MOD_LGUI;
-    /* Row 3: r p g z n Space */
-    SET(3, 0, U_R, U_4, U_NONE);
-    SET(3, 1, U_P, U_0, U_NONE);
-    SET(3, 2, U_G, U_9, U_NONE);
-    SET(3, 3, U_Z, U_QUOTE, U_NONE);
-    SET(3, 4, U_N, U_COMMA, U_NONE);
-    SET(3, 5, U_SPACE, U_NONE, U_NONE);
-    /* Row 4: t a h x m LeftCtrl */
-    SET(4, 0, U_T, U_5, U_NONE);
-    SET(4, 1, U_A, U_MINUS, U_LEFT);
-    SET(4, 2, U_H, U_0, U_NONE);
-    SET(4, 3, U_X, U_7, U_NONE);
-    SET(4, 4, U_M, U_DOT, U_NONE);
-    k = &m->keys[ck_pos(4, 5)];
-    k->usage[CK_LAYER_BASE] = U_NONE; k->mods = CK_MOD_LCTL;
-    /* Row 5: y s [Clicks key] c companion consumer */
-    SET(5, 0, U_Y, U_6, U_NONE);
-    SET(5, 1, U_S, U_SLASH, U_DOWN);
-    SET(5, 2, U_J, U_NONE, U_LEFT);      /* Clicks key (stock: Tab/Control) */
-    SET(5, 3, U_C, U_2, U_NONE);
-    /* 5/10 companion = stock SYM switch; modeled as one-shot. */
-    k = &m->keys[ck_pos(5, 4)];
-    k->layer_switch = CK_LAYER_SYM;
-    k->activation = CK_ACT_ONESHOT;
-#undef SET
-}
-
-/* Test: stock-default keymap emits the ledger's outputs. */
-static void test_stock_default_behavior(void)
+static void test_stock_default(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    rig_t r;
+    rig_init(&r, &map);
 
-    /* Base layer letters, press and release. */
-    key(&e, matrix, 0, 0, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_Q}, 1),
-          "stock base: q emits HID q");
-    key(&e, matrix, 0, 0, false, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, NULL, 0),
-          "stock base: q release clears the report");
+    key(&r, 0, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_Q}, 1), "stock base: q emits HID q");
+    key(&r, 0, 0, false);
+    CHECK(r.count == 0, "stock base: q release clears");
 
-    /* Modifiers: LeftGUI position holds the GUI bit. */
-    key(&e, matrix, 2, 5, true, &mods, usages, &count);
-    CHECK(mods == CK_MOD_LGUI, "stock base: LeftGUI position sets the GUI bit");
-    key(&e, matrix, 0, 0, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, CK_MOD_LGUI, (uint16_t[]){U_Q}, 1),
-          "stock base: GUI + q composes");
-    key(&e, matrix, 0, 0, false, &mods, usages, &count);
-    key(&e, matrix, 2, 5, false, &mods, usages, &count);
-    CHECK(mods == 0 && count == 0, "stock base: modifier release clears");
+    /* Corrected Shift position: 2/03 holds Left Shift. */
+    key(&r, 2, 3, true);
+    CHECK(r.mods == CK_MOD_LSHIFT, "correction: 2/03 is Left Shift, not a spare");
+    key(&r, 0, 0, true);
+    CHECK(report_is(&r, CK_MOD_LSHIFT, (uint16_t[]){U_Q}, 1),
+          "correction: Shift + q composes");
+    key(&r, 0, 0, false);
+    key(&r, 2, 3, false);
+    CHECK(r.mods == 0 && r.count == 0, "correction: Shift release clears");
 
-    /* SYM layer via the one-shot companion: r emits 4. */
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);   /* companion down */
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);   /* r down */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_4}, 1),
-          "stock sym: one-shot companion + r emits 4");
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);  /* companion up */
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    CHECK(count == 0, "stock sym: releases clear after one-shot use");
+    /* GUI and Ctrl positions. */
+    key(&r, 2, 5, true);
+    CHECK(r.mods == CK_MOD_LGUI, "stock base: LeftGUI bit set");
+    key(&r, 2, 5, false);
+    key(&r, 4, 5, true);
+    CHECK(r.mods == CK_MOD_LCTL, "stock base: LeftCtrl bit set");
+    key(&r, 4, 5, false);
 
-    /* A second press after the one-shot reverted emits the base letter. */
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_R}, 1),
-          "stock sym: one-shot consumed once, then base returns");
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
+    /* One-shot SYM: r emits 4, reverts to base. */
+    key(&r, 5, 4, true);
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_4}, 1), "stock sym: one-shot + r emits 4");
+    key(&r, 3, 0, false);
+    key(&r, 5, 4, false);
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_R}, 1),
+          "stock sym: one-shot consumed once, base returns");
+    key(&r, 3, 0, false);
+    CHECK(r.count == 0, "stock sym: clean end state");
 }
 
-/* Test: the NAV remap goal — Esc, Tab, Undo, Redo, arrows, with correct
- * releases and configurable activation. */
-static void test_nav_custom_remap(void)
+/* ------------- the P1 regression: per-layer modifiers ------------- */
+
+static void test_nav_remap_no_base_regression(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
+    /* NAV Undo on m (4/04): usage z with GUI modifier, NAV layer only. */
+    set_plain_any(&map, CK_LAYER_NAV, 4, 4, U_Z, CK_MOD_LGUI);
+    /* NAV Redo on c (5/03): usage z with GUI+SHIFT, NAV layer only. */
+    set_plain_any(&map, CK_LAYER_NAV, 5, 3, U_Z, CK_MOD_LGUI | CK_MOD_LSHIFT);
+    /* NAV Esc on the Shift position's NAV layer (2/03 nav). */
+    set_plain_any(&map, CK_LAYER_NAV, 2, 3, U_ESC, 0);
+    /* NAV Tab on n (3/04). */
+    set_plain_any(&map, CK_LAYER_NAV, 3, 4, U_TAB, 0);
+    /* NAV activator: hold on Backspace position (0/03). */
+    {
+        ck_action_t *a = &map.action[CK_LAYER_BASE][ck_pos(0, 3)];
+        memset(a, 0, sizeof(*a));
+        a->activation = CK_ACT_HOLD;
+        a->layer_switch = CK_LAYER_NAV;
+    }
+    CHECK(ck_keymap_validate(&map) == 0, "nav fixture validates");
 
-    /* NAV assignments for the goal: spare 2/08 = Esc; NAV layer adds
-     * Tab (3/10 n), Undo = GUI+Z (4/10 m), Redo = GUI+SHIFT+Z (5/08 c).
-     * Stock NAV arrows stay. */
-    map.keys[ck_pos(2, 3)].usage[CK_LAYER_NAV] = U_ESC;
-    map.keys[ck_pos(3, 4)].usage[CK_LAYER_NAV] = U_TAB;
-    map.keys[ck_pos(4, 4)].usage[CK_LAYER_NAV] = U_Z;
-    map.keys[ck_pos(4, 4)].mods = CK_MOD_LGUI;            /* Undo = CMD+Z */
-    map.keys[ck_pos(5, 3)].usage[CK_LAYER_NAV] = U_Z;
-    map.keys[ck_pos(5, 3)].mods = CK_MOD_LGUI | CK_MOD_LSHIFT; /* Redo */
+    rig_t r;
+    rig_init(&r, &map);
 
-    /* A NAV layer key: hold mode on 0/04 (Backspace position acts as the
-     * NAV switch in this custom profile). */
-    ck_key_def_t *nav = &map.keys[ck_pos(0, 3)];
-    nav->usage[CK_LAYER_BASE] = U_NONE;
-    nav->layer_switch = CK_LAYER_NAV;
-    nav->activation = CK_ACT_HOLD;
+    /* BASE layer typing is unchanged by the NAV assignments. */
+    key(&r, 4, 4, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_M}, 1),
+          "no-regression: base m is plain m (no GUI)");
+    key(&r, 4, 4, false);
+    key(&r, 5, 3, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_C}, 1),
+          "no-regression: base c is plain c (no GUI+SHIFT)");
+    key(&r, 5, 3, false);
+    key(&r, 3, 4, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_N}, 1),
+          "no-regression: base n is plain n (no Tab)");
+    key(&r, 3, 4, false);
 
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
-
-    /* HOLD activation: NAV while held. */
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 2, 3, true, &mods, usages, &count);   /* spare */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_ESC}, 1),
-          "nav remap: spare 2/08 emits Esc under NAV");
-    key(&e, matrix, 3, 4, true, &mods, usages, &count);   /* n */
-    CHECK(report_is(mods, usages, count, 0,
-                    (uint16_t[]){U_ESC, U_TAB}, 2),
-          "nav remap: Esc + Tab held together");
-    key(&e, matrix, 3, 4, false, &mods, usages, &count);
-    key(&e, matrix, 2, 3, false, &mods, usages, &count);
-    CHECK(count == 0, "nav remap: releases clear Esc and Tab");
-
-    /* Undo: NAV + m emits CMD+Z. */
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 4, 4, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, CK_MOD_LGUI, (uint16_t[]){U_Z}, 1),
-          "nav remap: Undo (CMD+Z) emits GUI modifier with z");
-    key(&e, matrix, 4, 4, false, &mods, usages, &count);
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    CHECK(mods == 0 && count == 0, "nav remap: Undo release clears modifier");
-
-    /* Redo: NAV + c emits SHIFT+CMD+Z. */
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 5, 3, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, CK_MOD_LGUI | CK_MOD_LSHIFT,
-                    (uint16_t[]){U_Z}, 1),
-          "nav remap: Redo (SHIFT+CMD+Z) composes both modifiers");
-    key(&e, matrix, 5, 3, false, &mods, usages, &count);
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    CHECK(mods == 0 && count == 0, "nav remap: Redo release clears");
-
-    /* Arrows on NAV still work from the stock transcription. */
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 1, 0, true, &mods, usages, &count);   /* w -> Up */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_UP}, 1),
-          "nav remap: w emits Up under NAV");
-    key(&e, matrix, 1, 0, false, &mods, usages, &count);
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    CHECK(count == 0, "nav remap: arrow release clears");
+    /* And the NAV actions produce the intended reports. */
+    key(&r, 0, 3, true);              /* hold NAV */
+    key(&r, 4, 4, true);
+    CHECK(report_is(&r, CK_MOD_LGUI, (uint16_t[]){U_Z}, 1),
+          "nav: Undo (GUI+Z) emits correctly");
+    key(&r, 4, 4, false);
+    key(&r, 5, 3, true);
+    CHECK(report_is(&r, CK_MOD_LGUI | CK_MOD_LSHIFT, (uint16_t[]){U_Z}, 1),
+          "nav: Redo (GUI+SHIFT+Z) emits correctly");
+    key(&r, 5, 3, false);
+    /* NAV Esc on the Shift position's NAV action. */
+    key(&r, 2, 3, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_ESC}, 1),
+          "nav: Esc on 2/03 NAV action");
+    key(&r, 2, 3, false);
+    /* Base 2/03 is still Shift: released NAV, press 2/03 -> Shift bit. */
+    key(&r, 0, 3, false);
+    key(&r, 2, 3, true);
+    CHECK(r.mods == CK_MOD_LSHIFT,
+          "nav: base 2/03 still Left Shift after NAV use");
+    key(&r, 2, 3, false);
+    CHECK(r.count == 0 && r.mods == 0, "nav: releases clean");
 }
 
-/* Test: no stuck keys when the layer changes while a key is held. */
-static void test_release_after_layer_switch(void)
+/* ---------------- activation modes (ms timing) ---------------- */
+
+static void test_hold_and_toggle_and_oneshot(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    ck_key_def_t *nav = &map.keys[ck_pos(0, 3)];
-    nav->usage[CK_LAYER_BASE] = U_NONE;
-    nav->layer_switch = CK_LAYER_NAV;
-    nav->activation = CK_ACT_HOLD;
+    ck_action_t *hold_key = &map.action[0][ck_pos(0, 3)];
+    hold_key->activation = CK_ACT_HOLD; hold_key->layer_switch = CK_LAYER_NAV;
+    ck_action_t *toggle_key = &map.action[0][ck_pos(0, 4)];
+    toggle_key->activation = CK_ACT_TOGGLE; toggle_key->layer_switch = CK_LAYER_NAV;
+    /* NAV usage to observe: w -> Up. */
+    rig_t r;
+    rig_init(&r, &map);
 
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    /* HOLD: layer while held, gone on release. */
+    key(&r, 0, 3, true);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_UP}, 1), "hold: w emits Up while held");
+    key(&r, 0, 3, false);
+    key(&r, 1, 0, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_W}, 1), "hold: base w after release");
+    key(&r, 1, 0, false);
 
-    /* Press q (base), then hold NAV, then release q: report must be empty
-     * even though the effective layer is NAV at release time. */
-    key(&e, matrix, 0, 0, true, &mods, usages, &count);
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_Q}, 1),
-          "layer switch: held base key keeps its usage under NAV");
-    key(&e, matrix, 0, 0, false, &mods, usages, &count);
-    CHECK(count == 0, "layer switch: release under a different layer clears");
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    CHECK(count == 0, "layer switch: switch release leaves a clean report");
+    /* TOGGLE: press/release flips on, again flips off. */
+    key(&r, 0, 4, true);
+    key(&r, 0, 4, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_UP}, 1), "toggle: on after first press");
+    key(&r, 1, 0, false);
+    key(&r, 0, 4, true);
+    key(&r, 0, 4, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_W}, 1), "toggle: off after second press");
+    key(&r, 1, 0, false);
 
-    /* Reverse order: press under NAV, release on base. */
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 1, 0, true, &mods, usages, &count);   /* Up */
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);  /* layer gone */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_UP}, 1),
-          "layer switch: nav key held after layer release keeps its usage");
-    key(&e, matrix, 1, 0, false, &mods, usages, &count);
-    CHECK(count == 0, "layer switch: late release clears the arrow");
+    /* ONESHOT: survives its release, consumed by one press, expires by
+     * time if unused. */
+    key(&r, 5, 4, true);
+    key(&r, 5, 4, false);
+    CHECK(ck_engine_next_deadline(&r.e) != CK_NO_DEADLINE,
+          "oneshot: engine reports its expiry deadline");
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_4}, 1),
+          "oneshot: applies after its own release");
+    key(&r, 3, 0, false);
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_R}, 1),
+          "oneshot: consumed by exactly one press");
+    key(&r, 3, 0, false);
+
+    /* Unused one-shot expires by time, no matrix event needed. */
+    key(&r, 5, 4, true);
+    key(&r, 5, 4, false);
+    advance(&r, 1500);
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_R}, 1),
+          "oneshot: expires by elapsed time without a press");
+    key(&r, 3, 0, false);
 }
 
-/* Test: TOGGLE activation flips a layer on and off. */
-static void test_toggle_activation(void)
+static void test_tap_timing_and_time_driven_release(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    map.keys[ck_pos(2, 3)].usage[CK_LAYER_NAV] = U_ESC;
-    ck_key_def_t *nav = &map.keys[ck_pos(0, 3)];
-    nav->usage[CK_LAYER_BASE] = U_NONE;
-    nav->layer_switch = CK_LAYER_NAV;
-    nav->activation = CK_ACT_TOGGLE;
+    ck_action_t *t = &map.action[0][ck_pos(5, 4)];
+    t->activation = CK_ACT_TAP;
+    t->layer_switch = CK_LAYER_SYM;
+    t->tap_usage = U_ESC;
+    t->tap_ms = 200;
 
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    rig_t r;
+    rig_init(&r, &map);
 
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    key(&e, matrix, 2, 3, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_ESC}, 1),
-          "toggle: first press switches NAV on (spare emits Esc)");
-    key(&e, matrix, 2, 3, false, &mods, usages, &count);
-    key(&e, matrix, 0, 3, true, &mods, usages, &count);
-    key(&e, matrix, 0, 3, false, &mods, usages, &count);
-    key(&e, matrix, 2, 3, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, NULL, 0),
-          "toggle: second press switches back to base (spare emits nothing)");
-    key(&e, matrix, 2, 3, false, &mods, usages, &count);
+    /* Quick solo tap: press at 100ms, release at 150ms -> Esc fires. */
+    r.now = 100;
+    key(&r, 5, 4, true);
+    r.now = 150;
+    key(&r, 5, 4, false);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_ESC}, 1),
+          "tap: quick solo release emits tap usage");
+
+    /* THE decisive check: the release report arrives from a TIME-DRIVEN
+     * tick with NO matrix change and no other key event. */
+    uint32_t d = ck_engine_next_deadline(&r.e);
+    CHECK(d != CK_NO_DEADLINE, "tap: engine schedules the release tick");
+    r.now = d + 1;
+    tick(&r);
+    CHECK(r.count == 0,
+          "tap: release reaches the host without any further key event");
+
+    /* Held past the window: layer semantics, no tap usage on release. */
+    r.now = 1000;
+    key(&r, 5, 4, true);
+    advance(&r, 250);                       /* still held, window closed */
+    key(&r, 3, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_4}, 1),
+          "tap: held past window gives the layer (r -> 4)");
+    r.now = 1400;
+    key(&r, 5, 4, false);                   /* slow release: no tap */
+    CHECK(report_is(&r, 0, (uint16_t[]){U_4}, 1),
+          "tap: slow release emits no tap usage");
+    key(&r, 3, 0, false);
+    CHECK(r.count == 0, "tap: clean end state");
+
+    /* Second key inside the window suppresses the tap usage. */
+    r.now = 2000;
+    key(&r, 5, 4, true);
+    key(&r, 3, 0, true);                    /* consumes the layer */
+    r.now = 2050;
+    key(&r, 5, 4, false);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_4}, 1),
+          "tap: second key inside window suppresses tap usage");
+    key(&r, 3, 0, false);
+    CHECK(r.count == 0, "tap: final release clears");
 }
 
-/* Test: TAP activation emits tap_usage on a quick solo release, and only
- * the layer when held longer or followed by another key. */
-static void test_tap_activation(void)
+/* ---------------- overlapping activators ---------------- */
+
+static void test_overlapping_activators(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    ck_key_def_t *sym = &map.keys[ck_pos(5, 4)];
-    sym->activation = CK_ACT_TAP;
-    sym->tap_usage = U_ESC;      /* tap = Esc, hold = SYM layer */
-    sym->tap_ticks = 3;
+    ck_action_t *a1 = &map.action[0][ck_pos(0, 3)];
+    a1->activation = CK_ACT_HOLD; a1->layer_switch = CK_LAYER_NAV;
+    ck_action_t *a2 = &map.action[0][ck_pos(0, 4)];
+    a2->activation = CK_ACT_HOLD; a2->layer_switch = CK_LAYER_SYM;
 
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    rig_t r;
+    rig_init(&r, &map);
 
-    /* Quick solo tap -> Esc for exactly one report cycle. */
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_ESC}, 1),
-          "tap: quick solo release emits tap usage (Esc)");
-    ck_engine_tick(&e, matrix, &mods, usages, &count);
-    CHECK(count == 0, "tap: tap usage lasts exactly one report cycle");
-
-    /* Held past the window with another key: SYM layer, no tap usage. */
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);
-    ck_engine_tick(&e, matrix, &mods, usages, &count);
-    ck_engine_tick(&e, matrix, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);   /* r under SYM */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_4}, 1),
-          "tap: holding the layer key gives the SYM layer (r -> 4)");
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);
-    CHECK(count == 0, "tap: releases after held use clear the report");
-
-    /* Quick release but a second key was pressed inside the window: the
-     * layer applied to that key, so no tap usage may fire. */
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);   /* r -> 4 */
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);  /* quick release */
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_4}, 1),
-          "tap: second key inside the window suppresses the tap usage");
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    CHECK(count == 0, "tap: final release clears");
+    /* Press NAV holder, then SYM holder: the most recent wins. */
+    key(&r, 0, 3, true);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_UP}, 1), "overlap: NAV first -> Up");
+    key(&r, 0, 4, true);
+    key(&r, 1, 0, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_2}, 1),
+          "overlap: SYM activator pressed later takes precedence");
+    /* Release the SYM holder: NAV holder still held -> NAV returns. */
+    key(&r, 0, 4, false);
+    key(&r, 1, 0, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_UP}, 1),
+          "overlap: releasing the later activator falls back to the earlier");
+    key(&r, 1, 0, false);
+    key(&r, 0, 3, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_W}, 1),
+          "overlap: base after all activators released");
+    key(&r, 1, 0, false);
+    CHECK(r.count == 0, "overlap: clean end state");
 }
 
-/* Test: ONESHOT activation applies the layer to exactly one next press. */
-static void test_oneshot_activation(void)
+/* ---------------- release across layer transitions ---------------- */
+
+static void test_release_across_layer_switch(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    ck_key_def_t *sym = &map.keys[ck_pos(5, 4)];
-    sym->activation = CK_ACT_ONESHOT;
+    ck_action_t *a = &map.action[0][ck_pos(0, 3)];
+    a->activation = CK_ACT_HOLD; a->layer_switch = CK_LAYER_NAV;
 
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    rig_t r;
+    rig_init(&r, &map);
 
-    key(&e, matrix, 5, 4, true, &mods, usages, &count);
-    key(&e, matrix, 5, 4, false, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_4}, 1),
-          "one-shot: released companion still applies to the next press");
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    key(&e, matrix, 3, 0, true, &mods, usages, &count);
-    CHECK(report_is(mods, usages, count, 0, (uint16_t[]){U_R}, 1),
-          "one-shot: the following press returns to base");
-    key(&e, matrix, 3, 0, false, &mods, usages, &count);
-    CHECK(count == 0, "one-shot: clean end state");
+    /* Press q on base, then hold NAV, then release q: clean. */
+    key(&r, 0, 0, true);
+    key(&r, 0, 3, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_Q}, 1),
+          "transition: held base key keeps its usage under NAV");
+    key(&r, 0, 0, false);
+    CHECK(r.count == 0, "transition: release under another layer clears");
+    key(&r, 0, 3, false);
+
+    /* Press Up under NAV, release the activator, then release the key. */
+    key(&r, 0, 3, true);
+    key(&r, 1, 0, true);
+    key(&r, 0, 3, false);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_UP}, 1),
+          "transition: nav key held after layer release keeps its usage");
+    key(&r, 1, 0, false);
+    CHECK(r.count == 0, "transition: late release clears the arrow");
 }
 
-/* Test: chord sanity — four simultaneous usages plus a modifier. */
-static void test_chords_and_rollover(void)
+/* ---------------- 108-position sweep ---------------- */
+
+static void test_all_positions_all_layers(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    ck_engine_t e;
-    ck_engine_init(&e, &map);
-    uint8_t matrix[CK_ROWS] = {0};
-    uint8_t mods, usages[CK_REPORT_KEYS], count;
+    /* Hold-activators for each layer placed on 0/04 (SYM) and 0/03 (NAV). */
+    ck_action_t *sym_hold = &map.action[0][ck_pos(0, 4)];
+    sym_hold->activation = CK_ACT_HOLD; sym_hold->layer_switch = CK_LAYER_SYM;
+    ck_action_t *nav_hold = &map.action[0][ck_pos(0, 3)];
+    nav_hold->activation = CK_ACT_HOLD; nav_hold->layer_switch = CK_LAYER_NAV;
+    CHECK(ck_keymap_validate(&map) == 0, "sweep: fixture validates");
 
-    key(&e, matrix, 4, 5, true, &mods, usages, &count);   /* LeftCtrl */
-    key(&e, matrix, 0, 0, true, &mods, usages, &count);    /* q */
-    key(&e, matrix, 0, 1, true, &mods, usages, &count);   /* u */
-    key(&e, matrix, 1, 0, true, &mods, usages, &count);   /* w */
-    key(&e, matrix, 1, 1, true, &mods, usages, &count);   /* i */
-    CHECK(mods == CK_MOD_LCTL && count == 4,
-          "chord: ctrl holds with four usages");
-    key(&e, matrix, 1, 1, false, &mods, usages, &count);
-    CHECK(mods == CK_MOD_LCTL && count == 3,
-          "chord: partial release keeps the rest");
-    key(&e, matrix, 1, 0, false, &mods, usages, &count);
-    key(&e, matrix, 0, 1, false, &mods, usages, &count);
-    key(&e, matrix, 0, 0, false, &mods, usages, &count);
-    key(&e, matrix, 4, 5, false, &mods, usages, &count);
-    CHECK(mods == 0 && count == 0, "chord: full release clears everything");
+    int layer_holders[CK_LAYERS][2] = {
+        {-1, -1}, {0, 4}, {0, 3}
+    };
+
+    for (int layer = 0; layer < CK_LAYERS; layer++) {
+        rig_t r;
+        rig_init(&r, &map);
+        if (layer != CK_LAYER_BASE) {
+            key(&r, layer_holders[layer][0], layer_holders[layer][1], true);
+        }
+        for (int row = 0; row < CK_ROWS; row++) {
+            for (int col = 0; col < CK_COLS; col++) {
+                int pos = ck_pos(row, col);
+                /* Skip the two test activators on every layer: pressing
+                 * them mid-sweep would toggle/release the held layer. */
+                if (pos == ck_pos(0, 3) || pos == ck_pos(0, 4))
+                    continue;
+                const ck_action_t *a = ck_engine_resolve_action(&map, layer, pos);
+                key(&r, row, col, true);
+                bool is_layer_action = a->activation != CK_ACT_NONE;
+                uint16_t want_usage = a->usage;
+                uint8_t want_mods = a->mods;
+                if (is_layer_action || (want_usage == 0 && want_mods == 0)) {
+                    if (!is_layer_action)
+                        CHECK(r.count == 0,
+                              "sweep: empty action emits nothing");
+                } else if (want_usage == 0) {
+                    CHECK(r.mods == want_mods && r.count == 0,
+                          "sweep: modifier-only action emits its bits");
+                } else {
+                    CHECK(report_is(&r, want_mods, &want_usage, 1),
+                          "sweep: plain action emits usage+mods");
+                }
+                key(&r, row, col, false);
+                /* After release the report may retain the holder's layer
+                 * and nothing else. */
+                CHECK(r.count == 0,
+                      "sweep: every release clears its contribution");
+            }
+        }
+        /* Any still-held modifier state must be gone after releases. */
+        CHECK(r.mods == 0, "sweep: no modifier leaks after all releases");
+    }
+    printf("PASS sweep: all 108 layer-position combinations exercised\n");
+    passes++;
+}
+
+/* ---------------- malformed input and keymaps ---------------- */
+
+static void test_boundary_bits_and_malformed_keymap(void)
+{
+    ck_keymap_t map;
+    stock_keymap(&map);
+    rig_t r;
+    rig_init(&r, &map);
+
+    /* Bits 0x40/0x80 in a row are outside the six-column matrix and must
+     * be ignored, not treated as a phantom seventh/eighth key. */
+    r.matrix[0] = 0xC0;
+    tick(&r);
+    CHECK(r.count == 0 && r.mods == 0, "boundary: bits 0x40/0x80 ignored");
+    r.matrix[0] = 0x00;
+    tick(&r);
+    CHECK(r.count == 0, "boundary: clear after masked bits");
+
+    /* Out-of-page usage: validation flags it, runtime ignores it. */
+    ck_keymap_t bad = map;
+    bad.action[CK_LAYER_BASE][ck_pos(0, 0)].usage = 0x1FF;
+    CHECK(ck_keymap_validate(&bad) > 0, "malformed: out-of-page usage flagged");
+    rig_t rb;
+    rig_init(&rb, &bad);
+    key(&rb, 0, 0, true);
+    CHECK(rb.count == 0, "malformed: invalid usage emits nothing");
+    key(&rb, 0, 0, false);
+
+    /* Bad layer target: flagged, and the layer action cannot resolve. */
+    ck_keymap_t bad2 = map;
+    bad2.action[0][ck_pos(5, 4)].layer_switch = 3;
+    CHECK(ck_keymap_validate(&bad2) > 0, "malformed: bad layer target flagged");
+}
+
+/* ---------------- chords and rollover ---------------- */
+
+static void test_chords(void)
+{
+    ck_keymap_t map;
+    stock_keymap(&map);
+    rig_t r;
+    rig_init(&r, &map);
+
+    key(&r, 4, 5, true);   /* LeftCtrl */
+    key(&r, 0, 0, true);
+    key(&r, 0, 1, true);
+    key(&r, 1, 0, true);
+    key(&r, 1, 1, true);
+    CHECK(r.mods == CK_MOD_LCTL && r.count == 4, "chord: ctrl with 4 usages");
+    key(&r, 1, 1, false);
+    CHECK(r.mods == CK_MOD_LCTL && r.count == 3, "chord: partial release");
+    key(&r, 1, 0, false);
+    key(&r, 0, 1, false);
+    key(&r, 0, 0, false);
+    key(&r, 4, 5, false);
+    CHECK(r.mods == 0 && r.count == 0, "chord: full release clears");
 }
 
 int main(void)
 {
-    test_stock_default_behavior();
-    test_nav_custom_remap();
-    test_release_after_layer_switch();
-    test_toggle_activation();
-    test_tap_activation();
-    test_oneshot_activation();
-    test_chords_and_rollover();
+    test_stock_default();
+    test_nav_remap_no_base_regression();
+    test_hold_and_toggle_and_oneshot();
+    test_tap_timing_and_time_driven_release();
+    test_overlapping_activators();
+    test_release_across_layer_switch();
+    test_all_positions_all_layers();
+    test_boundary_bits_and_malformed_keymap();
+    test_chords();
     printf(failures == 0 ? "ok\n" : "==== %d failure(s) ====\n", failures);
     return failures == 0 ? 0 : 1;
 }

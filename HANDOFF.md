@@ -67,6 +67,21 @@ QMK comparison recorded. Firmware CI now runs the host Python tests.
 Remaining before any installable claim: the callback shim, the
 full-pipeline harness, and the unchanged R3 recovery gate.
 
+2026-10-22 (later): the review's four findings are fixed and the
+correctness-and-integration increment is delivered — engine v2 with
+per-layer actions, immutable press snapshots, an activator stack, and
+millisecond deadline timing (tap release proven without any further key
+event); the 2/03 Left Shift correction verified at V122 `0x2AE6` and
+applied to the shared fixture and the ledger; the 108-position sweep
+plus no-base-regression, overlap, and malformed-input tests (258 engine
+checks + 21 shim/serialization checks, all hosted in firmware CI); the
+measured packed record (350 B) and the fully linked research image
+(21,272 B total, extension 2,624 B at 0x6900, headroom 5,864 B); and the
+replacement shim, which emits exactly one frame per tick and never
+duplicates OEM output. Remaining, recorded as pinned open items: the
+exact 0x278C framing, the tick RAM address, real-image RAM placement,
+and the V122 emulator profile for the decisive end-to-end verification.
+
 All physical operations remain unauthorized.
 
 ## Current stopping point, 2026-10-21 (M4 software closed)

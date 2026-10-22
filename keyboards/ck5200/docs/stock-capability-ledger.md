@@ -45,7 +45,7 @@ classification adds the configuration inputs proven in the
 | 2/01 | e | 3 | – | Fixed + mode | – | decode table |
 | 2/02 | o | 9 | – | Fixed + mode | – | decode table |
 | 2/04 | f | ; | – | Fixed + mode | – | decode table |
-| 2/08 | – | – | – | **Unused** (spare crossing) | – | decode record: "none, spare crossing" |
+| 2/08 | Left Shift | – | – | **Fixed modifier** (sticky-latch tested at `0x2AE6`: `andi a0, a6, 0x8` on row 2; latch exclusivity mask `0x17` at `0x2AF6`) | – | [CORRECTION 2026-10-22:] earlier marked "unused/spare" from the incomplete STOCK_DECODE crossing table; V122 instruction evidence and the factory layout (`FactoryLayout.swift`, QMK `qmk-v1-behavior.md`) both identify Left Shift |
 | 2/10 | b | 1 | – | Fixed + mode | – | decode table |
 | 2/20 | – | – | – | Special: Left GUI (Command) | – | decode record |
 | 3/01 | r | 4 | – | Fixed + mode | – | decode table |
