@@ -557,9 +557,34 @@ static void test_chords(void)
     CHECK(r.mods == 0 && r.count == 0, "chord: full release clears");
 }
 
+static void test_multiple_pending_taps(void)
+{
+    ck_keymap_t map = {0};
+    map.action[0][0] = (ck_action_t){.activation = CK_ACT_TAP,
+        .layer_switch = CK_LAYER_NAV, .tap_usage = U_ESC, .tap_ms = 200};
+    map.action[0][1] = (ck_action_t){.activation = CK_ACT_TAP,
+        .layer_switch = CK_LAYER_NAV, .tap_usage = U_TAB, .tap_ms = 200};
+    rig_t r;
+    rig_init(&r, &map);
+    /* Two qualifying releases before either 1 ms deadline. The API
+     * permits multiple matrix updates at the same clock value. */
+    key(&r, 0, 0, true); key(&r, 0, 0, false);
+    key(&r, 0, 1, true); key(&r, 0, 1, false);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_ESC, U_TAB}, 2),
+          "pending taps: both press emissions remain visible");
+    advance(&r, 1);
+    CHECK(r.count == 0 && ck_engine_next_deadline(&r.e) == CK_NO_DEADLINE,
+          "pending taps: both releases clear without another matrix event");
+    key(&r, 0, 0, true); key(&r, 0, 0, false);
+    key(&r, 0, 0, true); advance(&r, 1);
+    key(&r, 0, 0, false); advance(&r, 1);
+    CHECK(r.count == 0, "pending taps: same-position repress also clears");
+}
+
 int main(void)
 {
     test_stock_default();
+    test_multiple_pending_taps();
     test_nav_remap_no_base_regression();
     test_hold_and_toggle_and_oneshot();
     test_tap_timing_and_time_driven_release();

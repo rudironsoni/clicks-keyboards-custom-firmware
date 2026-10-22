@@ -15,6 +15,7 @@ static uint16_t tx_len, ep_ctrl = 2;
 static uint32_t exti[4]; /* INTENR, EVENR, RTENR, FTENR. No EXTI IRQs injected. */
 static unsigned callbacks, submissions, packets, tick_ms;
 static unsigned host_period = 1;
+static unsigned currency_hits[5], layout_hits[2], sticky_hits, cursor_hits, engine_calls;
 static uint32_t min_sp = 0x20005000;
 static FILE *trace;
 static uint32_t remap_address, keymap_address;
@@ -96,6 +97,13 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v)
 void gate_instruction(ChgMachine *m, uint32_t address)
 {
     pc = address;
+    if (pc == CK_ENGINE_PROCESS) engine_calls++;
+    if (pc == 0x2A7E) sticky_hits++;
+    if (pc == 0x2B40) cursor_hits++;
+    if (pc == 0x2F7C && m->ram[0x1CB] < 5) currency_hits[m->ram[0x1CB]]++;
+    if ((pc == 0x2DF8 || pc == 0x2FAA || pc == 0x2FC2)
+        && m->ram[0x1CA] >= 0x20 && m->ram[0x1CA] <= 0x21)
+        layout_hits[m->ram[0x1CA] - 0x20]++;
     if (m->cpu.x[2] && m->cpu.x[2] < min_sp) min_sp = m->cpu.x[2];
     if (!inside(pc, 2, 0x2000, image_end)) fail("PC outside image", pc);
     if (m->cpu.x[2] && m->cpu.x[2] < 0x20002000)
@@ -110,10 +118,10 @@ void gate_instruction(ChgMachine *m, uint32_t address)
             fail("registered builder or ABI mismatch", m->cpu.x[15]);
         bytes_event("registered-builder-call", m->cpu.x[11], 6);
     }
-    if (pc == 0x278C) bytes_event("companion-submit", m->cpu.x[10], m->cpu.x[11]);
-    if (pc == 0x3CBE) {
+    if (pc == 0x62CC) bytes_event("companion-submit", m->cpu.x[11], m->cpu.x[12]);
+    if (pc == 0x3E28 && m->cpu.x[10] == 1) {
         submissions++;
-        bytes_event("HID-submit", m->cpu.x[10], m->cpu.x[11]);
+        bytes_event("HID-submit", m->cpu.x[11], m->cpu.x[12]);
     }
 }
 void gate_trap(ChgMachine *m, uint32_t p, uint32_t cause, uint32_t value, int irq)
@@ -176,8 +184,13 @@ static void scan(unsigned ms)
 }
 int main(int argc, char **argv)
 {
-    if (argc != 3 && argc != 5 && argc != 6) return 2;
-    if (argc == 6) host_period = 17;
+    if (argc < 3 || argc > 6) return 2;
+    bool compatibility = (argc == 4 && !strcmp(argv[3], "compat"))
+        || (argc == 6 && !strcmp(argv[5], "compat"));
+    bool mixed = (argc == 4 && !strcmp(argv[3], "mixed"))
+        || (argc == 6 && !strcmp(argv[5], "mixed"));
+    bool native_active = argc == 6 && (!strcmp(argv[5], "native-active") || compatibility || mixed);
+    if (argc == 6 && !strcmp(argv[5], "delayed-host")) host_period = 17;
     chg_init(&machine);
     FILE *f = fopen(argv[1], "rb");
     if (!f) return 2;
@@ -211,15 +224,18 @@ int main(int argc, char **argv)
     put16(0x1D0, 5000);
     put16(0x1D2, 600);
     call(0x2A22, 0x20000068, 0x200000AC);
-    scan(12);
-    keys[0] = 1; scan(20);  /* Q press */
-    keys[0] = 0; scan(20);  /* Q release, no later physical key */
     if (argc >= 5) {
         remap_address = strtoul(argv[3], 0, 0);
         keymap_address = strtoul(argv[4], 0, 0);
         if (!inside(remap_address, 1, 0x200006C0, 0x20002000)
             || !inside(keymap_address, sizeof(ck_keymap_t), 0x200006C0, 0x20002000))
             fail("fixture keymap address outside extension SRAM", keymap_address);
+        if (native_active) machine.ram[remap_address - CHG_RAM_BASE] = 1;
+    }
+    scan(12);
+    keys[0] = 1; scan(20);  /* Q press */
+    keys[0] = 0; scan(20);  /* Q release, no later physical key */
+    if (argc >= 5 && !native_active) {
         machine.ram[remap_address - CHG_RAM_BASE] = 1;
         keys[0] = 1; scan(20); keys[0] = 0; scan(20);
         /* Synthetic configuration fixture, not a USB configuration command. */
@@ -231,6 +247,7 @@ int main(int argc, char **argv)
         map.action[2][ck_pos(3, 4)] = (ck_action_t){.usage = 0x2B};
         map.action[2][ck_pos(4, 4)] = (ck_action_t){.usage = 0x1D, .mods = 8};
         map.action[2][ck_pos(5, 3)] = (ck_action_t){.usage = 0x1D, .mods = 10};
+        map.action[2][ck_pos(1, 0)] = (ck_action_t){.usage = 0x52};
         memcpy(machine.ram + (keymap_address - CHG_RAM_BASE), &map, sizeof(map));
         fprintf(trace, "{\"event\":\"synthetic-NAV-configuration\"}\n");
         keys[0] = 8; scan(20);
@@ -240,6 +257,11 @@ int main(int argc, char **argv)
             keys[positions[i][0]] &= ~(1u << positions[i][1]); scan(20);
         }
         keys[0] = 0; scan(20);
+        /* Four keyboard slots plus the native consumer bit. The fourth
+         * custom usage must not overwrite the descriptor's consumer byte. */
+        keys[0] = 0x2E; keys[2] = 8; keys[4] = 1; scan(20);
+        keys[0] = 8; keys[2] = 0; keys[4] = 0; scan(20);
+        keys[0] = 0; scan(20);
         /* Tap release while the OEM scanner goes idle on an empty matrix. */
         map.action[0][ck_pos(0,3)].activation = CK_ACT_TAP;
         map.action[0][ck_pos(0,3)].tap_usage = 0x29;
@@ -248,18 +270,71 @@ int main(int argc, char **argv)
         fprintf(trace, "{\"event\":\"synthetic-TAP-configuration\"}\n");
         keys[0] = 8; scan(20); keys[0] = 0; scan(40);
     } else {
+        if (native_active && compatibility) {
+            ck_keymap_t map;
+            memcpy(&map, machine.ram + (keymap_address - CHG_RAM_BASE), sizeof(map));
+            map.action[0][ck_pos(0,3)] =
+                (ck_action_t){.activation = CK_ACT_HOLD, .layer_switch = CK_LAYER_NAV};
+            memcpy(machine.ram + (keymap_address - CHG_RAM_BASE), &map, sizeof(map));
+            keys[0] = 8; scan(20); /* custom NAV held, masked from OEM */
+        }
+        if (native_active && mixed) {
+            ck_keymap_t map;
+            memcpy(&map, machine.ram + (keymap_address - CHG_RAM_BASE), sizeof(map));
+            for (unsigned layer = 0; layer < CK_LAYERS; layer++)
+                map.action[layer][0] = (ck_action_t){.usage = 0x29};
+            memcpy(machine.ram + (keymap_address - CHG_RAM_BASE), &map, sizeof(map));
+        }
+        if (mixed) {
+            fprintf(trace, "{\"event\":\"mixed-mapping-scenario\"}\n");
+            keys[2] = 8; scan(20); keys[2] = 0; scan(20);
+            keys[0] = 1; scan(20); keys[0] = 0; scan(20);
+            keys[0] = 2; scan(20); keys[0] = 0; scan(20);
+            keys[0] = 0x20; scan(20); keys[0] |= 1; scan(20);
+            keys[0] &= ~1u; scan(20); keys[0] = 0; scan(20);
+            keys[0] = 1; scan(20); keys[2] = 8; scan(20);
+            keys[2] = 0; scan(20); keys[0] = 0; scan(20);
+            keys[0] = 2; scan(20); keys[0] = 0; scan(20);
+        }
         /* Exact stock comparison covers each position, sticky state, and
          * consumer crossings. It is broader than the keyboard-page model. */
-        for (unsigned row = 0; row < 6; row++)
+        for (unsigned row = 0; !mixed && row < 6; row++)
             for (unsigned col = 0; col < 6; col++) {
-                keys[row] = 1u << col; scan(20);
-                keys[row] = 0; scan(20);
+                if (compatibility && row == 0 && col == 3) continue;
+                keys[row] |= 1u << col; scan(20);
+                keys[row] &= ~(1u << col); scan(20);
             }
+        if (compatibility) {
+            const uint8_t flags[] = {0, 1, 2, 3, 4, 8, 0x10, 0x20, 0x40, 0x80, 0xA7, 0xE7, 0xFF};
+            for (unsigned fi = 0; fi < sizeof(flags); fi++)
+                for (unsigned layout = 0x20; layout <= 0x21; layout++)
+                    for (unsigned currency = 0; currency < 5; currency++) {
+                        machine.ram[0x1CC] = flags[fi];
+                        machine.ram[0x1CA] = layout;
+                        machine.ram[0x1CB] = currency;
+                        fprintf(trace, "{\"event\":\"synthetic-OEM-settings\",\"flags\":%u,\"layout\":%u,\"currency\":%u}\n",
+                                flags[fi], layout, currency);
+                        keys[2] = 8; scan(20); keys[2] = 0; scan(20); /* sticky Shift */
+                        keys[0] |= 1; scan(20); keys[0] &= ~1u; scan(20);
+                        keys[5] = 0x10; scan(20); /* held Symbols */
+                        keys[3] = 8; scan(20); keys[3] = 0; scan(20); /* layout-sensitive Z */
+                        keys[5] |= 4; scan(20); keys[5] &= ~4u; scan(20); /* currency/Clicks */
+                        keys[1] = 0x20; scan(20); keys[1] = 0; scan(20); /* consumer chord */
+                        keys[2] = 0x20; scan(20); keys[2] = 0; scan(20); /* cursor gesture */
+                        keys[1] = 1; scan(20); keys[1] = 0; scan(20);
+                        keys[5] = 0; scan(20);
+                        keys[3] = 0x20; scan(20); keys[3] = 0; scan(20); /* space */
+                        keys[0] |= 0x10; scan(20); keys[0] &= ~0x10u; scan(20); /* enter */
+                    }
+        }
     }
     if (!callbacks || submissions < 2 || packets < 2)
         fail("missing scanner or HID path", packets);
-    fprintf(trace, "{\"event\":\"summary\",\"callbacks\":%u,\"submissions\":%u,\"packets\":%u,\"min_sp\":%u}\n",
-            callbacks, submissions, packets, min_sp);
+    fprintf(trace, "{\"event\":\"summary\",\"callbacks\":%u,\"submissions\":%u,\"packets\":%u,\"min_sp\":%u,\"engine_calls\":%u,"
+            "\"sticky_hits\":%u,\"cursor_hits\":%u,\"currency_hits\":[%u,%u,%u,%u,%u],\"layout_hits\":[%u,%u]}\n",
+            callbacks, submissions, packets, min_sp, engine_calls, sticky_hits, cursor_hits,
+            currency_hits[0], currency_hits[1], currency_hits[2], currency_hits[3], currency_hits[4],
+            layout_hits[0], layout_hits[1]);
     fclose(trace);
     printf("V122 bounded scanner: %u callbacks, %u submissions, %u packets\n", callbacks, submissions, packets);
     return 0;

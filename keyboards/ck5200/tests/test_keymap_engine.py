@@ -36,7 +36,7 @@ def test_engine_riscv_footprint_budget(tmp_path):
 
     Skipped when the pinned RISC-V toolchain is not installed (for example
     on a runner without scripts/setup.sh). The revised action validation
-    and per-press interruption tracking need a 1280-byte sub-budget.
+    and per-key deadlines/native routing need a 1536-byte sub-budget.
     """
     tc = sorted(ROOT.glob(".toolchains/xpack-riscv-none-elf-gcc-*/bin"))
     if not tc:
@@ -55,7 +55,7 @@ def test_engine_riscv_footprint_budget(tmp_path):
     text = int(fields[0])
     # Budget: the engine plus a callback shim and two keymap records must
     # stay far inside the 8,488-byte unused application capacity.
-    assert text <= 1280, f"engine .text grew to {text} bytes (budget 1280)"
+    assert text <= 1536, f"engine .text grew to {text} bytes (budget 1536)"
     print(f"engine riscv .text = {text} bytes")
 
 

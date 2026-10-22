@@ -12,11 +12,13 @@
  */
 ENTRY(ck_v122_start)
 PROVIDE(ck_v122_start = 0x2000);
-PROVIDE(oem_send = 0x278C);
+PROVIDE(oem_transport = 0x62CC);
 PROVIDE(oem_hid_send = 0x3CBE);
+PROVIDE(oem_ep_submit = 0x3E28);
 PROVIDE(oem_system_init = 0x3BBA);
 PROVIDE(oem_tick = 0x22DA);
 PROVIDE(oem_builder = 0x2796);
+PROVIDE(oem_layer = 0x2958);
 
 MEMORY {
     FLASH (rx) : ORIGIN = 0x2000, LENGTH = 0x6A00

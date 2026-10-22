@@ -14,7 +14,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 11.** Rudi accepted `9113dab` only as an
+**Current evidence: section 12.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -215,20 +215,18 @@ Its frame omitted the reserved keyboard byte, its entry placement was
 not guaranteed, its state occupied flash, and it omitted EP1 submission.
 Host tests of that frame did not verify OEM execution.
 
-The current shim delegates to the original builder when remapping is
-disabled. Enabled research mode uses the engine, the corrected 11-byte
-frame, and a completion-gated eight-report FIFO. Consumer output and
-sticky behavior in enabled mode remain incomplete. Section 11 defines
-the bounded execution evidence and its limits.
+At `57fef66`, disabled mode delegated to the original builder and enabled
+mode replaced its keyboard output. Section 12 adds a native-policy bridge
+for enabled mode. Full IRQ and transport compatibility remains unproven.
 
 ## 8. Deliverable 4: evidence-based comparison with QMK
 
 | Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
 | --- | --- | --- |
 | Behavioral evidence | Host suites plus a bounded V122 scanner profile. Default delegation matches 74 complete submissions. Enabled NAV and idle tap releases execute through OEM EP1 submission. Full OEM behavior in enabled mode is not established. | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
-| Image footprint | 22,441 bytes, current research build | 26,940 bytes verified |
+| Image footprint | 23,702 bytes, current research build | 26,940 bytes verified |
 | OEM stack | OEM code retained, with registration, startup-call, and timer-call hooks. Runtime compatibility still requires verification. | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
-| Integration risk | Four patched instruction words, extension SRAM, timer scheduling, two transports, and OEM behavior preservation | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
+| Integration risk | Eight patched instruction words, extension SRAM, timer scheduling, native-state preview, two transports, and OEM behavior preservation | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
 | Stock restore | Official Clicks update overwrites the extension (de-facto restore, unverified) — same staging path as the M4 trial | Same M4 staging path (V122 restage), same unknown boot-stage caveats |
 | Recovery dependency | **Identical for both: R3 unmet. Neither image may be installed until independent recovery is authorized.** | Same |
 | Capability ceiling | Three layers × 36 positions, four activation modes, modifier chords | The full QMK engine (more layers, tap-hold timing rules, combos, macros) |
@@ -245,9 +243,11 @@ establish lower installation risk or full OEM compatibility.
 
 ## 9. Remaining integration gates
 
-1. Preserve consumer, sticky modifier, currency, and layout-dependent OEM
-   behavior **while remapping is enabled**. Default delegation alone does
-   not satisfy this gate. The keyboard-page fixture cannot replace these rules.
+1. Extend the enabled-mode comparisons in section 12 beyond their scripted
+   states. Prove native preview/capture safety with nested IRQs. Verify
+   layer activation choices before defining the runtime editor contract.
+   OEM policy actions retain native gestures. They do not automatically
+   select an engine layer number.
 2. Extend execution beyond the synthetic handoff: full SystemInit/main
    execution, actual interrupt entry/return, USB enumeration and completion
    interrupts, suspend/reconnect, and companion transport backpressure.
@@ -280,11 +280,11 @@ a manifest (offsets, original/replacement encodings, hashes). Its test
 authorizes writing it to the keyboard; installation remains gated by the
 unchanged R3 recovery decision.**
 
-## 11. OEM integration increment after the `9113dab` review
+## 11. Accepted bounded-execution baseline, `57fef66`
 
-Status: **bounded scanner execution passes locally. The full OEM
-executable-integration milestone remains OPEN.** Hosted results belong
-to the commit/run record, not to an inferred success from local tests.
+Rudi accepted this bounded proof. Firmware CI `39792638882` and iOS CI
+`39792638881` both passed. The details below describe `57fef66`, not the
+new active-policy bridge. Full OEM executable integration remains open.
 
 ### Placement and initialization
 
@@ -400,3 +400,106 @@ The profile verifies ELF/BIN identity before execution.
 No keyboard command, firmware write, reset, ISP operation, or vendor
 contact occurred. R3, M4, and the separate physical authorization gates
 remain unchanged.
+
+## 12. Active native-policy preservation after the `57fef66` review
+
+Status: **active-policy comparisons pass in the bounded model. Full OEM
+integration remains OPEN.** No physical command or settings write ran.
+The QMK gate, iOS source, M4 trial, and vendor inquiry remain untouched.
+
+### Corrections and implementation
+
+- The new regression reproduced the shared `tap_fire_pos` defect. Two
+  qualifying releases within the same millisecond left the first usage
+  active. Each held snapshot now owns its pending release and deadline.
+  Both releases clear without another matrix event. Repressing the same
+  position also clears correctly.
+- **[CORRECTION]** The V122 descriptor at `0x6580`, 97 bytes, defines four
+  key slots, four left modifier bits, and three consumer bits. It is not
+  a six-slot boot report. The eight input bytes contain: modifier bits
+  and padding, one reserved byte, four usages, a consumer bitmap, and
+  padding. The profile parses the descriptor and asserts all input fields.
+  Custom output uses four slots and cannot overwrite the consumer byte.
+  More than four usages produces ErrorRollOver in those four slots only.
+  Unsupported right-modifier bits now fail keymap validation.
+- `OEM` is an explicit action, separate from KEY, NO, and TRANSPARENT.
+  The device default uses OEM actions on all 108 entries. The engine
+  snapshots native ownership at press time. Custom activators and disabled
+  keys do not reach the native builder or its layer/backlight handler.
+- The original V122 code still implements native consumer crossings,
+  sticky modifiers, currency, layouts, and Clicks gestures. The bridge
+  captures complete native frames, adds custom keyboard output, and
+  preserves consumer fields and optional payloads. It retains native
+  repeated submissions rather than deduplicating their events.
+- A mixed regression exposed another defect: simply masking a remapped
+  letter prevented it from applying and consuming sticky Shift. The
+  bridge now supplies ordinary-key activity to the original latch policy.
+  The marker's usage must not appear in output. A preview executes the
+  original builder against copies of its 0x44-byte state and 0x128-byte
+  context to obtain native key slots without the marker. The real call
+  updates native state exactly once. Its modifier/consumer fields and
+  special packets remain authoritative. No second implementation of OEM
+  gesture rules was added.
+- Preview transport calls are suppressed. Real special packets retain
+  their original transport path. **Nested IRQ safety and companion
+  backpressure are not proven.** The capture flags are shared state and
+  require interrupt-path verification before any executable-ready claim.
+- The image patches eight words, 32 bytes: builder registration at
+  `0x2A3A/0x2A42`, layer registration at `0x2A36/0x2A3E`, startup at
+  `0x48CE`, timer at `0x3AEE`, companion submission at `0x4788`, and HID
+  submission at `0x3CBE`. The companion wrapper forwards to
+  `0x62CC(0x20000460, frame, len)`, the same context used by original
+  `0x4788`. The HID wrapper forwards to original `0x3E28` for EP1.
+  The build derives targets from ELF symbols and reverses all sites back
+  to the pinned stock hash. The accepted `57fef66` image remains in Git history.
+
+### Bounded execution evidence
+
+The existing profile now executes ten cases, including the original
+missing-timer negative control:
+
+| Comparison | Observed result |
+| --- | --- |
+| Stock vs disabled delegation | Same 74 complete HID submissions |
+| Stock vs enabled engine with all-OEM actions | Same 74 complete HID submissions, engine invocation verified |
+| Stock vs enabled custom NAV activator with unchanged native keys | Same 2,502 HID submissions and 2,542 complete companion packets |
+| Sticky Shift around Q remapped to Esc | Same complete packets after substituting only Q's keyboard usage, including the following unmodified U |
+| NAV Esc/Tab/Undo/Redo/Up, four-key plus consumer chord, idle TAP | Exact ordered 18 HID submissions |
+| Same remaps with host readiness every 17 nominal ms | Same ordered 18 HID submissions |
+| Missing timer hook | Final TAP release disappears, detected as required |
+
+The native comparison spans 130 combinations: thirteen flag values, both
+layout values (`0x20/0x21`), and all five currencies. It exercises sticky
+Shift, held Symbols, layout-sensitive Z, the currency/Clicks path,
+consumer chords, cursor entry, Space, and Enter. Instruction witnesses
+confirm all five currency branches, both layout values, sticky processing,
+and cursor entry. Comparisons include entire companion and HID packets,
+not only usage bytes. Enabled cases must execute the remapping engine.
+The active-NAV comparison checks event order and payloads, not identical
+timestamps. Holding a custom activator changes the scanner's idle phase.
+
+These remain synthetic settings and GPIO inputs. The model stops CRT
+before SystemInit and invokes the real timer driver's JAL target without
+IRQ entry/return. EP1 completion is still supplied by the model. There is
+no enumeration, suspend/reconnect proof, open iAP2 session, iPhone editing,
+persistent profile, or installation proof. Persistence remains a separate
+gate after RAM editing and lifecycle verification.
+
+### Current bounds
+
+- Packed format v3 adds explicit OEM actions and rejects earlier formats.
+  The native default is 330 bytes. The maximum remains 978 bytes.
+  Rejected records leave their destination unchanged. No flash storage
+  region is selected or authorized.
+- The measured engine sub-budget changes from 1,280 to 1,536 bytes.
+  Actual engine text under the footprint-test flags is 1,392 bytes.
+- Complete image: 23,702 bytes, extent `0x7C96`, with 3,434 bytes of
+  application headroom. Extension payload: 5,014 bytes after a 40-byte gap.
+  BSS occupies `[0x200006C0,0x20000FBD)`, below the unchanged stack boundary.
+- BIN SHA-256:
+  `55cd6f544a1ecd8a6eb109e3bc585a9f391a3c137efa54bbd74124c2f09834b7`.
+
+Run the same build and profile commands from section 11. Firmware CI
+retains the ELF, BIN, map, disassembly, hashes, manifest, report, and traces
+in `ck5200-stock-extension-research`. Hosted status must be checked for
+the exact new commit. Local success does not imply hosted success.

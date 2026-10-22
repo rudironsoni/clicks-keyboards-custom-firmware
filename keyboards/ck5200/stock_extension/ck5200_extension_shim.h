@@ -7,9 +7,11 @@
  * (builder invocation 0x259E-0x25A6, pointer at scan_obj+0x18).
  *
  * Default device mode delegates to the original OEM builder. The enabled
- * research mode replaces keyboard-page output, with an eight-report FIFO.
- * Consumer/sticky behavior in enabled mode is NOT yet preserved. The host
- * keymap fixture is a keyboard-page model, not the complete OEM behavior.
+ * research mode keeps OEM actions in the original policy and overlays
+ * custom keyboard actions through an eight-report FIFO. A copied-state
+ * preview removes the native activity marker's usage, not its latch effect.
+ * Bounded native/sticky/consumer comparisons pass. Full IRQ and transport
+ * compatibility remains unproven. The host fixture is not the OEM policy.
  *
  * Host harness (CK_SHIM_HOST): ck_shim_process() runs the engine and
  * returns the report frame for assertion, with injectable time.
@@ -20,7 +22,7 @@
  * The separate V122 profile executes CRT initialization and the bounded
  * scanner/report path. Full startup, IRQ/USB completion semantics, iAP2
  * delivery, and configuration/persistence remain outside that proof.
- * See keyboards/ck5200/docs/stock-extension-feasibility.md, section 11.
+ * See keyboards/ck5200/docs/stock-extension-feasibility.md, section 12.
  */
 #ifndef CK5200_EXTENSION_SHIM_H
 #define CK5200_EXTENSION_SHIM_H
@@ -31,6 +33,7 @@
 #include "ck5200_keymap_engine.h"
 
 #define CK_FRAME_MAX 16
+#define CK_FRAME_KEYS 4 /* V122 descriptor: four usages, then consumer bitmap */
 
 /* Decoded OEM report constants (V122 0x2796/0x2856 region). */
 #define CK_FRAME_TYPE0 0x0B

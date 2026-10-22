@@ -23,7 +23,7 @@ int ck_keymap_validate(const ck_keymap_t *map)
     for (int layer = 0; layer < CK_LAYERS; layer++) {
         for (int pos = 0; pos < CK_KEYS; pos++) {
             const ck_action_t *a = &map->action[layer][pos];
-            if (a->kind > CK_ACTION_TRANSPARENT
+            if (a->kind > CK_ACTION_OEM
                 || a->activation > CK_ACT_ONESHOT)
                 invalid++;
             if (a->kind != CK_ACTION_KEY
@@ -31,6 +31,8 @@ int ck_keymap_validate(const ck_keymap_t *map)
                     || a->tap_usage || a->tap_ms))
                 invalid++;
             if (a->usage > 0xFF)
+                invalid++;
+            if (a->mods & 0xF0)
                 invalid++;
             if (a->activation != CK_ACT_NONE && a->tap_usage > 0xFF)
                 invalid++;
@@ -48,7 +50,6 @@ void ck_engine_init(ck_engine_t *e, const ck_keymap_t *map)
     e->map = map;
     e->toggle_owner = -1;
     e->oneshot_from = -1;
-    e->tap_fire_pos = -1;
 }
 
 static int effective_layer(const ck_engine_t *e)
@@ -105,8 +106,8 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     /* A new press of a position with a pending one-cycle tap emission
      * cancels that emission; the fresh press must not be clobbered by
      * the scheduled clear. */
-    if (e->tap_fire_pos == pos) {
-        e->tap_fire_pos = -1;
+    if (e->held[pos].tap_pending) {
+        e->held[pos].tap_pending = false;
         e->held_active[pos] = false;
     }
 
@@ -118,7 +119,8 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     for (int i = 0; i < CK_KEYS; i++)
         if (e->held_active[i])
             e->held[i].tap_interrupted = true;
-    if (a->kind != CK_ACTION_KEY || a->usage > 0xFF
+    if ((a->kind != CK_ACTION_KEY && a->kind != CK_ACTION_OEM) || a->usage > 0xFF
+        || (a->mods & 0xF0)
         || a->activation > CK_ACT_ONESHOT
         || (a->activation && (a->layer_switch >= CK_LAYERS
                              || a->tap_usage > 0xFF)))
@@ -135,6 +137,8 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     h->tap_usage = a->tap_usage;
     h->tap_deadline = now_ms + (a->tap_ms ? a->tap_ms : 200);
     h->tap_interrupted = false;
+    h->tap_pending = false;
+    h->oem = a->kind == CK_ACTION_OEM;
 
     e->now_ms = now_ms;
     e->last_press_ms = now_ms;
@@ -197,8 +201,8 @@ static void release(ck_engine_t *e, int pos, uint32_t now_ms)
                 e->held[pos].usage = h->tap_usage;
                 e->held[pos].mods = 0;
                 e->held[pos].is_layer_action = false;
-                e->tap_fire_pos = pos;
-                e->tap_clear_deadline = now_ms + 1; /* one report cycle */
+                e->held[pos].tap_pending = true;
+                e->held[pos].tap_deadline = now_ms + 1; /* one report cycle */
             } else {
                 e->held_active[pos] = false;
             }
@@ -236,11 +240,12 @@ void ck_engine_tick(ck_engine_t *e, const uint8_t matrix[CK_ROWS], uint32_t now_
 
     /* Time-driven tap-emission clear: the release report for a tap does
      * not wait for any future keypress. */
-    if (e->tap_fire_pos >= 0 && now_ms >= e->tap_clear_deadline) {
-        e->held_active[e->tap_fire_pos] = false;
-        e->held[e->tap_fire_pos].usage = 0;
-        e->tap_fire_pos = -1;
-    }
+    for (int pos = 0; pos < CK_KEYS; pos++)
+        if (e->held[pos].tap_pending && now_ms >= e->held[pos].tap_deadline) {
+            e->held_active[pos] = false;
+            e->held[pos].usage = 0;
+            e->held[pos].tap_pending = false;
+        }
 
     /* Process matrix changes; bits outside the six-column mask are
      * ignored so malformed rows cannot index out of bounds. */
@@ -267,12 +272,21 @@ void ck_engine_tick(ck_engine_t *e, const uint8_t matrix[CK_ROWS], uint32_t now_
 uint32_t ck_engine_next_deadline(const ck_engine_t *e)
 {
     uint32_t next = CK_NO_DEADLINE;
-    if (e->tap_fire_pos >= 0 && e->tap_clear_deadline < next)
-        next = e->tap_clear_deadline;
+    for (int pos = 0; pos < CK_KEYS; pos++)
+        if (e->held[pos].tap_pending && e->held[pos].tap_deadline < next)
+            next = e->held[pos].tap_deadline;
     if (e->oneshot_armed && e->oneshot_deadline < next)
         next = e->oneshot_deadline;
     /* Held TAP keys do not need a deadline: the quick/hold decision is
      * made at release time by comparing the release timestamp with the
      * press deadline, so no scheduled tick is required while held. */
     return next;
+}
+
+void ck_engine_oem_matrix(const ck_engine_t *e, uint8_t matrix[CK_ROWS])
+{
+    memset(matrix, 0, CK_ROWS);
+    for (int pos = 0; pos < CK_KEYS; pos++)
+        if (e->held_active[pos] && e->held[pos].oem)
+            matrix[pos / CK_COLS] |= 1u << (pos % CK_COLS);
 }

@@ -1,15 +1,16 @@
 /*
  * Packed serialization for CK-5200 keymap records (research artifact).
  *
- * Format version 2 (little-endian):
+ * Format version 3 (little-endian):
  *   magic    3 bytes  'C','K','M'
- *   version  1 byte   0x02
+ *   version  1 byte   0x03
  *   count    2 bytes  entry count N
  *   entries  N times:
  *     pos          1 byte   0..35
  *     layer        1 byte   0..2
  *     flags        1 byte   bit0-1 kind (0 plain, 1 layer, 2 NO, 3 transparent),
  *                           bit2 has-mods, bit3 has-tap-usage, bit4 has-tap-ms
+ *                           bit5 OEM policy (only with kind 2, no payload)
  *     [kind 0] usage      2 bytes
  *     [kind 1] act|layer 1 byte   activation<<4 | layer_switch
  *     [has-mods]       mods       1 byte
@@ -28,7 +29,7 @@
 #define CKM_MAGIC0 'C'
 #define CKM_MAGIC1 'K'
 #define CKM_MAGIC2 'M'
-#define CKM_VERSION 2
+#define CKM_VERSION 3
 
 static bool action_is_empty(const ck_action_t *a)
 {
@@ -98,8 +99,10 @@ size_t ck_keymap_serialize(const ck_keymap_t *map, uint8_t *out, size_t cap)
                 continue;
             uint8_t kind = a->activation == CK_ACT_NONE ? 0 : 1;
             if (a->kind != CK_ACTION_KEY)
-                kind = a->kind == CK_ACTION_NO ? 2 : 3;
+                kind = a->kind == CK_ACTION_TRANSPARENT ? 3 : 2;
             uint8_t flags = (uint8_t)(kind & 0x03);
+            if (a->kind == CK_ACTION_OEM)
+                flags |= 0x20;
             if (a->mods != 0)
                 flags |= 0x04;
             if (kind == 1 && a->tap_usage != 0)
@@ -155,7 +158,7 @@ static int decode(const uint8_t *buf, size_t len, ck_keymap_t *map)
         if (!rd_u8(buf, len, &off, &flags)) return -4;
         if (pos >= CK_KEYS || layer >= CK_LAYERS)
             return -5;
-        if (seen[layer][pos]++ || (flags & ~0x1F))
+        if (seen[layer][pos]++ || (flags & ~0x3F))
             return -5;
         ck_action_t action = {0};
         ck_action_t *a = &action;
@@ -177,13 +180,18 @@ static int decode(const uint8_t *buf, size_t len, ck_keymap_t *map)
                 return -7;
         } else {
             a->kind = kind == 2 ? CK_ACTION_NO : CK_ACTION_TRANSPARENT;
-            if (flags != kind)
+            if (flags == 0x22)
+                a->kind = CK_ACTION_OEM;
+            else if (flags != kind)
                 return -7;
         }
+        if (kind < 2 && (flags & 0x20))
+            return -7;
         if (kind == 0 && (flags & 0x18))
             return -7;
         if (flags & 0x04) {
             if (!rd_u8(buf, len, &off, &a->mods)) return -6;
+            if (a->mods & 0xF0) return -7;
         }
         if (flags & 0x08) {
             if (!rd_u16(buf, len, &off, &a->tap_usage)) return -6;

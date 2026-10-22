@@ -35,6 +35,43 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
+## Current stopping point, 2026-10-22 (active OEM compatibility)
+
+`57fef66` remains Rudi's accepted bounded-execution baseline. Both of its
+workflows passed. The current increment preserves native policy while
+the remapping engine is enabled, not only through disabled delegation.
+Full OEM integration and R3 remain open. No physical operation is authorized.
+
+- The multiple-pending-tap regression failed before the fix. Per-key
+  pending releases now clear both usages without another matrix event.
+- Native OEM actions remain in V122's builder and latch policy. Custom
+  actions replace their crossings. A copied-state preview removes a
+  generic activity marker's native usage while preserving sticky effects.
+- **[CORRECTION]** V122's 97-byte HID descriptor defines four keyboard
+  slots and consumer bits, not six slots. Overlay output preserves those
+  consumer bits. Unsupported right modifier bits are rejected.
+- Ten bounded execution cases pass locally. Enabled native comparisons
+  preserve 2,502 HID submissions and 2,542 companion packets across 130
+  flag/layout/currency combinations. A mixed remapped-letter test verifies
+  sticky Shift consumption. NAV remaps, a four-key/consumer chord, and
+  idle TAP produce the expected 18 ordered reports, including delayed EP1.
+- Packed format v3 adds explicit OEM actions. The device default is 330
+  bytes. The maximum remains 978 bytes. No storage journal is implemented.
+
+Next gate: actual interrupt and USB lifecycle execution, including nested
+preview/capture safety, companion backpressure, FIFO overflow, timer
+rollover/coalescing, suspend, and reconnect. The current shared capture
+flags are not proven safe against nested USB calls. Default OEM gestures
+do not automatically select custom engine layer numbers. Resolve the
+activation contract before the iPhone editor's typed RAM operations.
+Persistent A/B records follow RAM editing, in a separately verified region.
+
+Detailed evidence and reproduction:
+[stock-extension-feasibility.md section 12](keyboards/ck5200/docs/stock-extension-feasibility.md#12-active-native-policy-preservation-after-the-57fef66-review).
+
+The QMK gate, iOS source, closed M4 trial, vendor inquiry, and all physical
+authorization decisions remain unchanged.
+
 ## Current stopping point, 2026-10-22 (OEM executable integration)
 
 Rudi accepted `9113dab` only as an offline correctness-and-build milestone.

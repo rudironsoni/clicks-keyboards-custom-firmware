@@ -8,17 +8,20 @@
  *   /tmp/gen_record > stock_extension/ck5200_default_record.c
  */
 #include <stdio.h>
+#include <string.h>
 
 #include "ck5200_keymap_engine.h"
 #include "ck5200_keymap_serialize.h"
 
-/* The shared stock fixture. */
-#include "ck5200_default_keymap.h"
-
 int main(void)
 {
     ck_keymap_t map;
-    stock_keymap(&map);
+    /* Native actions must stay native. The host fixture remains a
+     * keyboard-page reference, not the device's OEM policy table. */
+    memset(&map, 0, sizeof(map));
+    for (int layer = 0; layer < CK_LAYERS; layer++)
+        for (int pos = 0; pos < CK_KEYS; pos++)
+            map.action[layer][pos].kind = CK_ACTION_OEM;
     uint8_t buf[CK_KEYMAP_RECORD_MAX];
     size_t len = ck_keymap_serialize(&map, buf, sizeof(buf));
     if (len == 0) {

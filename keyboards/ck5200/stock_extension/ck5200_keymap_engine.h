@@ -60,7 +60,8 @@ typedef enum {
 typedef enum {
     CK_ACTION_KEY = 0,
     CK_ACTION_NO,
-    CK_ACTION_TRANSPARENT
+    CK_ACTION_TRANSPARENT,
+    CK_ACTION_OEM        /* pass this physical crossing to the OEM policy */
 } ck_action_kind_t;
 
 /* One action, configured per position and per layer. activation == NONE is
@@ -68,7 +69,7 @@ typedef enum {
  * layer_switch with the given mode; usage then applies to nothing. */
 typedef struct {
     uint16_t usage;        /* keyboard-page HID usage, 0 = none */
-    uint8_t mods;          /* modifier bits held while this action is held */
+    uint8_t mods;          /* four left modifier bits, per OEM descriptor */
     uint8_t activation;    /* ck_activation_t */
     uint8_t layer_switch;  /* target layer for layer actions */
     uint8_t kind;          /* ck_action_kind_t */
@@ -107,6 +108,8 @@ typedef struct {
     uint16_t tap_usage;
     uint32_t tap_deadline;  /* absolute ms for the TAP window close */
     bool tap_interrupted;   /* another key pressed during this TAP */
+    bool tap_pending;       /* own release deadline, never a shared slot */
+    bool oem;
 } ck_held_action_t;
 
 typedef struct {
@@ -131,11 +134,6 @@ typedef struct {
     uint32_t now_ms;           /* last observed time */
     uint32_t last_press_ms;
 
-    /* The pending TAP emission: after a quick tap, the tap usage must be
-     * visible for one report and then clear on a TIME-DRIVEN follow-up
-     * tick, without any matrix change. */
-    int tap_fire_pos;          /* emitting position, or -1 */
-    uint32_t tap_clear_deadline;
 } ck_engine_t;
 
 /* Validate a keymap for the keyboard-page report path. Returns 0 when
@@ -156,5 +154,9 @@ void ck_engine_tick(ck_engine_t *e, const uint8_t matrix[CK_ROWS], uint32_t now_
  * no matrix change, or CK_NO_DEADLINE. The shim uses this to schedule
  * tap-release and one-shot-expiry report updates. */
 uint32_t ck_engine_next_deadline(const ck_engine_t *e);
+
+/* Physical keys whose immutable press snapshots select the OEM policy.
+ * Custom actions, NO, and synthetic tap emissions never reach the OEM. */
+void ck_engine_oem_matrix(const ck_engine_t *e, uint8_t matrix[CK_ROWS]);
 
 #endif /* CK5200_KEYMAP_ENGINE_H */

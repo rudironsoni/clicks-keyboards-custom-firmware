@@ -13,16 +13,20 @@ void ck_shim_process(ck_engine_t *e, const uint8_t matrix[CK_ROWS],
     ck_engine_tick(e, matrix, now_ms, &mods, usages, &count);
 
     /* V122 0x27A8-0x27B8 zeroes the payload and sets 0x020B.
-     * The boot keyboard report is eight bytes at frame+3: modifiers,
-     * reserved byte, then six usages. 0x2856-0x2860 submits 11 bytes
+     * The descriptor defines eight bytes at frame+3: four left modifier
+     * bits, padding, four usages, then consumer bits and padding.
+     * 0x2856-0x2860 submits 11 bytes
      * without the optional four-byte consumer record. */
     memset(out, 0, sizeof(*out));
     out->bytes[0] = CK_FRAME_TYPE0;
     out->bytes[1] = CK_FRAME_TYPE1;
     out->bytes[2] = 0x00;
     out->bytes[3] = mods;
-    for (uint8_t i = 0; i < count && i < CK_REPORT_KEYS; i++)
-        out->bytes[5 + i] = usages[i];
+    if (count > CK_FRAME_KEYS)
+        memset(out->bytes + 5, 1, CK_FRAME_KEYS);
+    else
+        for (uint8_t i = 0; i < count; i++)
+            out->bytes[5 + i] = usages[i];
     out->len = 11;
 }
 
@@ -40,11 +44,13 @@ uint32_t ck_shim_next_deadline(const ck_engine_t *e)
 /* Separate companion transport and USB HID submission, as called by the
  * original V122 builder at 0x2864 and 0x286C. Queue/completion behavior
  * remains an execution-profile obligation, not a host-test claim. */
-extern int oem_send(const void *frame, int len);
+extern int oem_transport(void *context, const void *frame, int len);
 extern int oem_hid_send(const void *report, int len);
+extern int oem_ep_submit(int endpoint, const void *report, int len);
 extern void oem_system_init(void);
 extern void oem_tick(void);
 extern void oem_builder(void *state_obj, const uint8_t *matrix, int size);
+extern void oem_layer(void *state_obj, const uint8_t *matrix, int size);
 
 /* No configuration channel exists yet. Start in exact stock delegation.
  * The offline execution fixture can enable the research remapping path
@@ -58,6 +64,41 @@ ck_keymap_t ck_extension_keymap;
  * Delayed/coalesced interrupts remain a timing limitation. */
 static uint32_t shim_ms;
 static uint8_t last_matrix[CK_ROWS];
+static uint8_t native_matrix[CK_ROWS];
+static void *last_state;
+static ck_frame_t native_frame;
+static ck_frame_t preview_frame, last_custom;
+static bool capturing_native, native_fresh;
+static bool previewing;
+
+static int oem_send(const void *frame, int len)
+{
+    /* Original 0x4788 supplies GP-0x3E0 to this three-argument function. */
+    return oem_transport((void *)0x20000460u, frame, len);
+}
+
+/* The two OEM submission entries are redirected here. Capture the
+ * complete OEM packet only while constructing native output. Outside
+ * that call, retain the original companion and EP1 submission ABIs. */
+int ck_capture_companion(const uint8_t *frame, int len)
+{
+    if (!capturing_native)
+        return oem_send(frame, len);
+    if ((len != 11 && len != 15) || frame[0] != 11 || frame[1] != 2)
+        return previewing ? len : oem_send(frame, len);
+    ck_frame_t *out = previewing ? &preview_frame : &native_frame;
+    memcpy(out->bytes, frame, (size_t)len);
+    out->len = (size_t)len;
+    if (previewing)
+        return len;
+    native_fresh = true;
+    return len;
+}
+
+int ck_capture_hid(const void *report, int len)
+{
+    return capturing_native ? len : oem_ep_submit(1, report, len);
+}
 
 /* EP1's OEM submit routine writes DMA immediately. It has no queue or
  * busy check (0x3E28-0x3EAA). Retain distinct reports until EP1 returns
@@ -93,9 +134,10 @@ static void flush_report(void)
     }
 }
 
-static void enqueue_report(const ck_frame_t *frame)
+static void enqueue_report(const ck_frame_t *frame, bool force)
 {
-    if (last_enqueued.len && !memcmp(last_enqueued.bytes, frame->bytes, frame->len))
+    if (!force && last_enqueued.len == frame->len
+        && !memcmp(last_enqueued.bytes, frame->bytes, frame->len))
         return;
     if (pending_count == CK_REPORT_QUEUE) {
         queue_fault = true;
@@ -128,10 +170,57 @@ extern const unsigned int ck_default_keymap_record_len;
 
 static ck_engine_t engine_storage;
 
+/* Original latch handler treats any ordinary key as activity. A custom
+ * key must consume the latch too, but must not inherit the native role
+ * of its former physical position (for example Shift remapped to Esc).
+ * The Q crossing is an activity marker only. Its native usage is removed
+ * using a read-only preview of the original builder below. */
+static bool native_input(uint8_t matrix[CK_ROWS])
+{
+    ck_engine_oem_matrix(&engine_storage, matrix);
+    bool custom = false;
+    for (int pos = 0; pos < CK_KEYS; pos++) {
+        const ck_held_action_t *h = &engine_storage.held[pos];
+        if (engine_storage.held_active[pos] && !h->oem && !h->is_layer_action
+            && (h->usage || h->mods))
+            custom = true;
+    }
+    /* These are the native ordinary-key masks at 0x2AEE-0x2B12. */
+    uint8_t ordinary = (matrix[0] & 7) | (matrix[1] & 0x1F)
+        | (matrix[2] & 0x17) | (matrix[3] & 0x1F)
+        | (matrix[4] & 0x1F) | (matrix[5] & 0x0F);
+    if (custom && !ordinary) {
+        matrix[0] |= 1;
+        return true;
+    }
+    return false;
+}
+
+static void preview_native(void *state_obj, const uint8_t matrix[CK_ROWS])
+{
+    /* The OEM builder owns 0x44 bytes of key state and references a
+     * 0x128-byte settings context. Clone both before the real invocation.
+     * In this call, preview writes stay in the copies and submissions
+     * are suppressed. Nested-IRQ capture safety is not yet proven. */
+    uint8_t state[0x44] __attribute__((aligned(4)));
+    uint8_t context[0x128] __attribute__((aligned(4)));
+    void *original_context;
+    memcpy(state, state_obj, sizeof(state));
+    memcpy(&original_context, state + 0x40, sizeof(original_context));
+    memcpy(context, original_context, sizeof(context));
+    void *copy_context = context;
+    memcpy(state + 0x40, &copy_context, sizeof(copy_context));
+    memset(&preview_frame, 0, sizeof(preview_frame));
+    previewing = capturing_native = true;
+    oem_builder(state, matrix, CK_ROWS);
+    previewing = capturing_native = false;
+}
+
 void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
 {
     if (size != CK_ROWS)
         return;
+    last_state = state_obj;
     if (!ck_remapping_enabled) {
         oem_builder(state_obj, matrix, size);
         return;
@@ -151,8 +240,54 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
         return;
     ck_frame_t frame;
     ck_shim_process(&engine_storage, matrix, shim_ms, &frame);
-    enqueue_report(&frame);
+    uint8_t filtered[CK_ROWS], activity[CK_ROWS];
+    ck_engine_oem_matrix(&engine_storage, filtered);
+    bool marker = native_input(activity);
+    bool custom_changed = memcmp(frame.bytes + 3, last_custom.bytes + 3, 8) != 0;
+    last_custom = frame;
+    native_fresh = false;
+    if (memcmp(native_matrix, activity, CK_ROWS) || custom_changed) {
+        if (marker)
+            preview_native(state_obj, filtered);
+        capturing_native = true;
+        oem_builder(state_obj, activity, CK_ROWS);
+        capturing_native = false;
+        if (marker && native_fresh)
+            memcpy(native_frame.bytes + 5, preview_frame.bytes + 5, CK_FRAME_KEYS);
+        memcpy(native_matrix, activity, CK_ROWS);
+    }
+    if (!native_frame.len) {
+        native_frame.bytes[0] = 11;
+        native_frame.bytes[1] = 2;
+        native_frame.len = 11;
+    }
+    ck_frame_t merged = native_frame;
+    merged.bytes[3] |= frame.bytes[3];
+    for (unsigned i = 5; i < 5 + CK_FRAME_KEYS && frame.bytes[i]; i++) {
+        unsigned slot = 5;
+        while (slot < 5 + CK_FRAME_KEYS && merged.bytes[slot] && merged.bytes[slot] != frame.bytes[i])
+            slot++;
+        if (slot == 5 + CK_FRAME_KEYS) {
+            memset(merged.bytes + 5, 1, CK_FRAME_KEYS); /* HID ErrorRollOver */
+            break;
+        }
+        merged.bytes[slot] = frame.bytes[i];
+    }
+    enqueue_report(&merged, native_fresh);
     flush_report();
+}
+
+/* The scanner invokes the builder before this layer/backlight callback.
+ * Give both OEM functions the same filtered physical-key history. */
+void ck_extension_layer(void *state_obj, const uint8_t *matrix, int size)
+{
+    if (ck_remapping_enabled && engine_storage.map) {
+        uint8_t filtered[CK_ROWS];
+        native_input(filtered);
+        oem_layer(state_obj, filtered, size);
+    } else {
+        oem_layer(state_obj, matrix, size);
+    }
 }
 
 /* Replaces only the call at 0x3AEE. The OEM interrupt entry/return stays
@@ -176,8 +311,10 @@ void ck_extension_tick(void)
             return;
         }
         uint32_t next = ck_engine_next_deadline(&engine_storage);
-        if (next != CK_NO_DEADLINE && shim_ms >= next)
-            ck_extension_builder(0, last_matrix, CK_ROWS);
+        if (next != CK_NO_DEADLINE && shim_ms >= next) {
+            ck_extension_builder(last_state, last_matrix, CK_ROWS);
+            ck_extension_layer(last_state, last_matrix, CK_ROWS);
+        }
     }
 }
 

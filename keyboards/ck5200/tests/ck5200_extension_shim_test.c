@@ -146,12 +146,12 @@ static void test_serialization_roundtrip_and_size(void)
     CHECK(ck_keymap_deserialize(buf, len - 1, &sink) < 0
           && memcmp(&sink, &map, sizeof(map)) == 0,
           "ser: truncated record rejected");
-    uint8_t bad[8] = {'X', 'K', 'M', 2, 0, 0};
+    uint8_t bad[8] = {'X', 'K', 'M', 3, 0, 0};
     CHECK(ck_keymap_deserialize(bad, sizeof(bad), &sink) < 0,
           "ser: bad magic rejected");
 
     /* A record with an out-of-page usage must be rejected at load. */
-    uint8_t over[11] = {'C', 'K', 'M', 2, 1, 0, /* count=1 */
+    uint8_t over[11] = {'C', 'K', 'M', 3, 1, 0, /* count=1 */
                         0, 0, 0x00, 0xFF, 0x01}; /* pos0 layer0 usage 0x1FF */
     CHECK(ck_keymap_deserialize(over, sizeof(over), &sink) < 0,
           "ser: out-of-page usage rejected at load");
@@ -182,7 +182,7 @@ static void test_serialization_roundtrip_and_size(void)
     for (int l = 0; l < CK_LAYERS; l++)
         for (int p = 0; p < CK_KEYS; p++)
             custom.action[l][p] = (ck_action_t){.activation = CK_ACT_TAP,
-                .layer_switch = l, .mods = 0xFF, .tap_usage = 0xFF, .tap_ms = 0xFFFF};
+                .layer_switch = l, .mods = 0x0F, .tap_usage = 0xFF, .tap_ms = 0xFFFF};
     clen = ck_keymap_serialize(&custom, buf, sizeof(buf));
     CHECK(clen == CK_KEYMAP_RECORD_MAX && clen > 512
           && ck_keymap_deserialize(buf, clen, &cloaded) == 0
@@ -190,6 +190,18 @@ static void test_serialization_roundtrip_and_size(void)
           "ser: maximum 978-byte record round-trips");
     CHECK(ck_keymap_serialize(&custom, buf, clen - 1) == 0,
           "ser: maximum record rejects a short buffer");
+    memset(&custom, 0, sizeof(custom));
+    for (int l = 0; l < CK_LAYERS; l++)
+        for (int p = 0; p < CK_KEYS; p++)
+            custom.action[l][p].kind = CK_ACTION_OEM;
+    clen = ck_keymap_serialize(&custom, buf, sizeof(buf));
+    CHECK(clen == 330 && ck_keymap_deserialize(buf, clen, &cloaded) == 0
+          && memcmp(&custom, &cloaded, sizeof(custom)) == 0,
+          "ser: explicit OEM policy round-trips at 330 bytes");
+    buf[3] = 2;
+    CHECK(ck_keymap_deserialize(buf, clen, &sink) < 0
+          && memcmp(&sink, &map, sizeof(map)) == 0,
+          "ser: old format rejected without changing destination");
 }
 
 int main(void)

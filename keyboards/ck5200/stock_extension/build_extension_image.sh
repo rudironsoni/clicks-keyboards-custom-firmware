@@ -71,12 +71,18 @@ CFLAGS=(-std=c99 -Os -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medlow
 # Update the fixed-size stock section in the ELF, then extract the BIN.
 STARTUP_TARGET="$(awk '$3 == "ck_extension_init" {print "0x" $1}' "$OUT/symbols.txt")"
 TICK_TARGET="$(awk '$3 == "ck_extension_tick" {print "0x" $1}' "$OUT/symbols.txt")"
+LAYER_TARGET="$(awk '$3 == "ck_extension_layer" {print "0x" $1}' "$OUT/symbols.txt")"
+COMPANION_TARGET="$(awk '$3 == "ck_capture_companion" {print "0x" $1}' "$OUT/symbols.txt")"
+HID_TARGET="$(awk '$3 == "ck_capture_hid" {print "0x" $1}' "$OUT/symbols.txt")"
+HOOKS=(--startup-target "$STARTUP_TARGET" --tick-target "$TICK_TARGET"
+       --layer-target "$LAYER_TARGET" --companion-target "$COMPANION_TARGET"
+       --hid-target "$HID_TARGET")
 python3 "$ROOT/tools/stock_extension_patch.py" "$STOCK" \
     "$OUT/v122_patched.bin" "$OUT/patch_manifest.json" \
-    --startup-target "$STARTUP_TARGET" --tick-target "$TICK_TARGET"
+    "${HOOKS[@]}"
 python3 "$ROOT/tools/stock_extension_patch.py" "$OUT/v122_patched.bin" \
     "$OUT/v122_reversed.bin" "$OUT/reverse_manifest.json" --reverse \
-    --startup-target "$STARTUP_TARGET" --tick-target "$TICK_TARGET"
+    "${HOOKS[@]}"
 cmp "$STOCK" "$OUT/v122_reversed.bin"
 "$OBJCOPY" --update-section .v122blob="$OUT/v122_patched.bin" "$OUT/ck5200_extension.elf"
 "$OBJDUMP" -d "$OUT/ck5200_extension.elf" > "$OUT/ck5200_extension.disassembly.txt"

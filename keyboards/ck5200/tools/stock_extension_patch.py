@@ -42,10 +42,13 @@ def check_image(data: bytes) -> None:
         raise SystemExit(f"refused: image sha256 {got} is not the pinned V122 artifact")
 
 
-def patch_sites(startup_target=None, tick_target=None):
+def patch_sites(startup_target=None, tick_target=None, layer_target=None,
+                companion_target=None, hid_target=None):
     sites = dict(PATCH_SITES)
-    for address, original, target in ((0x48CE, 0xAECFF0EF, startup_target),
-                                      (0x3AEE, 0xFECFE0EF, tick_target)):
+    for address, original, target, rd in ((0x48CE, 0xAECFF0EF, startup_target, 1),
+                                         (0x3AEE, 0xFECFE0EF, tick_target, 1),
+                                         (0x4788, 0x9A9FD2EF, companion_target, 0),
+                                         (0x3CBE, 0xC72FE2EF, hid_target, 0)):
         if target is None:
             continue
         delta = target - address
@@ -53,14 +56,23 @@ def patch_sites(startup_target=None, tick_target=None):
             raise ValueError("extension hook target is outside aligned extension flash")
         imm = delta & 0x1FFFFF
         word = (((imm >> 20) & 1) << 31 | ((imm >> 1) & 0x3FF) << 21
-                | ((imm >> 11) & 1) << 20 | ((imm >> 12) & 0xFF) << 12 | 0xEF)
+                | ((imm >> 11) & 1) << 20 | ((imm >> 12) & 0xFF) << 12 | rd << 7 | 0x6F)
         sites[address] = {"original": original, "extension": word}
+    if layer_target is not None:
+        if not EXTENSION_BUILDER <= layer_target < 0x8A00 or layer_target & 1:
+            raise ValueError("layer hook target is outside aligned extension flash")
+        sites[0x2A36] = {"original": 0x000036B7,
+                         "extension": ((layer_target + 0x800) & ~0xFFF) | 0x6B7}
+        sites[0x2A3E] = {"original": 0x95868693,
+                         "extension": (layer_target & 0xFFF) << 20 | 0x68693}
     return sites
 
 
-def apply_patch(data: bytes, direction: str, startup_target=None, tick_target=None) -> bytes:
+def apply_patch(data: bytes, direction: str, startup_target=None, tick_target=None,
+                layer_target=None, companion_target=None, hid_target=None) -> bytes:
     out = bytearray(data)
-    for linked, pair in patch_sites(startup_target, tick_target).items():
+    for linked, pair in patch_sites(startup_target, tick_target, layer_target,
+                                    companion_target, hid_target).items():
         want = pair["original"] if direction == "patch" else pair["extension"]
         got = _word(out, linked)
         if got != want:
@@ -82,6 +94,9 @@ def main() -> int:
                          help="reverse the patch (output = original V122)")
     parser.add_argument("--startup-target", type=lambda s: int(s, 0))
     parser.add_argument("--tick-target", type=lambda s: int(s, 0))
+    parser.add_argument("--layer-target", type=lambda s: int(s, 0))
+    parser.add_argument("--companion-target", type=lambda s: int(s, 0))
+    parser.add_argument("--hid-target", type=lambda s: int(s, 0))
     args = parser.parse_args()
 
     data = args.image.read_bytes()
@@ -90,7 +105,9 @@ def main() -> int:
     if not args.reverse:
         check_image(data)
     direction = "reverse" if args.reverse else "patch"
-    result = apply_patch(data, direction, args.startup_target, args.tick_target)
+    targets = (args.startup_target, args.tick_target, args.layer_target,
+               args.companion_target, args.hid_target)
+    result = apply_patch(data, direction, *targets)
 
     args.out.write_bytes(result)
     manifest = {
@@ -103,7 +120,7 @@ def main() -> int:
             {"linked": hex(linked), "file_offset": hex(linked - BASE),
              "original_word": f"{p['original']:08x}", "extension_word": f"{p['extension']:08x}",
              "applied_word": f"{(p['extension'] if direction == 'patch' else p['original']):08x}"}
-            for linked, p in patch_sites(args.startup_target, args.tick_target).items()
+            for linked, p in patch_sites(*targets).items()
         ],
         "oem_builder": hex(OEM_BUILDER),
         "extension_builder": hex(EXTENSION_BUILDER),
