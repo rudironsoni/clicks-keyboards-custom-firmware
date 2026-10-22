@@ -35,6 +35,45 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
+## Current stopping point, 2026-10-22 (OEM executable integration)
+
+Rudi accepted `9113dab` only as an offline correctness-and-build milestone.
+The **OEM executable-integration milestone remains open**. No physical
+keyboard operation is authorized. M4 stays closed and R3 stays unmet.
+
+Implemented after that review:
+
+- Asserted callback address `0x6900`, ELF symbol/disassembly checks, SRAM
+  placement and startup initialization, plus reversible startup/timer JAL hooks.
+- Corrected report framing and separate companion/EP1 submissions. The
+  device clock now counts nominal SysTick services, not builder callbacks.
+  An eight-report FIFO waits for EP1 NAK and handles idle tap releases.
+- Corrected activation snapshots, explicit NO/TRANSPARENT actions, and
+  two-pass record validation. Format v2 maximum is 978 bytes, not 512.
+- Added a separate bounded V122 execution profile. Default delegation
+  matches 74 full stock submissions. Enabled fixtures execute Esc, Tab,
+  Undo, Redo, Up, and idle tap release, including delayed host readiness.
+  Removing the timer hook demonstrably loses the final release.
+- Firmware CI now retains the research ELF, BIN, map, disassembly,
+  symbols, hashes, manifest, report, and traces.
+
+**[CORRECTION]** Registration stores the builder at `scan_obj+0x18` and
+the layer handler at `+0x1C`, not the reverse. SysTick is `0x3AE6`.
+
+The bounded profile executes CRT through the SystemInit call, then uses
+a separate scanner fixture. It does not execute full startup, interrupt
+entry/return, USB enumeration, real completion IRQs, or iAP2 delivery.
+Its keymap settings are synthetic RAM inputs, not USB editor operations.
+
+Next: preserve consumer, sticky modifier, currency, and layout behavior
+with remapping enabled. Extend the profile through genuine IRQ and USB
+completion paths. Verify FIFO overflow. Configuration/readback and
+recoverable flash storage follow only after executable equivalence passes.
+The QMK-pinned assurance gate and iOS app remain untouched.
+
+Reproduction and detailed evidence:
+[stock-extension-feasibility.md section 11](keyboards/ck5200/docs/stock-extension-feasibility.md#11-oem-integration-increment-after-the-9113dab-review).
+
 ## Current stopping point, 2026-10-21 (settings protocol)
 
 **Stock configuration protocol — evidence phase** is the current workstream

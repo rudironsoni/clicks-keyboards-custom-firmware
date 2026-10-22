@@ -14,6 +14,10 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
+**Current evidence: section 11.** Rudi accepted `9113dab` only as an
+offline correctness-and-build milestone. The OEM executable integration
+milestone remains open. Earlier measurements below describe that build.
+
 ## 1. The key-processing pipeline (verified)
 
 ```text
@@ -28,7 +32,7 @@ main init 0x2358 --jal--> scanner init 0x2A22
 scan tick 0x2A1E --jal--> scanner 0x24AA-0x26D6 --> invokes the stored
       report-builder callback per matrix change
 report builder 0x2796 (ABI: a0 = state object, a1 = 6-byte matrix rows,
-      a2 = capacity/size; returns a report)
+   a2 = capacity/size; submits reports)
   0x27DA: c.jal 0x2A54 (sticky-modifier latch processor)
   0x2796+0x2B1C..0x3010: per-crossing usage emission (see the ledger)
 ```
@@ -82,9 +86,8 @@ constraint is asserted by the patcher test. Effects:
 - **OEM behavior remains callable**: the extension builder can far-call the
   original `0x2796` (32-bit `jal` reaches: `0x6900→0x2796` = −`0x416A`),
   let it produce the stock report, then apply the custom keymap deltas —
-  satisfying the milestone requirement that stock-default behavior is
-  preserved while remapped keys emit configured events. With the custom
-  keymap equal to defaults, output is bit-identical to stock.
+   preserving the option of OEM delegation. Current default equivalence
+   comes from delegation, not from the engine reproducing all OEM rules.
 - The layer/backlight handler `0x2958` (built at `0x2A36/0x2A3E`) can stay
   OEM or be redirected the same way if activation reconfiguration needs it.
 - **Reversibility**: restoring the two recorded original words
@@ -114,17 +117,16 @@ both 32-bit-aligned, both inside the one-time registration path.
   beyond the V122 image, before the staging area. The extension (builder
   replacement + engine) must fit together with any appended keymap records
   the image itself carries.
-- A three-layer, 36-position keymap record is 36 × 3 × 2 = **216 bytes**
-  plus headers; two profiles ≈ 0.5 KiB. The engine (deliverable 2) must be
-  measured after compilation; the QMK-port comparison (deliverable 4) will
-  size the alternative.
+- **[CORRECTION]** The 216-byte estimate counted usages only. It is not a
+  configuration storage budget. Format v2 allows records up to 978 bytes
+  (section 11).
 - **OEM update survival is NOT claimed**: an official update rewrites the
   application area and would remove the patch and extension; the boot stage's
   copy semantics remain unknown. Persistent keymaps that must survive OEM
   updates belong outside the application image — the only candidate with
   evidence is the settings page `[0xF700,0xF800)` (244 unused bytes after the
-  12-byte settings record, preserved by OEM update image copies by
-  construction, since no official image reaches that page); using it requires
+   12-byte settings record). No update-survival guarantee follows because
+   the boot-stage copy rules remain unknown. Using this page requires
   its own erase/wear and safety analysis before any design is claimed.
 - Keymap writes on-device would use the stock RMW helper semantics (256-byte
   page granularity, erase-then-program) and inherit its interruption window.
@@ -148,10 +150,9 @@ findings are fixed at instruction level of the model:
   event.
 - **Overlapping activators**: a press-order stack; releasing one
   activator falls back to the next still held (tested in both orders).
-- **Base transparency**: an empty action on a layer inherits the
-  base-layer action (matches the ledger's "-" columns) and lets
-  base-defined activators — e.g. a toggle — still work while their layer
-  is active.
+- **Explicit transparency (review correction)**: only `TRANSPARENT`
+  inherits Base. `NO` disables a key. Empty actions no longer imply
+  transparency. The shared fixture marks inherited positions explicitly.
 - **Input boundary**: rows are masked to the six column bits; bits
   `0x40/0x80` cannot index out of bounds (tested).
 - **Validation**: `ck_keymap_validate()` flags out-of-page usages and bad
@@ -174,12 +175,14 @@ serialization suite
 (`tests/ck5200_extension_shim_test.c`) runs 21 checks.
 
 **Builder ABI** (unchanged, proven): `(a0 = key-state object,
-a1 = matrix[6], a2 = 6)`; builder pointer at `scan_obj+0x1C`, layer
-handler at `+0x18`.
+a1 = matrix[6], a2 = 6)`; builder pointer at `scan_obj+0x18`, layer
+handler at `+0x1C`. **[CORRECTION]** The earlier record reversed these
+offsets. Registration stores them at `0x269E/0x26A0`. Invocation of the
+builder occurs at `0x25A6`.
 
 ## 6. Deliverable 3: measured storage design (v2 measurements)
 
-All numbers below are measured, not estimated:
+Historical measurements at `9113dab`, superseded by section 11:
 
 | Component | Size |
 | --- | --- |
@@ -196,7 +199,8 @@ activation+target, conditional mods/tap fields) measures 350 bytes for
 the full default transcription and shrinks proportionally for delta
 profiles. Deserialization is fail-closed: truncated, bad-magic,
 out-of-page-usage, bad-target, and trailing-byte records are all
-rejected without partial loading (tested).
+rejected by the active caller. **[CORRECTION]** At `9113dab`, rejection
+could alter the destination. The new decoder validates before mutation.
 
 `stock_extension/build_extension_image.sh` reproduces the linked image
 end to end: hash-gated patch, generated record, target compilation,
@@ -206,93 +210,58 @@ assertion.
 
 ## 7. Deliverable 4 plus: the callback shim and linked image
 
-The shim (`stock_extension/ck5200_extension_shim.c`) is the builder the
-patched registration points at. It **replaces** the OEM builder for the
-keyboard-page report — it never calls the OEM builder, so an altered key
-replaces the OEM action rather than emitting both (asserted: exactly one
-frame per tick). With the default keymap it emits stock-equivalent
-frames through the engine; with remaps it emits the configured output.
-The host harness proves: default frames (`type 020B`, mods, usage),
-replacement semantics, and the time-driven tap release through
-`ck_shim_next_deadline`.
+**[CORRECTION]** The `9113dab` shim did not prove stock equivalence.
+Its frame omitted the reserved keyboard byte, its entry placement was
+not guaranteed, its state occupied flash, and it omitted EP1 submission.
+Host tests of that frame did not verify OEM execution.
 
-**Pinned open items before any executable claim on the real path**
-(deliberately not guessed in code, per the review):
-
-1. The exact OEM report framing consumed by the send routine at
-   `0x278C`: field `[2]` and the length formula at `0x2856–0x285E` are
-   not fully decoded; the shim emits the decoded core with `[2]` zeroed.
-2. The RAM address of the OEM 1 ms tick counter: the device build uses a
-   per-call placeholder (`CK_TIME_UNPINNED`); the host harness supplies
-   injected time and is the timing-verification path.
-3. Real-image data placement: the research linker keeps `.data`/`.bss`
-   after the flash sections for measurement only; a real image needs the
-   engine state placed in RAM (and initialized) — via RAM sections with
-   a startup hook or by relocating the engine state into an OEM-writable
-   RAM location.
-4. The decisive offline verification: execute the patched V122 pipeline
-   in the chgame-based bounded assurance model (a NEW V122 profile; the
-   existing gate is hash-pinned to the QMK binary and must not be
-   modified) and compare complete HID reports against the engine
-   across scripted scans, including stock-default byte-equivalence.
+The current shim delegates to the original builder when remapping is
+disabled. Enabled research mode uses the engine, the corrected 11-byte
+frame, and a completion-gated eight-report FIFO. Consumer output and
+sticky behavior in enabled mode remain incomplete. Section 11 defines
+the bounded execution evidence and its limits.
 
 ## 8. Deliverable 4: evidence-based comparison with QMK
 
 | Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
 | --- | --- | --- |
-| Behavioral evidence | 36-check engine suite: stock-default equivalence, NAV remap goal (Esc/Tab/Undo/Redo/arrows), all four activation modes, release correctness | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
-| Image footprint | ≈ 20.1 KiB total (V122 + ≤1.6 KiB extension) | 26,940 bytes verified |
-| OEM stack | Preserved byte-for-byte: USB, iAP2, MFi authentication, OEM updater protocol all untouched | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
-| Integration risk | Concentrated and small: 8-byte registration patch (reversible, tested), one callback ABI bridge, placement vs. future official images (a larger official image than `0x6900` bytes would overlap the extension region) | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
+| Behavioral evidence | Host suites plus a bounded V122 scanner profile. Default delegation matches 74 complete submissions. Enabled NAV and idle tap releases execute through OEM EP1 submission. Full OEM behavior in enabled mode is not established. | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
+| Image footprint | 22,441 bytes, current research build | 26,940 bytes verified |
+| OEM stack | OEM code retained, with registration, startup-call, and timer-call hooks. Runtime compatibility still requires verification. | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
+| Integration risk | Four patched instruction words, extension SRAM, timer scheduling, two transports, and OEM behavior preservation | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
 | Stock restore | Official Clicks update overwrites the extension (de-facto restore, unverified) — same staging path as the M4 trial | Same M4 staging path (V122 restage), same unknown boot-stage caveats |
 | Recovery dependency | **Identical for both: R3 unmet. Neither image may be installed until independent recovery is authorized.** | Same |
 | Capability ceiling | Three layers × 36 positions, four activation modes, modifier chords | The full QMK engine (more layers, tap-hold timing rules, combos, macros) |
 
 Assessment: the two routes are complementary, not competing. The
-stock-derived extension is the minimal-risk path to the original goal
+stock-derived extension is the current preferred research route to the goal
 (Esc/Tab/Undo/Redo and cursor keys on configurable positions with the OEM
 behavior and authentication intact); QMK remains the functional reference
 and the only route to capabilities beyond the small engine's ceiling.
 Per the milestone contract: if the stock-derived route cannot fit or
 cannot preserve OEM behavior reliably, switch to QMK with the failure
-documented. The measurements above show it fits with wide margin; the
-remaining stock-route risk is behavioral (the callback shim and the
-report-send path must be written and tested against the OEM send routine,
-not merely sized).
+documented. The current image fits the application area. This does not
+establish lower installation risk or full OEM compatibility.
 
-## 9. Open items (updated 2026-10-22, v2 increment)
+## 9. Remaining integration gates
 
-1. ~~Builder-callback invocation ABI~~ **DONE** (`0x2536–0x2542`,
-   `0x259E–0x25A6`): `(a0 = key-state object, a1 = matrix[6], a2 = 6)`;
-   builder at `scan_obj+0x1C`, layer handler at `+0x18`.
-2. ~~Engine implementation and measurement~~ **DONE v2**: per-layer
-   actions, immutable press snapshots, activator stack, millisecond
-   timing with deadlines, base transparency, boundary masking; 258-check
-   engine suite plus the 21-check shim/serialization suite; 772-byte
-   target `.text` (§5).
-3. ~~Serialized storage design~~ **DONE**: packed format v1 measured at
-   350 bytes per default record, fail-closed deserialization, linked
-   extension 2,624 bytes, complete image 21,272 bytes with 5,864 bytes
-   headroom (§6).
-4. Appended-code placement rules: a future official image larger than
-   `0x6900` bytes overlaps the extension region and invalidates the
-   layout — check against the manifest sizes at each update.
-5. The OEM report framing consumed by `0x278C` (field `[2]`, length
-   formula at `0x2856–0x285E`) and the OEM 1 ms tick RAM address: pinned
-   open items in the shim (§7); both must be decoded before any
-   executable claim on the real send path.
-6. Real-image RAM placement and initialization for the extension state
-   (the research linker keeps `.data`/`.bss` after flash sections for
-   measurement only).
-7. The decisive offline verification: a NEW V122 execution profile on the
-   chgame bounded assurance model (the existing gate is hash-pinned to
-   the QMK binary and must not be modified) driving the patched pipeline
-   end to end and comparing complete HID reports against the engine —
-   including stock-default byte-equivalence and remapped keys replacing,
-   not duplicating, OEM output. The engine and shim suites verify the
-   model logic; this step verifies the actual V122 execution path.
-4. Behavioral equivalence harness: stock-default keymap → byte-identical
-   reports vs. the unpatched OEM builder, run offline against scripted scans.
+1. Preserve consumer, sticky modifier, currency, and layout-dependent OEM
+   behavior **while remapping is enabled**. Default delegation alone does
+   not satisfy this gate. The keyboard-page fixture cannot replace these rules.
+2. Extend execution beyond the synthetic handoff: full SystemInit/main
+   execution, actual interrupt entry/return, USB enumeration and completion
+   interrupts, suspend/reconnect, and companion transport backpressure.
+   Current EP1 readiness is a modeled input, not a controller interrupt proof.
+3. Verify FIFO overflow recovery and delayed/coalesced timer interrupts.
+   The implemented overflow policy drains accepted reports, emits all-up,
+   and mutes remaps until all physical keys are released. It is not lossless.
+4. Only after executable equivalence passes: define the capability
+   handshake, typed USB operations, readback, profile switching, and
+   recoverable flash transactions. No iPhone editor or persistent profiles
+   exist for this extension. A maximum record cannot fit in the 244 unused
+   bytes of `0xF700`. No other storage region is approved for writes.
+5. Recheck placement for each OEM version. An image ending after `0x6900`
+   overlaps this extension. R3 remains unmet for both the extension and QMK.
 
 ## 10. Demonstrated offline patcher (research artifact)
 
@@ -310,3 +279,124 @@ a manifest (offsets, original/replacement encodings, hashes). Its test
 **A patched image is a research artifact. Nothing in this document
 authorizes writing it to the keyboard; installation remains gated by the
 unchanged R3 recovery decision.**
+
+## 11. OEM integration increment after the `9113dab` review
+
+Status: **bounded scanner execution passes locally. The full OEM
+executable-integration milestone remains OPEN.** Hosted results belong
+to the commit/run record, not to an inferred success from local tests.
+
+### Placement and initialization
+
+- `KEEP(*(.text.ck_extension_builder))` places the callback first.
+  `ASSERT(ck_extension_builder == 0x6900)` enforces its address. The build
+  also checks the symbol table and disassembly.
+- V122 startup sets GP to `0x20000840`, SP to `0x20005000`, copies
+  `[0x6880,0x68D8)` into `[0x20000000,0x20000058)`, and clears BSS through
+  `0x200006B4` (`0x485C–0x48A6`).
+- The linker reserves `[0x200006C0,0x20002000)` for extension SRAM.
+  Current BSS occupies `[0x200006C0,0x20000F79)`, 2,233 bytes. The upper
+  12 KiB remains available for the stack. The bounded profile observes
+  minimum SP `0x20004864`. This is not an all-path stack bound.
+- A new JAL hook at `0x48CE` runs `ck_extension_init`, then calls the
+  original SystemInit at `0x3BBA`. The profile seeds RAM with `0xA5` and
+  executes the genuine startup path to that call. It checks OEM data,
+  OEM BSS, and every extension BSS byte. Full SystemInit is not executed.
+- The complete image now patches four instruction words, 16 bytes:
+  `0x2A3A`, `0x2A42`, `0x48CE`, and `0x3AEE`. Startup/timer targets come
+  from ELF symbols. Per-site reversal reproduces the exact V122 hash.
+  The two-word registration-only patch remains separately usable offline.
+
+### Report and timer boundaries
+
+- `0x27A8–0x27B8` zeroes the packet and sets `[0B,02]`. Byte `[2]` is
+  zero. The eight-byte boot keyboard report begins at `[3]`: modifier,
+  reserved, then six usages. The previous shim misplaced usages at `[4]`.
+- `0x2856–0x2860` computes length as `frame[0] + frame[11]`.
+  The keyboard-only packet is 11 bytes. The OEM path can append a
+  four-byte consumer record, making 15 bytes.
+- `0x2864` calls companion submission `0x278C`, through `0x4788` and
+  session-gated `0x62CC`. `0x286C` separately calls `0x3CBE(report,8)`,
+  which submits EP1 through `0x3E28`. These are not interchangeable APIs.
+- `0x3E28` copies immediately into the EP1 DMA buffer and sets ACK. It
+  has no busy check. The extension FIFO waits for TX response NAK at
+  `0x40023426` before submitting. OEM IN completion sets NAK at
+  `0x40CA–0x40D6`. FIFO behavior is tested against a modeled ready host
+  and a host consuming only every 17 nominal milliseconds.
+- The real SysTick handler is `0x3AE6`, not the stub at `0x4810`.
+  `0x3AEE` calls the timer driver `0x22DA`, which reaches scanner tick
+  `0x29F4` and scanner `0x24AA`. V122 configures the nominal 1 ms timer
+  at `0x3B9E–0x3BB2`. No free-running OEM millisecond RAM global is claimed.
+- The new hook increments a counter per SysTick service, calls the OEM
+  timer driver, then handles due deadlines and queued reports even with
+  an idle scanner. It no longer counts builder callbacks. Delayed or
+  coalesced interrupts can affect this clock and remain an open test.
+
+### State and storage corrections
+
+- Held activators resolve their target from the immutable press snapshot.
+  Toggle and one-shot targets use independent snapshots after release.
+  Same-scan activators resolve in row/column order. TAP interruption is
+  per press, so a later activator cannot clear an earlier interruption.
+- `NO` and `TRANSPARENT` are independent actions on all three layers.
+  Base transparency emits nothing. The shared fixture explicitly marks
+  inherited positions instead of inferring transparency from empty actions.
+- Format v2 rejects format v1 rather than reinterpreting old records.
+  A validation pass precedes destination mutation. Duplicate entries,
+  unknown flags, malformed actions, truncation, and trailing data fail.
+- The embedded fixture now occupies 461 bytes. The worst allowed record
+  occupies **978 bytes**: six header bytes plus 108 nine-byte entries.
+  The generator uses this bound. A maximum-size round trip and a short
+  buffer rejection are tested. This is not persistent storage.
+- The expanded engine measures 1,126 bytes under the existing footprint
+  test flags. Its sub-budget changes from 1,024 to 1,280 bytes. The complete
+  image remains subject to the unchanged 27,136-byte application limit.
+
+### Reproduction and exact limits
+
+```sh
+cd keyboards/ck5200
+bash stock_extension/build_extension_image.sh
+python3 stock_extension/assurance/run.py
+```
+
+The V122 profile uses the pinned CHGame CPU and existing guard patch in
+its own build directory. It does not change `assurance/run.py`, its
+QMK hashes, its model, or any external checkout. Unknown memory accesses,
+flash writes, wrong callback targets, stack overlap, and EP1 overwrite
+before completion fail the profile.
+
+Five cases retain ordered JSONL evidence:
+
+1. Stock V122: Q plus a press/release at each of the 36 positions.
+2. Extended V122, remapping disabled: the same 74 companion submissions,
+   74 complete HID submissions, and 74 consumed EP1 packets, byte-for-byte
+   and at the same scripted times. This proves **delegation**, not engine
+   equivalence to the complete OEM behavior.
+3. Remapping enabled through a synthetic RAM fixture: exact ordered Q,
+   Esc, Tab, GUI+Z, GUI+Shift+Z, Up, and idle TAP press/release reports.
+   No USB configuration command is fabricated or claimed.
+4. The same remaps with EP1 host consumption every 17 nominal milliseconds.
+5. Negative control: removing only the timer hook causes the final tap
+   release to disappear. The profile requires detection of this failure.
+
+Execution includes genuine CRT instructions, the real scanner initializer,
+GPIO scan instructions, the registered callback, both OEM submission
+functions, and the EP1 DMA copy. It stops CRT before SystemInit. It invokes
+the real timer driver's JAL target, not interrupt entry/return. Settings,
+GPIO closures, and EP1 completion are synthetic. Enumeration, iAP2/MFi
+delivery, complete boot, and physical timing remain unproven.
+
+Current image: **22,441 bytes**, extent `0x77A9`, with **4,695 bytes**
+headroom. This includes the unchanged-size V122 base, a 40-byte alignment
+gap, and 3,753 bytes beginning at `0x6900`. BIN SHA-256:
+`8165f272701baaf20d8da7e8544a5bf89d2c4aa352de8b5f9a97ae15abecf7b0`.
+
+Firmware CI retains `ck5200-stock-extension-research`: ELF, BIN, map,
+disassembly, symbols, SHA256SUMS, patch manifest, execution log, report,
+and all traces. The report binds the executed images and ELF to hashes.
+The profile verifies ELF/BIN identity before execution.
+
+No keyboard command, firmware write, reset, ISP operation, or vendor
+contact occurred. R3, M4, and the separate physical authorization gates
+remain unchanged.

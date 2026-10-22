@@ -1,29 +1,26 @@
 /*
- * CK-5200 stock-extension report-builder shim (research artifact, v1).
+ * CK-5200 stock-extension report-builder shim (offline research artifact).
  *
  * This is the code the patched V122 registration points at: the OEM
  * scanner calls it with the proven builder ABI
  *   (a0 = key-state object, a1 = matrix[6], a2 = 6)
- * (scan path 0x2536-0x2542 / 0x259E-0x25A6; feasibility doc section 5).
+ * (builder invocation 0x259E-0x25A6, pointer at scan_obj+0x18).
  *
- * The shim REPLACES the OEM report builder for the keyboard-page report:
- * it never calls the OEM builder, so an altered key replaces the OEM
- * action rather than emitting both. Positions at stock-default actions
- * produce stock-equivalent output through the engine's default keymap.
+ * Default device mode delegates to the original OEM builder. The enabled
+ * research mode replaces keyboard-page output, with an eight-report FIFO.
+ * Consumer/sticky behavior in enabled mode is NOT yet preserved. The host
+ * keymap fixture is a keyboard-page model, not the complete OEM behavior.
  *
  * Host harness (CK_SHIM_HOST): ck_shim_process() runs the engine and
  * returns the report frame for assertion, with injectable time.
- * Device build: ck_extension_builder() is the ABI entry; it reads the
- * OEM 1 ms tick as its time source and calls the OEM send routine.
+ * Device build: startup initializes extension SRAM. A separate timer
+ * hook counts nominal 1 ms SysTick services and handles idle deadlines.
+ * Both OEM companion submission and EP1 HID submission are distinct calls.
  *
- * OPEN ITEMS pinned by the 2026-10-22 review, deliberately not guessed
- * here and required before any executable claim:
- *  - the exact OEM report framing consumed by the send routine at
- *    0x278C (the decoded constants are used; field [2] and the exact
- *    length formula at 0x2856-0x285E are not yet decoded);
- *  - the RAM address of the OEM 1 ms tick counter (device build uses a
- *    per-call placeholder counter marked CK_TIME_UNPINNED).
- * See keyboards/ck5200/docs/stock-extension-feasibility.md.
+ * The separate V122 profile executes CRT initialization and the bounded
+ * scanner/report path. Full startup, IRQ/USB completion semantics, iAP2
+ * delivery, and configuration/persistence remain outside that proof.
+ * See keyboards/ck5200/docs/stock-extension-feasibility.md, section 11.
  */
 #ifndef CK5200_EXTENSION_SHIM_H
 #define CK5200_EXTENSION_SHIM_H

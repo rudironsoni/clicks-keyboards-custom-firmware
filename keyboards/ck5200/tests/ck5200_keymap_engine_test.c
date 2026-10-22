@@ -358,6 +358,58 @@ static void test_overlapping_activators(void)
 
 /* ---------------- release across layer transitions ---------------- */
 
+static void test_nested_actions_and_explicit_transparency(void)
+{
+    ck_keymap_t map;
+    stock_keymap(&map);
+    ck_action_t *a = &map.action[0][ck_pos(0, 3)];
+    *a = (ck_action_t){.activation = CK_ACT_HOLD, .layer_switch = CK_LAYER_NAV};
+    map.action[CK_LAYER_NAV][ck_pos(0, 4)] =
+        (ck_action_t){.activation = CK_ACT_HOLD, .layer_switch = CK_LAYER_SYM};
+    rig_t r;
+    rig_init(&r, &map);
+    /* Same-scan activators resolve in row/column order, not host timing. */
+    r.matrix[0] = 0x18;
+    tick(&r);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_2}, 1),
+          "nested: NAV-defined activator uses its SYM snapshot");
+    key(&r, 1, 0, false);
+    key(&r, 0, 3, false);
+    key(&r, 1, 0, true);
+    CHECK(report_is(&r, 0, (uint16_t[]){U_2}, 1),
+          "nested: release earlier activator keeps later snapshot");
+    key(&r, 1, 0, false);
+    key(&r, 0, 4, false);
+
+    for (int mode = CK_ACT_TOGGLE; mode <= CK_ACT_ONESHOT; mode++) {
+        map.action[CK_LAYER_NAV][ck_pos(0, 4)].activation = mode;
+        rig_init(&r, &map);
+        key(&r, 0, 3, true);
+        key(&r, 0, 4, true);
+        key(&r, 0, 4, false);
+        key(&r, 0, 3, false);
+        key(&r, 1, 0, true);
+        CHECK(report_is(&r, 0, (uint16_t[]){U_2}, 1),
+              "nested: toggle/oneshot snapshot survives activator release");
+    }
+
+    for (int layer = 0; layer < CK_LAYERS; layer++) {
+        map.action[layer][0] = (ck_action_t){.kind = CK_ACTION_NO};
+        CHECK(ck_engine_resolve_action(&map, layer, 0)->kind == CK_ACTION_NO,
+              "NO: disabled on each layer without Base fallback");
+        map.action[layer][0] = (ck_action_t){.kind = CK_ACTION_TRANSPARENT};
+        const ck_action_t *resolved = ck_engine_resolve_action(&map, layer, 0);
+        CHECK(resolved == &map.action[0][0], "transparent: resolves to Base on each layer");
+        map.action[layer][0] = (ck_action_t){.usage = U_Q};
+    }
+    map.action[CK_LAYER_NAV][0] = (ck_action_t){.kind = CK_ACTION_NO};
+    rig_init(&r, &map);
+    key(&r, 0, 3, true);
+    key(&r, 0, 0, true);
+    CHECK(r.count == 0, "NO: held disabled key emits no Base usage");
+}
+
 static void test_release_across_layer_switch(void)
 {
     ck_keymap_t map;
@@ -512,6 +564,7 @@ int main(void)
     test_hold_and_toggle_and_oneshot();
     test_tap_timing_and_time_driven_release();
     test_overlapping_activators();
+    test_nested_actions_and_explicit_transparency();
     test_release_across_layer_switch();
     test_all_positions_all_layers();
     test_boundary_bits_and_malformed_keymap();

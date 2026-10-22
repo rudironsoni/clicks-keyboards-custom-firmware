@@ -3,7 +3,7 @@
 
 Replaces the two instruction words that construct the V122 report-builder
 callback pointer (lui a2,0x2 / addi a2,a2,0x796 = 0x2796) with words that
-build the extension address 0x6900 (lui a2,0x6 / addi a2,a2,0x900), so the
+build the extension address 0x6900 (lui a2,0x7 / addi a2,a2,-0x700), so the
 scanner registration stores the extension as the HID report builder.
 
 OFFLINE RESEARCH ARTIFACT ONLY. A patched image is not authorized for
@@ -42,9 +42,25 @@ def check_image(data: bytes) -> None:
         raise SystemExit(f"refused: image sha256 {got} is not the pinned V122 artifact")
 
 
-def apply_patch(data: bytes, direction: str) -> bytes:
+def patch_sites(startup_target=None, tick_target=None):
+    sites = dict(PATCH_SITES)
+    for address, original, target in ((0x48CE, 0xAECFF0EF, startup_target),
+                                      (0x3AEE, 0xFECFE0EF, tick_target)):
+        if target is None:
+            continue
+        delta = target - address
+        if target < EXTENSION_BUILDER or target >= 0x8A00 or delta & 1:
+            raise ValueError("extension hook target is outside aligned extension flash")
+        imm = delta & 0x1FFFFF
+        word = (((imm >> 20) & 1) << 31 | ((imm >> 1) & 0x3FF) << 21
+                | ((imm >> 11) & 1) << 20 | ((imm >> 12) & 0xFF) << 12 | 0xEF)
+        sites[address] = {"original": original, "extension": word}
+    return sites
+
+
+def apply_patch(data: bytes, direction: str, startup_target=None, tick_target=None) -> bytes:
     out = bytearray(data)
-    for linked, pair in PATCH_SITES.items():
+    for linked, pair in patch_sites(startup_target, tick_target).items():
         want = pair["original"] if direction == "patch" else pair["extension"]
         got = _word(out, linked)
         if got != want:
@@ -64,6 +80,8 @@ def main() -> int:
     parser.add_argument("manifest", type=pathlib.Path, help="JSON manifest to write")
     parser.add_argument("--reverse", action="store_true",
                          help="reverse the patch (output = original V122)")
+    parser.add_argument("--startup-target", type=lambda s: int(s, 0))
+    parser.add_argument("--tick-target", type=lambda s: int(s, 0))
     args = parser.parse_args()
 
     data = args.image.read_bytes()
@@ -72,7 +90,7 @@ def main() -> int:
     if not args.reverse:
         check_image(data)
     direction = "reverse" if args.reverse else "patch"
-    result = apply_patch(data, direction)
+    result = apply_patch(data, direction, args.startup_target, args.tick_target)
 
     args.out.write_bytes(result)
     manifest = {
@@ -85,7 +103,7 @@ def main() -> int:
             {"linked": hex(linked), "file_offset": hex(linked - BASE),
              "original_word": f"{p['original']:08x}", "extension_word": f"{p['extension']:08x}",
              "applied_word": f"{(p['extension'] if direction == 'patch' else p['original']):08x}"}
-            for linked, p in PATCH_SITES.items()
+            for linked, p in patch_sites(args.startup_target, args.tick_target).items()
         ],
         "oem_builder": hex(OEM_BUILDER),
         "extension_builder": hex(EXTENSION_BUILDER),

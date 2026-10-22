@@ -19,7 +19,7 @@ int main(void)
 {
     ck_keymap_t map;
     stock_keymap(&map);
-    uint8_t buf[512];
+    uint8_t buf[CK_KEYMAP_RECORD_MAX];
     size_t len = ck_keymap_serialize(&map, buf, sizeof(buf));
     if (len == 0) {
         fprintf(stderr, "serialization failed\n");

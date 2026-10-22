@@ -55,6 +55,14 @@ typedef enum {
     CK_ACT_ONESHOT     /* layer for the next non-layer press, then expires */
 } ck_activation_t;
 
+/* Zero-initialized actions are plain keys with no output (NO). Only an
+ * explicit TRANSPARENT action inherits Base. Base transparency emits NO. */
+typedef enum {
+    CK_ACTION_KEY = 0,
+    CK_ACTION_NO,
+    CK_ACTION_TRANSPARENT
+} ck_action_kind_t;
+
 /* One action, configured per position and per layer. activation == NONE is
  * a plain usage action (usage + mods). Otherwise it is a layer action for
  * layer_switch with the given mode; usage then applies to nothing. */
@@ -63,6 +71,7 @@ typedef struct {
     uint8_t mods;          /* modifier bits held while this action is held */
     uint8_t activation;    /* ck_activation_t */
     uint8_t layer_switch;  /* target layer for layer actions */
+    uint8_t kind;          /* ck_action_kind_t */
     uint16_t tap_usage;     /* CK_ACT_TAP quick-release usage */
     uint16_t tap_ms;       /* CK_ACT_TAP window in elapsed ms */
 } ck_action_t;
@@ -76,12 +85,7 @@ static inline int ck_pos(int row, int col)
     return row * CK_COLS + col;
 }
 
-/* Action resolution with base transparency: an empty action on the
- * effective layer inherits the base-layer action. This matches the stock
- * ledger ("-" columns keep base behavior) and lets activators defined on
- * the base layer still work while another layer is active (a toggle key
- * must be able to switch its layer off). A non-empty action on any layer
- * shadows the base entry. */
+/* Resolve explicit transparency to Base. NO never inherits another action. */
 const ck_action_t *ck_engine_resolve_action(const ck_keymap_t *map,
                                              int layer, int pos);
 
@@ -102,6 +106,7 @@ typedef struct {
     uint8_t layer_switch;
     uint16_t tap_usage;
     uint32_t tap_deadline;  /* absolute ms for the TAP window close */
+    bool tap_interrupted;   /* another key pressed during this TAP */
 } ck_held_action_t;
 
 typedef struct {
@@ -114,13 +119,14 @@ typedef struct {
     int activator_depth;
 
     int toggle_owner;          /* position owning the toggle, or -1 */
+    uint8_t toggle_layer;      /* snapshot survives release/repress */
     bool oneshot_armed;
     int oneshot_from;          /* arming position, or -1 */
+    uint8_t oneshot_layer;     /* snapshot survives the arming key's release */
     uint32_t oneshot_deadline; /* absolute ms */
 
     ck_held_action_t held[CK_KEYS];
     bool held_active[CK_KEYS];
-    bool tap_second_key;
 
     uint32_t now_ms;           /* last observed time */
     uint32_t last_press_ms;

@@ -31,6 +31,9 @@ CK_FIXTURE_FN void set_plain_nav(ck_keymap_t *m, int row, int col, uint16_t usag
 CK_FIXTURE_FN void stock_keymap(ck_keymap_t *m)
 {
     memset(m, 0, sizeof(*m));
+    for (int layer = 1; layer < CK_LAYERS; layer++)
+        for (int pos = 0; pos < CK_KEYS; pos++)
+            m->action[layer][pos].kind = CK_ACTION_TRANSPARENT;
 #define SET(l, r, c, u) set_plain_any(m, l, r, c, u, 0)
     /* Base layer (consumer positions 0/05, 1/05, 5/05 emit nothing in
      * this keyboard-page model; 2/03 is Left Shift). */

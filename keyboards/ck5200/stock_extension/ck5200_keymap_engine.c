@@ -6,22 +6,12 @@
 
 #include <string.h>
 
-static const ck_action_t *action_of(const ck_engine_t *e, int layer, int pos)
-{
-    return &e->map->action[layer][pos];
-}
-
-static bool action_is_empty(const ck_action_t *a)
-{
-    return a->usage == 0 && a->mods == 0 && a->activation == CK_ACT_NONE;
-}
-
 const ck_action_t *ck_engine_resolve_action(const ck_keymap_t *map,
                                              int layer, int pos)
 {
     if (layer != CK_LAYER_BASE) {
         const ck_action_t *a = &map->action[layer][pos];
-        if (!action_is_empty(a))
+        if (a->kind != CK_ACTION_TRANSPARENT)
             return a;
     }
     return &map->action[CK_LAYER_BASE][pos];
@@ -33,6 +23,13 @@ int ck_keymap_validate(const ck_keymap_t *map)
     for (int layer = 0; layer < CK_LAYERS; layer++) {
         for (int pos = 0; pos < CK_KEYS; pos++) {
             const ck_action_t *a = &map->action[layer][pos];
+            if (a->kind > CK_ACTION_TRANSPARENT
+                || a->activation > CK_ACT_ONESHOT)
+                invalid++;
+            if (a->kind != CK_ACTION_KEY
+                && (a->usage || a->mods || a->activation || a->layer_switch
+                    || a->tap_usage || a->tap_ms))
+                invalid++;
             if (a->usage > 0xFF)
                 invalid++;
             if (a->activation != CK_ACT_NONE && a->tap_usage > 0xFF)
@@ -57,13 +54,11 @@ void ck_engine_init(ck_engine_t *e, const ck_keymap_t *map)
 static int effective_layer(const ck_engine_t *e)
 {
     if (e->activator_depth > 0)
-        return action_of(e, CK_LAYER_BASE,
-                         e->activator_stack[e->activator_depth - 1]
-                        )->layer_switch;
+        return e->held[e->activator_stack[e->activator_depth - 1]].layer_switch;
     if (e->oneshot_armed)
-        return action_of(e, CK_LAYER_BASE, e->oneshot_from)->layer_switch;
+        return e->oneshot_layer;
     if (e->toggle_owner >= 0)
-        return action_of(e, CK_LAYER_BASE, e->toggle_owner)->layer_switch;
+        return e->toggle_layer;
     return CK_LAYER_BASE;
 }
 
@@ -118,6 +113,17 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     int layer = effective_layer(e);
     const ck_action_t *a = ck_engine_resolve_action(e->map, layer, pos);
 
+    /* A second activator also interrupts an earlier TAP. A later TAP
+     * must not clear the earlier key's interruption state. */
+    for (int i = 0; i < CK_KEYS; i++)
+        if (e->held_active[i])
+            e->held[i].tap_interrupted = true;
+    if (a->kind != CK_ACTION_KEY || a->usage > 0xFF
+        || a->activation > CK_ACT_ONESHOT
+        || (a->activation && (a->layer_switch >= CK_LAYERS
+                             || a->tap_usage > 0xFF)))
+        return;
+
     ck_held_action_t *h = &e->held[pos];
     e->held_active[pos] = true;
     h->is_layer_action = (a->activation != CK_ACT_NONE);
@@ -128,6 +134,7 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     h->layer_switch = a->layer_switch;
     h->tap_usage = a->tap_usage;
     h->tap_deadline = now_ms + (a->tap_ms ? a->tap_ms : 200);
+    h->tap_interrupted = false;
 
     e->now_ms = now_ms;
     e->last_press_ms = now_ms;
@@ -142,17 +149,19 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
         case CK_ACT_TAP:
         case CK_ACT_HOLD:
             push_activator(e, pos);
-            e->tap_second_key = false;
             break;
         case CK_ACT_TOGGLE:
             if (e->toggle_owner == pos)
                 e->toggle_owner = -1;
-            else
+            else {
                 e->toggle_owner = pos;
+                e->toggle_layer = h->layer_switch;
+            }
             break;
         case CK_ACT_ONESHOT:
             e->oneshot_armed = true;
             e->oneshot_from = pos;
+            e->oneshot_layer = h->layer_switch;
             e->oneshot_deadline = now_ms + 1000;
             break;
         default:
@@ -168,7 +177,6 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
         e->oneshot_armed = false;
         e->oneshot_from = -1;
     }
-    e->tap_second_key = true;
 }
 
 static void release(ck_engine_t *e, int pos, uint32_t now_ms)
@@ -180,7 +188,7 @@ static void release(ck_engine_t *e, int pos, uint32_t now_ms)
         switch (h->activation) {
         case CK_ACT_TAP: {
             pop_activator(e, pos);
-            bool quick = !e->tap_second_key && now_ms < h->tap_deadline
+            bool quick = !h->tap_interrupted && now_ms < h->tap_deadline
                          && h->tap_usage != 0;
             if (quick) {
                 /* Emit the tap usage; a TIME-DRIVEN follow-up tick clears
@@ -198,12 +206,15 @@ static void release(ck_engine_t *e, int pos, uint32_t now_ms)
         }
         case CK_ACT_HOLD:
             pop_activator(e, pos);
+            e->held_active[pos] = false;
             break;
         case CK_ACT_ONESHOT:
             /* The armed one-shot survives its release; expiry is
              * time-driven. */
+            e->held_active[pos] = false;
             break;
         default:
+            e->held_active[pos] = false;
             break;
         }
         return;
