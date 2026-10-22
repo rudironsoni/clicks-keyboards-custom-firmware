@@ -196,24 +196,144 @@ static bool native_input(uint8_t matrix[CK_ROWS])
     return false;
 }
 
-static void preview_native(void *state_obj, const uint8_t matrix[CK_ROWS])
+/* Exact native selector used at 0x2A62-0x2AE4 and 0x2C28-0x2C38.
+ * Sticky Symbols comes from the OEM latch, except while native GUI is
+ * held or sticky Symbols is disabled. Cursor comes from context bit 4,
+ * which the OEM gesture branch sets, not from a guessed held-key chord. */
+uint8_t ck_native_modes(void *state_obj, const uint8_t matrix[CK_ROWS])
 {
-    /* The OEM builder owns 0x44 bytes of key state and references a
-     * 0x128-byte settings context. Clone both before the real invocation.
-     * In this call, preview writes stay in the copies and submissions
-     * are suppressed. Nested-IRQ capture safety is not yet proven. */
+    uint8_t *state = state_obj;
+    uint8_t *context;
+    memcpy(&context, state + 0x40, sizeof(context));
+    bool sym = (context[0x120] & 1) && !(matrix[2] & 0x20)
+        ? (state[0x0C] & 2) != 0 : (matrix[5] & 0x10) != 0;
+    return ((sym ? 1u << CK_LAYER_SYM : 0)
+            | ((context[0] & 0x10) ? 1u << CK_LAYER_NAV : 0))
+        & engine_storage.map->native_mask;
+}
+
+static void native_candidates(const uint8_t matrix[CK_ROWS], uint8_t out[CK_ROWS])
+{
+    memset(out, 0, CK_ROWS);
+    int layer = ck_engine_layer(&engine_storage);
+    for (int row = 0; row < CK_ROWS; row++)
+        for (int col = 0; col < CK_COLS; col++) {
+            uint8_t bit = 1u << col;
+            if (!(matrix[row] & bit)) continue;
+            int pos = ck_pos(row, col);
+            bool native = engine_storage.prev_matrix[row] & bit
+                ? engine_storage.held_active[pos] && engine_storage.held[pos].oem
+                : ck_engine_resolve_action(engine_storage.map, layer, pos)->kind == CK_ACTION_OEM;
+            if (native) out[row] |= bit;
+        }
+}
+
+/* Keep underlying native tracking separate from an explicit custom layer.
+ * Disabled native modes and output projections use private state/context
+ * views. Only a real tracking call commits its owned state prefix and
+ * native status byte. The OEM settings record is never modified. */
+static void native_call(void *state_obj, const uint8_t matrix[CK_ROWS], bool layer, int projection)
+{
+    uint8_t mask = engine_storage.map->native_mask;
+    bool copy = previewing || projection >= 0 || mask != CK_NATIVE_LAYERS;
     uint8_t state[0x44] __attribute__((aligned(4)));
     uint8_t context[0x128] __attribute__((aligned(4)));
-    void *original_context;
+    uint8_t input[CK_ROWS];
+    uint8_t *original_context;
+    if (!copy) {
+        if (layer) oem_layer(state_obj, matrix, CK_ROWS);
+        else oem_builder(state_obj, matrix, CK_ROWS);
+        return;
+    }
     memcpy(state, state_obj, sizeof(state));
     memcpy(&original_context, state + 0x40, sizeof(original_context));
     memcpy(context, original_context, sizeof(context));
+    memcpy(input, matrix, CK_ROWS);
+    if (!(mask & (1u << CK_LAYER_SYM))) {
+        memset(state + 0x0C, 0, 4);
+        context[0x120] &= ~1u;
+        /* Cursor activation remains independent when Symbols is disabled. */
+        bool cursor_gesture = (mask & (1u << CK_LAYER_NAV)) && (context[0x120] & 0x80)
+            && !input[0] && !input[1] && input[2] == 0x20 && !input[3] && !input[4] && input[5] == 0x10;
+        if (!cursor_gesture) input[5] &= ~0x10u;
+    }
+    if (!(mask & (1u << CK_LAYER_NAV))) {
+        context[0x120] &= ~0x80u;
+        context[0] &= ~0x10u;
+    }
+    if (projection >= 0) {
+        context[0x120] &= ~0x81u;
+        context[0] = (context[0] & ~0x10u) | (projection == CK_LAYER_NAV ? 0x10 : 0);
+        input[5] &= ~0x10u;
+        if (projection == CK_LAYER_SYM) {
+            context[0x120] |= 1;
+            state[0x0C] |= 2;
+            state[0x0C] &= ~0x10u;
+            input[5] |= 0x10;
+        }
+    }
     void *copy_context = context;
     memcpy(state + 0x40, &copy_context, sizeof(copy_context));
+    if (layer) oem_layer(state, input, CK_ROWS);
+    else oem_builder(state, input, CK_ROWS);
+    if (!previewing && projection < 0) {
+        memcpy(state_obj, state, 0x20);
+        original_context[0] = context[0];
+    }
+}
+
+static void preview_native(void *state_obj, const uint8_t matrix[CK_ROWS], int projection)
+{
+    /* Preview transport is suppressed. Nested-IRQ capture safety remains
+     * a separate unproven gate, as in the accepted baseline. */
     memset(&preview_frame, 0, sizeof(preview_frame));
     previewing = capturing_native = true;
-    oem_builder(state, matrix, CK_ROWS);
+    native_call(state_obj, matrix, false, projection);
     previewing = capturing_native = false;
+}
+
+static void merge_keys(ck_frame_t *out, const ck_frame_t *in)
+{
+    out->bytes[3] |= in->bytes[3];
+    for (unsigned i = 5; i < 5 + CK_FRAME_KEYS && in->bytes[i]; i++) {
+        unsigned slot = 5;
+        while (slot < 5 + CK_FRAME_KEYS && out->bytes[slot] && out->bytes[slot] != in->bytes[i])
+            slot++;
+        if (slot == 5 + CK_FRAME_KEYS) {
+            memset(out->bytes + 5, 1, CK_FRAME_KEYS);
+            return;
+        }
+        out->bytes[slot] = in->bytes[i];
+    }
+}
+
+/* An OEM action selected by a custom layer keeps that projection until
+ * release, including after one-shot consumption or activator release.
+ * Render separate groups when simultaneous presses own different layers. */
+static bool preview_held_native(void *state_obj, ck_frame_t *out)
+{
+    bool projected = false;
+    for (int p = 0; p < CK_KEYS; p++)
+        if (engine_storage.held_active[p] && engine_storage.held[p].oem
+            && engine_storage.held[p].native_projection >= 0)
+            projected = true;
+    if (!projected) return false;
+    memset(out, 0, sizeof(*out));
+    for (int layer = -1; layer < CK_LAYERS; layer++) {
+        uint8_t group[CK_ROWS] = {0};
+        bool any = false;
+        for (int p = 0; p < CK_KEYS; p++)
+            if (engine_storage.held_active[p] && engine_storage.held[p].oem
+                && engine_storage.held[p].native_projection == layer) {
+                group[p / CK_COLS] |= 1u << (p % CK_COLS);
+                any = true;
+            }
+        if (any) {
+            preview_native(state_obj, group, layer);
+            merge_keys(out, &preview_frame);
+        }
+    }
+    return true;
 }
 
 void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
@@ -238,6 +358,18 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
     memcpy(last_matrix, matrix, CK_ROWS);
     if (queue_fault)
         return;
+    if (engine_storage.oneshot_armed && shim_ms >= engine_storage.oneshot_deadline) {
+        engine_storage.oneshot_armed = false;
+        engine_storage.oneshot_from = -1;
+    }
+    uint8_t candidates[CK_ROWS];
+    native_candidates(matrix, candidates);
+    /* Preserve pre-activation ownership of the two native gesture keys. */
+    if (!ck_engine_custom_layer(&engine_storage)) {
+        engine_storage.native_owners[5] = candidates[5] & 0x10 & ~engine_storage.prev_matrix[5];
+        engine_storage.native_owners[2] = candidates[2] & 0x20 & ~engine_storage.prev_matrix[2];
+    }
+    engine_storage.native_layers = ck_native_modes(state_obj, candidates);
     ck_frame_t frame;
     ck_shim_process(&engine_storage, matrix, shim_ms, &frame);
     uint8_t filtered[CK_ROWS], activity[CK_ROWS];
@@ -246,15 +378,37 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
     bool custom_changed = memcmp(frame.bytes + 3, last_custom.bytes + 3, 8) != 0;
     last_custom = frame;
     native_fresh = false;
-    if (memcmp(native_matrix, activity, CK_ROWS) || custom_changed) {
-        if (marker)
-            preview_native(state_obj, filtered);
-        capturing_native = true;
-        oem_builder(state_obj, activity, CK_ROWS);
-        capturing_native = false;
-        if (marker && native_fresh)
+    int projection = ck_engine_custom_layer(&engine_storage) ? ck_engine_layer(&engine_storage) : -1;
+    static int last_projection;
+    bool native_changed = memcmp(native_matrix, activity, CK_ROWS) || custom_changed;
+    bool projection_changed = projection != last_projection;
+    if (native_changed || projection_changed) {
+        uint8_t projected_mods = 0;
+        bool render = marker || projection >= 0 || projection_changed;
+        if (render) {
+            preview_native(state_obj, activity, projection);
+            projected_mods = preview_frame.bytes[3];
+            if (marker)
+                preview_native(state_obj, filtered, projection);
+        }
+        ck_frame_t held_native;
+        bool held_projection = preview_held_native(state_obj, &held_native);
+        if (held_projection) {
+            preview_frame = held_native;
+            projected_mods = held_native.bytes[3];
+            render = true;
+        }
+        if (native_changed) {
+            capturing_native = true;
+            native_call(state_obj, activity, false, -1);
+            capturing_native = false;
+        }
+        if (render && (native_fresh || projection_changed)) {
             memcpy(native_frame.bytes + 5, preview_frame.bytes + 5, CK_FRAME_KEYS);
+            native_frame.bytes[3] = projected_mods;
+        }
         memcpy(native_matrix, activity, CK_ROWS);
+        last_projection = projection;
     }
     if (!native_frame.len) {
         native_frame.bytes[0] = 11;
@@ -262,17 +416,7 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
         native_frame.len = 11;
     }
     ck_frame_t merged = native_frame;
-    merged.bytes[3] |= frame.bytes[3];
-    for (unsigned i = 5; i < 5 + CK_FRAME_KEYS && frame.bytes[i]; i++) {
-        unsigned slot = 5;
-        while (slot < 5 + CK_FRAME_KEYS && merged.bytes[slot] && merged.bytes[slot] != frame.bytes[i])
-            slot++;
-        if (slot == 5 + CK_FRAME_KEYS) {
-            memset(merged.bytes + 5, 1, CK_FRAME_KEYS); /* HID ErrorRollOver */
-            break;
-        }
-        merged.bytes[slot] = frame.bytes[i];
-    }
+    merge_keys(&merged, &frame);
     enqueue_report(&merged, native_fresh);
     flush_report();
 }
@@ -284,7 +428,10 @@ void ck_extension_layer(void *state_obj, const uint8_t *matrix, int size)
     if (ck_remapping_enabled && engine_storage.map) {
         uint8_t filtered[CK_ROWS];
         native_input(filtered);
-        oem_layer(state_obj, filtered, size);
+        native_call(state_obj, filtered, true, -1);
+        uint8_t native[CK_ROWS];
+        ck_engine_oem_matrix(&engine_storage, native);
+        engine_storage.native_layers = ck_native_modes(state_obj, native);
     } else {
         oem_layer(state_obj, matrix, size);
     }

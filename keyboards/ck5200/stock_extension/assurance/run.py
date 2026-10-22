@@ -89,10 +89,16 @@ def main():
                             ("stock-compat", stock), ("native-compat", extension),
                             ("stock-mixed", stock), ("native-mixed", extension),
                             ("remap", extension), ("remap-delayed-host", extension),
-                            ("remap-no-timer-negative", mutant)]:
+                            ("remap-no-timer-negative", mutant),
+                            *((name, extension) for name in (
+                                "layers-sync", "layers-sym-off", "layers-nav-off", "layers-replace",
+                                "layers-modes", "layers-base-sweep", "layers-sym-sweep", "layers-nav-sweep"))]:
             trace = OUT / f"{name}.trace.jsonl"
             remap = name.startswith("remap")
-            config = [hex(symbols[s]) for s in ("ck_remapping_enabled", "ck_extension_keymap")] if remap or name.startswith("native") else []
+            layers = name.startswith("layers-")
+            config = [hex(symbols[s]) for s in ("ck_remapping_enabled", "ck_extension_keymap")] if remap or layers or name.startswith("native") else []
+            if layers:
+                config.append(name)
             if name == "native-active":
                 config.append("native-active")
             if name.endswith("compat") or name.endswith("mixed"):
@@ -102,7 +108,7 @@ def main():
             command([OUT / "runner", image, trace, *config], env={**os.environ, "UBSAN_OPTIONS": "halt_on_error=1"})
             events = [json.loads(line) for line in trace.read_text().splitlines()]
             summary = events[-1]
-            if name.startswith("native"):
+            if name.startswith("native") or layers:
                 assert summary["engine_calls"] > 0, "native comparison bypassed the enabled engine"
             if name.endswith("compat"):
                 assert all(summary["currency_hits"]) and all(summary["layout_hits"]), "currency/layout path not executed"
@@ -112,7 +118,20 @@ def main():
             assert "0000140000000000" in packets, "Q press missing"
             press = packets.index("0000140000000000")
             assert "0000000000000000" in packets[press + 1:], "Q release missing"
-            if name.endswith("mixed"):
+            if layers:
+                latest = None
+                checks = 0
+                for event in events:
+                    if event["event"] == "EP1-host-consume":
+                        latest = bytes.fromhex(event["hex"])
+                    elif event["event"] == "layer-check":
+                        expected = bytes([event["mods"], 0, event["usage"], event["usage2"], 0, 0, 0, 0])
+                        assert latest == expected, f"{name}/{event['name']}: {latest.hex() if latest else None} != {expected.hex()}"
+                        checks += 1
+                assert checks >= (72 if name.endswith("sweep") else 3), "layer checks missing"
+                if name == "layers-sync":
+                    assert summary["sticky_mode_probes"] and summary["gui_mode_probes"], "sticky/GUI selector paths missing"
+            elif name.endswith("mixed"):
                 start = next(i for i, e in enumerate(events) if e["event"] == "mixed-mapping-scenario")
                 compared = []
                 for e in events[start:]:
@@ -146,20 +165,22 @@ def main():
                     assert tap_ok, "idle tap release missing"
                     expected = ["0000140000000000", "0000000000000000"] * 2
                     for key in ("0000290000000000", "00002b0000000000", "08001d0000000000",
-                                "0a001d0000000000", "0000520000000000", "0000180e17290400",
+                                "0a001d0000000000", "0000520000000000", "0000185117290400",
                                 "0000290000000000"):
                         expected += [key, "0000000000000000"]
                     assert packets == expected, "extra, missing, or reordered HID packet"
             report["cases"].append({"name": name, "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
                                     "packets": packets, "coverage": summary,
+                                    "layer_checks": sum(e["event"] == "layer-check" for e in events),
                                     "companion_submissions": sum(e["event"] == "companion-submit" for e in events)})
         assert default_paths[0] == default_paths[1], "stock-default OEM path differs"
         assert default_paths[0] == default_paths[2], "enabled native OEM path differs"
-        assert compatibility_paths[0] == compatibility_paths[1], "native behavior differs with custom NAV active"
+        assert compatibility_paths[0] == compatibility_paths[1], "enabled native behavior differs"
         assert mixed_paths[0] == mixed_paths[1], "native behavior differs around a remapped letter"
         report["stock_default_equivalent"] = True
         report["enabled_native_equivalent"] = True
-        report["custom_nav_native_equivalent"] = True
+        report["native_settings_equivalent"] = True
+        report["native_custom_layer_checks"] = True
         report["mixed_sticky_mapping_equivalent"] = True
         report["passed"] = True
     finally:

@@ -581,10 +581,60 @@ static void test_multiple_pending_taps(void)
     CHECK(r.count == 0, "pending taps: same-position repress also clears");
 }
 
+static void test_native_layer_ownership(void)
+{
+    const uint16_t usage[CK_LAYERS] = {U_Q, U_ESC, U_TAB};
+    ck_keymap_t map = {0};
+    map.native_mask = CK_NATIVE_LAYERS;
+    for (int layer = 0; layer < CK_LAYERS; layer++)
+        map.action[layer][0].usage = usage[layer];
+    rig_t r;
+    rig_init(&r, &map);
+    r.e.native_layers = 1u << CK_LAYER_SYM;
+    key(&r, 0, 0, true);
+    r.e.native_layers |= 1u << CK_LAYER_NAV;
+    tick(&r);
+    CHECK(report_is(&r, 0, &usage[1], 1), "native: held key keeps its Symbols snapshot");
+    key(&r, 0, 0, false);
+    key(&r, 0, 0, true);
+    CHECK(report_is(&r, 0, &usage[2], 1), "native: Cursor wins over Symbols on the next press");
+    key(&r, 0, 0, false);
+    map.native_mask = 1u << CK_LAYER_SYM;
+    key(&r, 0, 0, true);
+    CHECK(report_is(&r, 0, &usage[1], 1), "native: NAV can be disabled independently");
+    key(&r, 0, 0, false);
+    map.native_mask = 0;
+    key(&r, 0, 0, true);
+    CHECK(report_is(&r, 0, &usage[0], 1), "native: both native modes disabled selects Base");
+
+    map.native_mask = CK_NATIVE_LAYERS;
+    for (int mode = CK_ACT_TAP; mode <= CK_ACT_ONESHOT; mode++)
+        for (int target = 0; target < CK_LAYERS; target++) {
+            for (int layer = 0; layer < CK_LAYERS; layer++)
+                map.action[layer][ck_pos(5,4)] = (ck_action_t){
+                    .activation = mode, .layer_switch = target, .tap_usage = U_ENTER};
+            rig_init(&r, &map);
+            r.e.native_layers = 1u << CK_LAYER_NAV;
+            r.matrix[0] = 1; r.matrix[5] = 0x10; tick(&r);
+            CHECK(report_is(&r, 0, &usage[target], 1),
+                  "native: every custom mode/target wins, even from a later row in the same scan");
+            key(&r, 0, 0, false);
+            key(&r, 5, 4, false);
+            if (mode == CK_ACT_TOGGLE) {
+                key(&r, 5, 4, true); key(&r, 5, 4, false);
+            }
+            key(&r, 0, 0, true);
+            CHECK(report_is(&r, 0, &usage[2], 1), "native: custom release/consumption restores native NAV");
+            key(&r, 0, 0, false);
+            CHECK(r.count == 0 && r.mods == 0, "native: all mode/target releases clear");
+        }
+}
+
 int main(void)
 {
     test_stock_default();
     test_multiple_pending_taps();
+    test_native_layer_ownership();
     test_nav_remap_no_base_regression();
     test_hold_and_toggle_and_oneshot();
     test_tap_timing_and_time_driven_release();

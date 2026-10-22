@@ -14,7 +14,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 12.** Rudi accepted `9113dab` only as an
+**Current evidence: section 13.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -224,7 +224,7 @@ for enabled mode. Full IRQ and transport compatibility remains unproven.
 | Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
 | --- | --- | --- |
 | Behavioral evidence | Host suites plus a bounded V122 scanner profile. Default delegation matches 74 complete submissions. Enabled NAV and idle tap releases execute through OEM EP1 submission. Full OEM behavior in enabled mode is not established. | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
-| Image footprint | 23,702 bytes, current research build | 26,940 bytes verified |
+| Image footprint | 25,466 bytes, current research build | 26,940 bytes verified |
 | OEM stack | OEM code retained, with registration, startup-call, and timer-call hooks. Runtime compatibility still requires verification. | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
 | Integration risk | Eight patched instruction words, extension SRAM, timer scheduling, native-state preview, two transports, and OEM behavior preservation | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
 | Stock restore | Official Clicks update overwrites the extension (de-facto restore, unverified) — same staging path as the M4 trial | Same M4 staging path (V122 restage), same unknown boot-stage caveats |
@@ -243,11 +243,10 @@ establish lower installation risk or full OEM compatibility.
 
 ## 9. Remaining integration gates
 
-1. Extend the enabled-mode comparisons in section 12 beyond their scripted
-   states. Prove native preview/capture safety with nested IRQs. Verify
-   layer activation choices before defining the runtime editor contract.
-   OEM policy actions retain native gestures. They do not automatically
-   select an engine layer number.
+1. Extend the enabled-mode comparisons in section 13 beyond their scripted
+   states. Audit preview writes and prove capture safety with nested IRQs.
+   Native/custom activation has bounded execution evidence, not exhaustive
+   OEM compatibility or interrupt-safety acceptance.
 2. Extend execution beyond the synthetic handoff: full SystemInit/main
    execution, actual interrupt entry/return, USB enumeration and completion
    interrupts, suspend/reconnect, and companion transport backpressure.
@@ -403,6 +402,10 @@ remain unchanged.
 
 ## 12. Active native-policy preservation after the `57fef66` review
 
+This section records the accepted baseline. Firmware CI `39804442651`
+and iOS CI `39804442643` passed at `21a985c`. Section 13 describes the
+subsequent native/custom layer increment.
+
 Status: **active-policy comparisons pass in the bounded model. Full OEM
 integration remains OPEN.** No physical command or settings write ran.
 The QMK gate, iOS source, M4 trial, and vendor inquiry remain untouched.
@@ -503,3 +506,89 @@ Run the same build and profile commands from section 11. Firmware CI
 retains the ELF, BIN, map, disassembly, hashes, manifest, report, and traces
 in `ck5200-stock-extension-research`. Hosted status must be checked for
 the exact new commit. Local success does not imply hosted success.
+
+## 13. Native/custom layer ownership after the `21a985c` review
+
+Status: **18 V122 execution cases pass locally. Hosted verification for
+this increment is pending. Full OEM integration remains OPEN.** No physical
+operation is authorized. R3, M4, and the unsent vendor inquiry are unchanged.
+
+### Activation contract
+
+- The generated map enables native SYM and NAV synchronization. Remapping
+  itself still starts disabled, with no device configuration channel.
+- `native_mask` enables SYM and NAV independently. Disabling a native mode
+  disables its native policy selection as well as its programmable fallback.
+  Cursor activation remains available when native Symbols is disabled.
+- Custom held activators take priority in press order. Then the engine
+  uses an armed one-shot, then a toggle, then native NAV, then native SYM,
+  then Base. Every custom mode can explicitly select Base, SYM, or NAV.
+- A scan processes releases first, initial-layer activators second, and
+  remaining presses last. Every phase uses stable row/column order. The
+  initial activators keep their resolved targets even if an earlier
+  activator changes the layer in that scan.
+- Replacing the original Symbols or GUI action removes its native role.
+  Unchanged gesture participants retain OEM ownership across native mode
+  entry. Explicit custom activation can replace that ownership.
+- Custom actions keep press-time snapshots. OEM actions selected under a
+  custom layer also keep their output-layer projection until release.
+  Separate native previews render simultaneous OEM keys from different
+  custom layers. Underlying native tracking remains separate.
+
+### Native state and bounded evidence
+
+`ck_native_modes()` follows V122's Symbols selector at `0x2A62–0x2AE4`.
+With sticky Symbols enabled and GUI absent, it reads key-state `+0x0C`
+bit 1. Otherwise it reads physical row 5 bit `0x10`. Cursor selection
+reads context status bit `0x10`, set by OEM instructions, not a guessed
+held-key chord. The genuine gesture branch at `0x2B20–0x2B60` requires
+flag `0x80`, exact row 2 `0x20`, exact row 5 `0x10`, and other rows empty.
+The runner checks register `a5` at OEM PC `0x2A84` against these selector
+inputs. Sticky-with-key-up and GUI-suppression witnesses must execute.
+
+The eight new cases check 299 complete host HID states:
+
+| Case | Required behavior |
+| --- | --- |
+| `layers-sync` | Held/sticky Symbols, GUI suppression, genuine Cursor entry, unused NAV position, custom Base priority, clean releases |
+| `layers-sym-off` | Symbols disabled while native Cursor still selects NAV |
+| `layers-nav-off` | Cursor disabled while native Symbols still selects SYM |
+| `layers-replace` | Original activation keys replaced without duplicate native roles, coalesced conflicts, mixed OEM projections and release snapshots |
+| `layers-modes` | All four custom modes target all three layers, native fallback, overlapping activators, snapshotted same-scan targets |
+| Three layer sweeps | Each of 36 positions emits its assigned usage and releases on Base, SYM, and NAV |
+
+OEM `0x2810–0x2846` exits Cursor on non-arrow activity. The sweeps enter
+Cursor again before each NAV assignment. They do not change that OEM rule.
+Native-policy copies preserve settings flags and layout. Tracking calls
+commit only their owned 0x20-byte state prefix and context status byte.
+This bounded evidence does not establish that every OEM path writes only
+these fields. A complete side-effect and interrupt audit remains open.
+
+The original ten cases still pass. The 130 selected settings combinations
+still match 2,502 HID and 2,542 companion submissions with remapping active.
+They no longer hold a custom NAV activator during native equivalence:
+custom activation now intentionally changes OEM output. The remap chord's
+golden report changes from `0000180e17290400` to `0000185117290400` because
+custom NAV projects unchanged OEM K to Down. Consumer bits remain separate.
+The missing-timer negative control still detects the lost tap release.
+
+### Current bounds and open gates
+
+- Format v4 stores count in metadata's low byte and `native_mask` in its
+  high byte. The header stays six bytes. Reserved mask bits and old formats
+  fail before destination changes. Default: 330 bytes. Maximum: 978 bytes.
+- Engine text: 1,892 bytes under the footprint-test flags. Its sub-budget
+  is now 1,920 bytes for mode ownership and phased transitions. The total
+  application limit stays 27,136 bytes.
+- Image: 25,466 bytes, extent `0x837A`, extension payload 6,778 bytes.
+  Headroom: 1,670 bytes. BSS: `[0x200006C0,0x20000FCB)`.
+- BIN SHA-256:
+  `bb83d17bb13d1846e2548da271b430bb94ff4debcffaf8657c77e21bb8e89e7f`.
+
+Use section 11's build and execution commands. The profile runs actual
+V122 and linked extension instructions under address/undefined sanitizers.
+GPIO, settings, RAM map replacement, and host completion remain synthetic.
+No iPhone handshake, safe runtime editor, persistence journal, complete
+startup, interrupt entry/return, nested capture safety, enumeration,
+suspend/reconnect, companion backpressure, or overflow recovery is proven.
+The remaining flash bytes are not a verified persistence allocation.

@@ -10,6 +10,10 @@
  *    press contributed, across any layer transition.
  *  - Overlapping layer activators use a press-order stack: releasing one
  *    activator falls back to the next still-held activator.
+ *  - Native SYM/NAV modes are optional fallbacks. Custom holds, one-shot,
+ *    and toggle activation take priority, including explicit Base targets.
+ *  - Each scan processes releases, initial-layer activators, then other
+ *    presses. Each phase uses row/column order and immutable targets.
  *  - All timing is elapsed milliseconds supplied by the caller, never
  *    callback counts (the OEM scanner callback is event-driven).
  *  - The engine exposes the next deadline so the shim can schedule a
@@ -37,6 +41,7 @@
 #define CK_LAYER_SYM 1
 #define CK_LAYER_NAV 2
 #define CK_ROW_MASK 0x3F       /* the six column bits of a matrix row */
+#define CK_NATIVE_LAYERS ((1u << CK_LAYER_SYM) | (1u << CK_LAYER_NAV))
 
 /* HID modifier bits (report byte 0). */
 #define CK_MOD_LCTL 0x01
@@ -79,6 +84,7 @@ typedef struct {
 
 typedef struct {
     ck_action_t action[CK_LAYERS][CK_KEYS];
+    uint8_t native_mask; /* independently enable native SYM/NAV activation */
 } ck_keymap_t;
 
 static inline int ck_pos(int row, int col)
@@ -110,10 +116,15 @@ typedef struct {
     bool tap_interrupted;   /* another key pressed during this TAP */
     bool tap_pending;       /* own release deadline, never a shared slot */
     bool oem;
+    int8_t native_projection; /* custom layer at OEM press, or -1 */
 } ck_held_action_t;
 
 typedef struct {
     const ck_keymap_t *map;
+    uint8_t native_layers; /* verified OEM mode bits, supplied by the shim */
+    /* Newly pressed OEM gesture participants retain their pre-activation
+     * ownership even if that gesture changes the layer in this scan. */
+    uint8_t native_owners[CK_ROWS];
 
     uint8_t prev_matrix[CK_ROWS];
 
@@ -158,5 +169,7 @@ uint32_t ck_engine_next_deadline(const ck_engine_t *e);
 /* Physical keys whose immutable press snapshots select the OEM policy.
  * Custom actions, NO, and synthetic tap emissions never reach the OEM. */
 void ck_engine_oem_matrix(const ck_engine_t *e, uint8_t matrix[CK_ROWS]);
+int ck_engine_layer(const ck_engine_t *e);
+bool ck_engine_custom_layer(const ck_engine_t *e);
 
 #endif /* CK5200_KEYMAP_ENGINE_H */

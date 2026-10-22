@@ -1,10 +1,10 @@
 /*
  * Packed serialization for CK-5200 keymap records (research artifact).
  *
- * Format version 3 (little-endian):
+ * Format version 4 (little-endian):
  *   magic    3 bytes  'C','K','M'
- *   version  1 byte   0x03
- *   count    2 bytes  entry count N
+ *   version  1 byte   0x04
+ *   metadata 2 bytes  low byte: entry count N, high byte: native-layer mask
  *   entries  N times:
  *     pos          1 byte   0..35
  *     layer        1 byte   0..2
@@ -29,7 +29,7 @@
 #define CKM_MAGIC0 'C'
 #define CKM_MAGIC1 'K'
 #define CKM_MAGIC2 'M'
-#define CKM_VERSION 3
+#define CKM_VERSION 4
 
 static bool action_is_empty(const ck_action_t *a)
 {
@@ -82,7 +82,7 @@ size_t ck_keymap_serialize(const ck_keymap_t *map, uint8_t *out, size_t cap)
         for (int pos = 0; pos < CK_KEYS; pos++)
             if (!action_is_empty(&map->action[layer][pos]))
                 count++;
-    if (count > 0xFFFF)
+    if (count > 0xFF)
         return 0;
 
     size_t off = 0;
@@ -90,7 +90,7 @@ size_t ck_keymap_serialize(const ck_keymap_t *map, uint8_t *out, size_t cap)
     if (!wr_u8(out, cap, &off, CKM_MAGIC1)) return 0;
     if (!wr_u8(out, cap, &off, CKM_MAGIC2)) return 0;
     if (!wr_u8(out, cap, &off, CKM_VERSION)) return 0;
-    if (!wr_u16(out, cap, &off, (uint16_t)count)) return 0;
+    if (!wr_u16(out, cap, &off, (uint16_t)(count | (map->native_mask << 8)))) return 0;
 
     for (int layer = 0; layer < CK_LAYERS; layer++) {
         for (int pos = 0; pos < CK_KEYS; pos++) {
@@ -144,9 +144,15 @@ static int decode(const uint8_t *buf, size_t len, ck_keymap_t *map)
         return -2;
 
     size_t off = 4;
-    uint16_t count;
-    if (!rd_u16(buf, len, &off, &count))
+    uint16_t metadata;
+    if (!rd_u16(buf, len, &off, &metadata))
         return -3;
+    uint16_t count = metadata & 0xFF;
+    uint8_t native_mask = metadata >> 8;
+    if (native_mask & ~CK_NATIVE_LAYERS)
+        return -3;
+    if (map)
+        map->native_mask = native_mask;
     if (count > CK_LAYERS * CK_KEYS || len > CK_KEYMAP_RECORD_MAX)
         return -3;
 

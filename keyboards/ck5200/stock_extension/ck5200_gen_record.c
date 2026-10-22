@@ -19,6 +19,7 @@ int main(void)
     /* Native actions must stay native. The host fixture remains a
      * keyboard-page reference, not the device's OEM policy table. */
     memset(&map, 0, sizeof(map));
+    map.native_mask = CK_NATIVE_LAYERS;
     for (int layer = 0; layer < CK_LAYERS; layer++)
         for (int pos = 0; pos < CK_KEYS; pos++)
             map.action[layer][pos].kind = CK_ACTION_OEM;

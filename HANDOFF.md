@@ -35,6 +35,45 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
+## Current stopping point, 2026-10-22 (native/custom layer ownership)
+
+Rudi accepted `21a985c` as the bounded active-OEM-compatibility baseline.
+Firmware CI `39804442651` and iOS CI `39804442643` passed at that commit.
+Its downloaded firmware evidence matched the local hashes. The current
+increment adds native/custom layer ownership. Its evidence is
+local only until a new commit passes hosted CI.
+
+- Native Symbols and Cursor select programmable SYM/NAV when remapping
+  is enabled. `native_mask` independently disables each native mode.
+  The embedded default enables both. Remapping itself still starts disabled.
+- Custom hold, toggle, one-shot, and tap-hold activators target any layer,
+  including Base, ahead of native fallback. Releases run first. Activators
+  visible in the initial layer run next with snapshotted targets. Other
+  presses run last. Each phase uses row/column order.
+- Replacing original Symbols or GUI removes its native role. Genuine OEM
+  gestures still own their participating keys unless custom activation wins.
+- OEM keys selected under custom activation retain their output-layer
+  snapshot until release. This fixes one-shot consumption before OEM
+  rendering and supports simultaneous OEM presses from different layers.
+- Packed format v4 adds the native mask to the existing six-byte header.
+  Records remain at most 978 bytes. The default remains 330 bytes.
+- All 37 Python tests and 18 genuine V122 cases pass locally. The eight
+  new cases check 299 complete host HID states, including all 108 positions.
+  Existing native settings comparisons still match 2,502 HID submissions
+  and 2,542 companion submissions across 130 selected combinations.
+- Image: 25,466 bytes, extent `0x837A`, headroom 1,670 bytes. SHA-256:
+  `bb83d17bb13d1846e2548da271b430bb94ff4debcffaf8657c77e21bb8e89e7f`.
+
+Next gate: audit every preview write and execute real interrupt/USB paths.
+Shared capture flags, nested interrupts, companion backpressure, overflow,
+suspend/reconnect, and complete startup remain unproven. RAM editing and
+persistence remain separate work. The current flash headroom is not an
+allocated persistence region. No physical command ran. R3 stays unmet,
+M4 stays closed, and the vendor inquiry stays unsent. QMK and iOS source
+remain untouched.
+
+Evidence: [section 13](keyboards/ck5200/docs/stock-extension-feasibility.md#13-nativecustom-layer-ownership-after-the-21a985c-review).
+
 ## Current stopping point, 2026-10-22 (active OEM compatibility)
 
 `57fef66` remains Rudi's accepted bounded-execution baseline. Both of its

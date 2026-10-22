@@ -19,7 +19,7 @@ const ck_action_t *ck_engine_resolve_action(const ck_keymap_t *map,
 
 int ck_keymap_validate(const ck_keymap_t *map)
 {
-    int invalid = 0;
+    int invalid = (map->native_mask & ~CK_NATIVE_LAYERS) != 0;
     for (int layer = 0; layer < CK_LAYERS; layer++) {
         for (int pos = 0; pos < CK_KEYS; pos++) {
             const ck_action_t *a = &map->action[layer][pos];
@@ -52,7 +52,12 @@ void ck_engine_init(ck_engine_t *e, const ck_keymap_t *map)
     e->oneshot_from = -1;
 }
 
-static int effective_layer(const ck_engine_t *e)
+bool ck_engine_custom_layer(const ck_engine_t *e)
+{
+    return e->activator_depth > 0 || e->oneshot_armed || e->toggle_owner >= 0;
+}
+
+int ck_engine_layer(const ck_engine_t *e)
 {
     if (e->activator_depth > 0)
         return e->held[e->activator_stack[e->activator_depth - 1]].layer_switch;
@@ -60,6 +65,11 @@ static int effective_layer(const ck_engine_t *e)
         return e->oneshot_layer;
     if (e->toggle_owner >= 0)
         return e->toggle_layer;
+    uint8_t native = e->native_layers & e->map->native_mask;
+    if (native & (1u << CK_LAYER_NAV))
+        return CK_LAYER_NAV;
+    if (native & (1u << CK_LAYER_SYM))
+        return CK_LAYER_SYM;
     return CK_LAYER_BASE;
 }
 
@@ -101,7 +111,7 @@ static void build_report(ck_engine_t *e, uint8_t *mods,
     *count = n;
 }
 
-static void press(ck_engine_t *e, int pos, uint32_t now_ms)
+static void press(ck_engine_t *e, int pos, uint32_t now_ms, const ck_action_t *a)
 {
     /* A new press of a position with a pending one-cycle tap emission
      * cancels that emission; the fresh press must not be clobbered by
@@ -111,8 +121,14 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
         e->held_active[pos] = false;
     }
 
-    int layer = effective_layer(e);
-    const ck_action_t *a = ck_engine_resolve_action(e->map, layer, pos);
+    int layer = ck_engine_layer(e);
+    if (!a)
+        a = ck_engine_resolve_action(e->map, layer, pos);
+    bool native_owner = !ck_engine_custom_layer(e)
+        && (e->native_owners[pos / CK_COLS] & (1u << (pos % CK_COLS))) != 0;
+    static const ck_action_t native_action = {.kind = CK_ACTION_OEM};
+    if (native_owner)
+        a = &native_action;
 
     /* A second activator also interrupts an earlier TAP. A later TAP
      * must not clear the earlier key's interruption state. */
@@ -139,6 +155,7 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     h->tap_interrupted = false;
     h->tap_pending = false;
     h->oem = a->kind == CK_ACTION_OEM;
+    h->native_projection = h->oem && !native_owner && ck_engine_custom_layer(e) ? layer : -1;
 
     e->now_ms = now_ms;
     e->last_press_ms = now_ms;
@@ -177,7 +194,7 @@ static void press(ck_engine_t *e, int pos, uint32_t now_ms)
     /* Plain key: consume the one-shot with this press, and mark that a
      * key event occurred inside any open TAP window (suppresses the tap
      * usage on release). */
-    if (e->oneshot_armed) {
+    if (e->oneshot_armed && !native_owner) {
         e->oneshot_armed = false;
         e->oneshot_from = -1;
     }
@@ -247,26 +264,41 @@ void ck_engine_tick(ck_engine_t *e, const uint8_t matrix[CK_ROWS], uint32_t now_
             e->held[pos].tap_pending = false;
         }
 
-    /* Process matrix changes; bits outside the six-column mask are
-     * ignored so malformed rows cannot index out of bounds. */
+    /* Releases use their snapshots first. Activators visible in the
+     * initial layer then precede ordinary presses in the same scan.
+     * Each phase uses row/column order, independent of key location. */
+    uint8_t activations[CK_ROWS] = {0};
     for (int row = 0; row < CK_ROWS; row++) {
         uint8_t now = matrix[row] & CK_ROW_MASK;
         uint8_t was = e->prev_matrix[row];
-        if (now == was)
-            continue;
-        for (uint8_t bit = 1, col = 0; col < CK_COLS; bit <<= 1, col++) {
-            bool p_now = (now & bit) != 0;
-            bool p_was = (was & bit) != 0;
-            int pos = ck_pos(row, col);
-            if (p_now && !p_was)
-                press(e, pos, now_ms);
-            else if (!p_now && p_was)
-                release(e, pos, now_ms);
+        for (int col = 0; col < CK_COLS; col++)
+            if ((was & (1u << col)) && !(now & (1u << col)))
+                release(e, ck_pos(row, col), now_ms);
+    }
+    int initial_layer = ck_engine_layer(e);
+    for (int row = 0; row < CK_ROWS; row++)
+        for (int col = 0; col < CK_COLS; col++) {
+            uint8_t bit = 1u << col;
+            const ck_action_t *a = ck_engine_resolve_action(e->map, initial_layer, ck_pos(row, col));
+            if ((matrix[row] & bit) && !(e->prev_matrix[row] & bit)
+                && !(e->native_owners[row] & bit) && a->kind == CK_ACTION_KEY && a->activation)
+                activations[row] |= bit;
         }
-        e->prev_matrix[row] = now;
+    for (int phase = 0; phase < 2; phase++)
+        for (int row = 0; row < CK_ROWS; row++)
+            for (int col = 0; col < CK_COLS; col++) {
+                uint8_t bit = 1u << col;
+                if ((matrix[row] & bit) && !(e->prev_matrix[row] & bit)
+                    && ((activations[row] & bit) != 0) == (phase == 0))
+                    press(e, ck_pos(row, col), now_ms, phase == 0
+                        ? ck_engine_resolve_action(e->map, initial_layer, ck_pos(row, col)) : NULL);
+            }
+    for (int row = 0; row < CK_ROWS; row++) {
+        e->prev_matrix[row] = matrix[row] & CK_ROW_MASK;
     }
 
     build_report(e, out_mods, out_usages, out_count);
+    memset(e->native_owners, 0, CK_ROWS);
 }
 
 uint32_t ck_engine_next_deadline(const ck_engine_t *e)
