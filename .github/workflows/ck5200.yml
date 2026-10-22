@@ -98,7 +98,7 @@ jobs:
       - name: Run CK-5200 host Python tests
         run: |
           python3 -m pip install --quiet pytest
-          python3 -m pytest keyboards/ck5200/tests -q
+          python3 -m pytest tests -q
 
       - uses: actions/upload-artifact@v4
         with:
