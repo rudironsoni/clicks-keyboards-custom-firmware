@@ -21,6 +21,7 @@ run StockEvidenceTests "${EVIDENCE[@]}"
 run StockTrialTests "${EVIDENCE[@]}"
 run RecorderBenchmark "${EVIDENCE[@]}"
 run ck5200_protocol_check Sources/CustomKeyboardProtocol.swift
+run StockExtensionProtocolTests Sources/StockExtensionProtocol.swift
 run ck5200_layout_check "${COMMON[@]}"
 run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
 echo "RUN DiagnosticsOnlyTests (default build)"

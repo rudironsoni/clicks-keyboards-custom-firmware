@@ -43,12 +43,15 @@ def check_image(data: bytes) -> None:
 
 
 def patch_sites(startup_target=None, tick_target=None, layer_target=None,
-                companion_target=None, hid_target=None):
+                companion_target=None, hid_target=None, command_target=None, usb_reset_target=None, pwm_target=None):
     sites = dict(PATCH_SITES)
     for address, original, target, rd in ((0x48CE, 0xAECFF0EF, startup_target, 1),
                                          (0x3AEE, 0xFECFE0EF, tick_target, 1),
                                          (0x4788, 0x9A9FD2EF, companion_target, 0),
-                                         (0x3CBE, 0xC72FE2EF, hid_target, 0)):
+                                         (0x3CBE, 0xC72FE2EF, hid_target, 0),
+                                         (0x2218, 0x7FF000EF, command_target, 1),
+                                         (0x3D5E, 0x400237B7, usb_reset_target, 0),
+                                         (0x3062, 0x697010EF, pwm_target, 1)):
         if target is None:
             continue
         delta = target - address
@@ -69,10 +72,10 @@ def patch_sites(startup_target=None, tick_target=None, layer_target=None,
 
 
 def apply_patch(data: bytes, direction: str, startup_target=None, tick_target=None,
-                layer_target=None, companion_target=None, hid_target=None) -> bytes:
+                layer_target=None, companion_target=None, hid_target=None, command_target=None, usb_reset_target=None, pwm_target=None) -> bytes:
     out = bytearray(data)
     for linked, pair in patch_sites(startup_target, tick_target, layer_target,
-                                    companion_target, hid_target).items():
+                                    companion_target, hid_target, command_target, usb_reset_target, pwm_target).items():
         want = pair["original"] if direction == "patch" else pair["extension"]
         got = _word(out, linked)
         if got != want:
@@ -97,6 +100,9 @@ def main() -> int:
     parser.add_argument("--layer-target", type=lambda s: int(s, 0))
     parser.add_argument("--companion-target", type=lambda s: int(s, 0))
     parser.add_argument("--hid-target", type=lambda s: int(s, 0))
+    parser.add_argument("--command-target", type=lambda s: int(s, 0))
+    parser.add_argument("--usb-reset-target", type=lambda s: int(s, 0))
+    parser.add_argument("--pwm-target", type=lambda s: int(s, 0))
     args = parser.parse_args()
 
     data = args.image.read_bytes()
@@ -106,7 +112,7 @@ def main() -> int:
         check_image(data)
     direction = "reverse" if args.reverse else "patch"
     targets = (args.startup_target, args.tick_target, args.layer_target,
-               args.companion_target, args.hid_target)
+               args.companion_target, args.hid_target, args.command_target, args.usb_reset_target, args.pwm_target)
     result = apply_patch(data, direction, *targets)
 
     args.out.write_bytes(result)

@@ -19,6 +19,9 @@ PROVIDE(oem_system_init = 0x3BBA);
 PROVIDE(oem_tick = 0x22DA);
 PROVIDE(oem_builder = 0x2796);
 PROVIDE(oem_layer = 0x2958);
+PROVIDE(oem_command = 0x3216);
+PROVIDE(oem_usb_reset_tail = 0x3D62);
+PROVIDE(oem_pwm = 0x4EF8);
 
 MEMORY {
     FLASH (rx) : ORIGIN = 0x2000, LENGTH = 0x6A00

@@ -14,7 +14,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 13.** Rudi accepted `9113dab` only as an
+**Current evidence: section 14.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -224,7 +224,7 @@ for enabled mode. Full IRQ and transport compatibility remains unproven.
 | Axis | Stock-derived extension (this milestone) | QMK port (existing, PR #1–#3) |
 | --- | --- | --- |
 | Behavioral evidence | Host suites plus a bounded V122 scanner profile. Default delegation matches 74 complete submissions. Enabled NAV and idle tap releases execute through OEM EP1 submission. Full OEM behavior in enabled mode is not established. | Full QMK feature set behind a verified 144-position RAM-keymap editor and CI-tested firmware; runtime liveness proven only in software models |
-| Image footprint | 25,466 bytes, current research build | 26,940 bytes verified |
+| Image footprint | 27,058 bytes, current research build | 26,940 bytes verified |
 | OEM stack | OEM code retained, with registration, startup-call, and timer-call hooks. Runtime compatibility still requires verification. | Replaced: TinyUSB port, re-engineered iAP2/auth path, own descriptors |
 | Integration risk | Eight patched instruction words, extension SRAM, timer scheduling, native-state preview, two transports, and OEM behavior preservation | Spread across the whole application: every stack is new code on the device, though heavily reviewed and CI-verified |
 | Stock restore | Official Clicks update overwrites the extension (de-facto restore, unverified) — same staging path as the M4 trial | Same M4 staging path (V122 restage), same unknown boot-stage caveats |
@@ -243,10 +243,9 @@ establish lower installation risk or full OEM compatibility.
 
 ## 9. Remaining integration gates
 
-1. Extend the enabled-mode comparisons in section 13 beyond their scripted
-   states. Audit preview writes and prove capture safety with nested IRQs.
-   Native/custom activation has bounded execution evidence, not exhaustive
-   OEM compatibility or interrupt-safety acceptance.
+1. Extend section 14's write and interrupt audits beyond their scripted
+   states, including NMI/fault paths and timer coalescing. Current evidence
+   establishes bounded preview isolation, not all-path hardware reliability.
 2. Extend execution beyond the synthetic handoff: full SystemInit/main
    execution, actual interrupt entry/return, USB enumeration and completion
    interrupts, suspend/reconnect, and companion transport backpressure.
@@ -254,11 +253,10 @@ establish lower installation risk or full OEM compatibility.
 3. Verify FIFO overflow recovery and delayed/coalesced timer interrupts.
    The implemented overflow policy drains accepted reports, emits all-up,
    and mutes remaps until all physical keys are released. It is not lossless.
-4. Only after executable equivalence passes: define the capability
-   handshake, typed USB operations, readback, profile switching, and
-   recoverable flash transactions. No iPhone editor or persistent profiles
-   exist for this extension. A maximum record cannot fit in the 244 unused
-   bytes of `0xF700`. No other storage region is approved for writes.
+4. Section 14 implements an offline capability handshake and atomic RAM
+   record operations. Connect no physical editor until lifecycle acceptance
+   and authorization permit it. Keyboard persistence does not fit the
+   present application budget. No other storage region is approved.
 5. Recheck placement for each OEM version. An image ending after `0x6900`
    overlaps this extension. R3 remains unmet for both the extension and QMK.
 
@@ -509,9 +507,10 @@ the exact new commit. Local success does not imply hosted success.
 
 ## 13. Native/custom layer ownership after the `21a985c` review
 
-Status: **18 V122 execution cases pass locally. Hosted verification for
-this increment is pending. Full OEM integration remains OPEN.** No physical
-operation is authorized. R3, M4, and the unsent vendor inquiry are unchanged.
+Status at `d6d3461`: **accepted bounded native/custom layer ownership.**
+Firmware CI `39821804798` and iOS CI `39821804796` passed at that exact
+commit. The remaining details in this section describe that baseline.
+Full OEM integration remains open. No physical operation is authorized.
 
 ### Activation contract
 
@@ -592,3 +591,156 @@ No iPhone handshake, safe runtime editor, persistence journal, complete
 startup, interrupt entry/return, nested capture safety, enumeration,
 suspend/reconnect, companion backpressure, or overflow recovery is proven.
 The remaining flash bytes are not a verified persistence allocation.
+
+## 14. Offline RAM configuration and USB safety
+
+Status: **local verification passes. Hosted verification is pending.**
+`d6d3461` remains the accepted ownership baseline. This increment does not
+authorize installation, physical configuration, M4 trials, or vendor contact.
+
+### RAM configuration and iOS proof
+
+The patched JAL at `0x2218` routes the original companion command adapter
+through `ck_extension_command()`. Other opcodes retain the original
+`0x3216` dispatcher. Replies bypass its small settings-adjacent response
+buffer and use original companion transport and EP3 submission.
+
+Protocol 1 uses command `0x94`. Multi-byte fields are little-endian:
+
+- Request: `[length,94,1,op,nonce32,generation16,offset16,payload...]`.
+- Reply: `[length,02,94,status,1,op,nonce32,generation16,payload...]`.
+- Header: 12 bytes. Maximum frame: 36 bytes. Maximum chunk: 24 bytes.
+- Status: 0 success, 1 invalid operation/record, 2 busy, 3 identity/session
+  rejection, 4 stale or exhausted generation. Generation never wraps.
+
+| Operation | Contract |
+| --- | --- |
+| 0 HELLO | Requires nonzero nonce. Returns `CKX1`, record format 4, dimensions 3/6/6, record bound 978, chunk bound 24, RAM-only feature bit, current record length, and remapping-enabled byte. Discards incomplete staging. Does not enable remapping. |
+| 1 READ | `offset` selects a packed-record byte. One payload byte declares count 1..24. Generation must match. |
+| 2 BEGIN | `offset` declares total record size 6..978. Clears staging progress without changing the active map. |
+| 3 WRITE | Requires the exact next offset and at most 24 payload bytes. Rejects gaps, duplicates, and overflow. |
+| 4 APPLY | Requires a complete valid record, matching generation, all keys released, no engine deadline, no report backlog/fault, and a ready configured, awake host. One payload byte explicitly enables or disables remapping. The interrupt-masked decoder commits the whole record and increments generation. |
+| 5 ABORT | Discards staged bytes. Does not alter active mappings. |
+
+The nonce binds replies to a client session. It is not an authentication
+or cryptographic device-identity mechanism. Unmodified V122 cannot produce
+the capability signature, dimensions, format, feature bits, and echoed
+nonce. The Swift client validates all of them before any mutation.
+
+`StockExtensionProtocol.swift` implements typed actions, all 108 positions,
+strict format-v4 encoding/decoding, handshake, staged apply, readback, and
+session invalidation on lost replies. It supports the unchanged keyboard
+usage/modifier boundary. It does not add arbitrary consumer actions or macros.
+The Codable map round-trips a full maximum-size profile for iPhone storage.
+No live `AccessoryInspector` link or editor UI is connected to this client.
+
+The Swift execution test supplies bytes to real V122 `0x2208`. It does not
+write the keymap or enable byte directly. The actual command adapter,
+extension, EP3 sender/completion ISR, native gestures, EP1 sender, and EP1
+completion ISR execute. The test changes SYM Q to Esc and NAV 4/4 to Tab,
+applies, reads back, and checks complete HID presses/releases. It also
+applies a 978-byte map and recovers a committed map after a lost APPLY
+acknowledgement. The client never retries that mutation automatically.
+
+### Interrupts, preview isolation, and transports
+
+- The IRQ cases retain CRT's actual `mtvec=0x2007` and `intsyscr=3`.
+  PFIC requests enter original SysTick `0x3AE6` and USB `0x405A`, then
+  execute original `mret`. Register and trap-depth checks verify returns.
+  Higher-priority USB completion preempts SysTick outside capture.
+- Builder, layer, and extension timer work preserve the caller's MIE bit
+  and run atomically against reset and configuration interrupts. A USB request
+  injected during preview remains pending until capture ends. No unrelated
+  USB handler enters while the shared capture flags are active.
+- Every tested preview write must target the live stack, the owned 20-byte
+  RV32 preview frame, or capture flags. Any other RAM/MMIO/flash write fails.
+  Real copied-policy writes are checked against the copied-back prefix,
+  status byte, and backlight flag. These are execution-path checks, not
+  an assertion that unexecuted OEM paths cannot have other effects.
+- The audit exposed a real preview PWM write at `0x4F0E` to `0x40012C20`.
+  A new hook at OEM PWM call `0x3062` suppresses previews only. Real native
+  backlight gestures still execute both PWM register writes. Native-disable
+  views also copy back the genuine backlight toggle at context `+0x120`
+  bit 2 without persisting temporary mode masks. Two regressions check
+  normal policy and disabled native NAV. The missing-PWM-hook negative
+  control must reproduce the forbidden write.
+- Projected OEM groups now merge consumer bits as well as keyboard slots
+  and modifiers. Five checks compare entire HID and companion packets for
+  concurrent Base/NAV consumer actions, release snapshots, and the real
+  optional Cursor-exit payload. Notifications follow real native tracking,
+  not state changes made only inside a preview.
+- FIFO progress tracks HID and companion delivery separately. A blocked
+  authenticated companion endpoint cannot hold a keyboard release hostage.
+  Native four-byte Cursor notifications share the ordered companion queue.
+  Overflow is not lossless: it mutes new remaps, retains accepted reports,
+  and retries terminal all-up on HID and an authenticated companion before
+  recovery. An absent companion retains OEM optional-link behavior.
+- A reversible entry hook at `0x3D5E` invalidates configuration sessions
+  and staging on bus reset, then executes original reset code from `0x3D62`
+  with the displaced LUI restored. Reports wait for configured/awake USB.
+  Real suspend/resume/reset ISR branches execute in the lifecycle test.
+  Initial USB reset cannot strand remapping in the disabled state. Fault
+  handling mutes new presses but still feeds real releases into native
+  latch tracking, so old snapshots cannot appear held after reconnect.
+
+The Python configuration trace covers 978-byte apply/readback, malformed
+and incomplete records, held-key rejection, stale generation, interrupted
+staging, reset invalidation, suspend/release/resume, companion backpressure,
+queue saturation, notification retention, and final release on EP1 and EP3.
+Its final all-up reports and a full eight-slot overflow are asserted.
+One reset is requested during a preview and must remain deferred until the
+builder mutation ends. The harness wires original reset/completion callbacks
+explicitly. The reset callback executes OEM EP3 progress and iAP2-state cleanup.
+
+**Limits:** USB configuration and authenticated companion state are still
+synthetic handoffs. EP0 enumeration, actual iAP2 authentication, full
+SystemInit/main, NMI/fault interleavings, and physical timing remain open.
+The largest observed masked interval in the configuration test is 137,940
+model cycles, about 2.87 ms at the model's 48 MHz. Real SysTick coalescing
+and wall-clock deadline accuracy across that interval are not proven.
+Passing these tests does not close full USB lifecycle acceptance.
+
+### Persistence decision and memory budget
+
+Decision: **RAM-only extension phase with iPhone-backed profiles. No
+keyboard-flash persistence implementation or storage address is approved.**
+This is an explicit interim limit, not fulfillment of keyboard persistence.
+
+| Budget | Current measurement |
+| --- | --- |
+| Application limit | 27,136 bytes, unchanged |
+| Image / extent | 27,058 bytes / `0x89B2` |
+| Raw headroom | 78 bytes |
+| Next free page / complete free pages | `0x8A00` / zero |
+| BSS | `[0x200006C0,0x200013AB)` |
+| Minimum observed SP | `0x20004864` |
+| Serialized default / maximum | 330 / 978 bytes, unchanged |
+
+The device now creates its identical all-OEM default map with a RAM loop.
+The 330-byte serialized default remains generated as reference evidence,
+but is not linked into flash. No mapping or record capacity was removed.
+
+A lower-bound A/B estimate uses 978 record bytes plus 20 metadata bytes
+(magic, format, length, generation, CRC, commit marker), padded to four
+256-byte pages. Two independent slots need eight pages, 2,048 bytes, before
+journal/flash code. This is not a validated journal layout. Commit granularity,
+power-loss behavior, and wear handling need separate proof and can require
+more space. No complete page remains in the current application.
+The 244 unused bytes of OEM page `0xF700` cannot hold one record. Update
+staging, presumed installer, and upper reserved regions are not available
+storage allocations. Power-loss recovery and wear handling therefore have
+no valid target here. Do not implement a journal by subtracting record
+lengths from `0x8A00`.
+
+Current BIN SHA-256:
+`2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132`.
+The patcher reverses all eleven words to exact pinned V122. The build adds
+a source-hash manifest, and execution refuses firmware built from stale
+sources. The exact-QMK hash gate is untouched.
+
+Local checks: 37 Python tests, existing native and Swift suites, 20 V122
+cases including two negative controls, and the Swift-to-V122 configuration
+test. The unsigned diagnostics-only iPhone application also builds locally.
+Firmware CI runs the Swift integration separately and retains its
+log, traces, ELF/BIN, source manifest, and execution report. Hosted success
+must refer to the exact new commit, not these local results.

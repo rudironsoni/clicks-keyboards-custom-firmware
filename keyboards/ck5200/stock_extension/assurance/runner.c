@@ -18,6 +18,20 @@ static unsigned host_period = 1;
 static unsigned currency_hits[5], layout_hits[2], sticky_hits, cursor_hits, engine_calls;
 static unsigned mode_probes, sticky_mode_probes, gui_mode_probes;
 static uint32_t builder_state;
+static bool real_irq;
+static unsigned irq_entries, irq_returns, preview_writes;
+static uint8_t usb_flags, usb_status;
+static bool deferred_usb;
+static unsigned usb_entries, nested_entries;
+static uint8_t command_reply[64], host_report[8];
+static unsigned command_reply_len;
+static uint8_t usb_regs[0x40];
+static bool nested_usb;
+static bool last_queue_fault;
+static uint64_t mask_start, max_mask_cycles;
+static unsigned pwm_writes, pwm_suppressed;
+static uint32_t copy_state, copy_context;
+static bool inject_reset;
 static uint32_t min_sp = 0x20005000;
 static FILE *trace;
 static uint32_t remap_address, keymap_address;
@@ -39,6 +53,8 @@ static void bytes_event(const char *name, uint32_t a, unsigned len)
     for (unsigned i = 0; i < len; i++)
         fprintf(trace, "%02x", machine.ram[a - CHG_RAM_BASE + i]);
     fprintf(trace, "\"}\n");
+    if (!strcmp(name, "EP1-host-consume") && len == 8)
+        memcpy(host_report, machine.ram + (a - CHG_RAM_BASE), 8);
 }
 static uint32_t ram32(uint32_t address)
 {
@@ -51,6 +67,23 @@ static uint32_t ram32(uint32_t address)
 void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
 {
     (void)m; (void)v;
+    if (write && copy_state && pc >= 0x26D8 && pc < 0x3100) {
+        if (inside(a, n, copy_state, copy_state + 0x44) && a + n > copy_state + 0x20)
+            fail("OEM policy wrote outside copied-back state prefix", a);
+        if (inside(a, n, copy_context, copy_context + 0x128) && a != copy_context) {
+            if (a != copy_context + 0x120 || n != 1 || ((v ^ m->ram[a - CHG_RAM_BASE]) & ~4u))
+                fail("OEM policy wrote an uncommitted context field", a);
+        }
+    }
+    if (write && callbacks && image_end > 0x68D8
+        && m->ram[CK_PREVIEWING - CHG_RAM_BASE]) {
+        if (!inside(a, n, m->cpu.x[2], 0x20005000)
+            && !inside(a, n, CK_PREVIEW_FRAME, CK_PREVIEW_FRAME + 20) /* RV32 frame: 16 + 4 */
+            && !(a == CK_CAPTURE && n == 1) && !(a == CK_PREVIEWING && n == 1))
+            fail("preview write outside stack or owned capture state", a);
+        fprintf(trace, "{\"event\":\"preview-write\",\"pc\":%u,\"address\":%u,\"width\":%d,\"value\":%u}\n", pc, a, n, v);
+        preview_writes++;
+    }
     if (n != 1 && n != 2 && n != 4) fail("unsupported width", n);
     if (inside(a, n, CHG_RAM_BASE, CHG_RAM_BASE + CHG_RAM_SIZE)) {
         if (write && pc < 0x6900 && a >= 0x200006B4 && a < 0x20002000
@@ -65,6 +98,7 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
         return;
     }
     if ((a == 0x40010808 && n == 4 && !write)
+        || inside(a, n, 0x40023400, 0x40023440)
         || ((a == 0x40010800 || a == 0x4001080C
              || a == 0x40010C00 || a == 0x40010C0C) && n == 4)
         || (a == 0x40010008 && n == 4)
@@ -73,6 +107,7 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
         || (a == 0x40010C10 && n == 4 && write)
         || (a == 0x40023424 && n == 2 && write)
         || (a == 0x40023426 && n == 2)
+        || ((a == 0x40023406 || a == 0x40023407) && n == 1)
         || (a == 0x40012C20 && n == 2)
         || (a == 0xE000F004 && n == 4 && write && v == 0))
         return;
@@ -102,11 +137,37 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v)
         return true;
     }
     if (a == 0xE000F004) return true;
+    if (a == 0x40023406) {
+        if (write) usb_flags &= ~*v; else *v = usb_flags;
+        return true;
+    }
+    if (a == 0x40023407 && !write) { *v = usb_status; return true; }
+    if (inside(a, n, 0x40023400, 0x40023440)) {
+        if (write) memcpy(usb_regs + (a - 0x40023400), v, n);
+        else { *v = 0; memcpy(v, usb_regs + (a - 0x40023400), n); }
+        return true;
+    }
     return false;
 }
 void gate_instruction(ChgMachine *m, uint32_t address)
 {
     pc = address;
+    if (pc == 0x2796 || pc == 0x2958) {
+        copy_state = image_end > 0x68D8 && m->cpu.x[10] != 0x20000068
+            && !m->ram[CK_PREVIEWING - CHG_RAM_BASE] ? m->cpu.x[10] : 0;
+        if (copy_state) copy_context = ram32(copy_state + 0x40);
+    }
+    if ((pc == 0x4F0E || pc == 0x4F1C) && image_end > 0x68D8
+        && m->ram[CK_CAPTURE - CHG_RAM_BASE] && !m->ram[CK_PREVIEWING - CHG_RAM_BASE]) pwm_writes++;
+    if (pc == CK_CAPTURE_PWM && image_end > 0x68D8 && m->ram[CK_PREVIEWING - CHG_RAM_BASE]) pwm_suppressed++;
+    if (callbacks && image_end > 0x68D8) {
+        bool fault = m->ram[CK_QUEUE_FAULT - CHG_RAM_BASE] != 0;
+        if (fault != last_queue_fault) {
+            fprintf(trace, "{\"event\":\"queue-fault-transition\",\"fault\":%s,\"pending\":%u}\n",
+                    fault ? "true" : "false", m->ram[CK_PENDING_COUNT - CHG_RAM_BASE]);
+            last_queue_fault = fault;
+        }
+    }
     if (pc == 0x2796) builder_state = m->cpu.x[10];
     if (pc == 0x2A84) {
         uint32_t context = ram32(builder_state + 0x40);
@@ -144,26 +205,73 @@ void gate_instruction(ChgMachine *m, uint32_t address)
             fail("registered builder or ABI mismatch", m->cpu.x[15]);
         bytes_event("registered-builder-call", m->cpu.x[11], 6);
     }
-    if (pc == 0x62CC) bytes_event("companion-submit", m->cpu.x[11], m->cpu.x[12]);
+    if (pc == 0x62CC) {
+        bytes_event("companion-submit", m->cpu.x[11], m->cpu.x[12]);
+        if (m->cpu.x[12] <= sizeof(command_reply)) {
+            memcpy(command_reply, m->ram + (m->cpu.x[11] - CHG_RAM_BASE), m->cpu.x[12]);
+            command_reply_len = m->cpu.x[12];
+        }
+    }
+    if (image_end > 0x68D8 && (pc == 0x62CC || pc == 0x3E28)
+        && m->ram[CK_PREVIEWING - CHG_RAM_BASE])
+        fail("preview reached a real transport", pc);
     if (pc == 0x3E28 && m->cpu.x[10] == 1) {
         submissions++;
         bytes_event("HID-submit", m->cpu.x[11], m->cpu.x[12]);
     }
+    if (pc == 0x3E28 && m->cpu.x[10] == 3)
+        bytes_event("companion-EP3-submit", m->cpu.x[11], m->cpu.x[12]);
 }
 void gate_trap(ChgMachine *m, uint32_t p, uint32_t cause, uint32_t value, int irq)
 {
-    (void)m; (void)p; (void)cause; (void)value; (void)irq;
-    fail("unexpected trap", cause);
+    (void)m; (void)p; (void)value;
+    if (!real_irq || (irq != 12 && irq != 45) || cause != (0x80000000u | (unsigned)irq))
+        fail("unexpected trap", cause);
+    irq_entries++;
+    if (irq == 45) {
+        if (image_end > 0x68D8 && m->ram[CK_PREVIEWING - CHG_RAM_BASE])
+            fail("USB IRQ entered during preview", p);
+        usb_entries++;
+        if (m->cpu.trap_depth) nested_entries++;
+    }
 }
-void gate_mret(ChgMachine *m) { (void)m; }
+void gate_mret(ChgMachine *m) { (void)m; if (real_irq) irq_returns++; }
 void gate_csr(ChgMachine *m, uint32_t csr, bool write, uint32_t value)
 {
-    (void)m; (void)write; (void)value;
+    if (csr == 0x300 && write) {
+        if ((m->cpu.mstatus & 8) && !(value & 8)) mask_start = m->cycles;
+        if (!(m->cpu.mstatus & 8) && (value & 8) && mask_start) {
+            uint64_t elapsed = m->cycles - mask_start;
+            if (elapsed > max_mask_cycles) max_mask_cycles = elapsed;
+            mask_start = 0;
+        }
+    }
     if (csr != 0x300 && csr != 0x305 && csr != 0x341 && csr != 0x804 && csr != 0xBC0)
         fail("unsupported CSR", csr);
 }
 static void step(void)
 {
+    if (real_irq) {
+        if (inject_reset && callbacks && image_end > 0x68D8 && machine.ram[CK_PREVIEWING - CHG_RAM_BASE]) {
+            inject_reset = false;
+            if (machine.cpu.mstatus & 8) fail("reset could enter during builder mutation", pc);
+            usb_flags = 1; usb_status = 0;
+            machine.pfic.pending |= 1ull << 45;
+            fprintf(trace, "{\"event\":\"reset-deferred-during-preview\"}\n");
+        }
+        if (!nested_usb && machine.cpu.trap_depth == 1 && machine.cpu.pc == 0x3AE6) {
+            nested_usb = true;
+            usb_flags = 2; usb_status = 0x21;
+            machine.pfic.pending |= 1ull << 45;
+        }
+        if (!deferred_usb && callbacks && image_end > 0x68D8 && machine.ram[CK_PREVIEWING - CHG_RAM_BASE]) {
+            deferred_usb = true;
+            usb_flags = 2; usb_status = 0x23; /* Unrelated companion completion, not an unconsumed EP1 packet. */
+            machine.pfic.pending |= 1ull << 45;
+            if (machine.cpu.mstatus & 8) fail("preview did not mask interrupts", pc);
+        }
+        cpu_take_interrupt(&machine);
+    }
     machine.stop_at = machine.cycles + 1;
     cpu_exec(&machine);
 }
@@ -186,6 +294,31 @@ static void put16(unsigned off, unsigned value)
     machine.ram[off] = value;
     machine.ram[off + 1] = value >> 8;
 }
+static void usb_irq(uint8_t flags, uint8_t status)
+{
+    uint32_t saved[32];
+    memcpy(saved, machine.cpu.x, sizeof(saved));
+    usb_flags = flags; usb_status = status;
+    machine.pfic.pending |= 1ull << 45;
+    machine.cpu.pc = 0x2A52;
+    if (!cpu_take_interrupt(&machine)) fail("USB IRQ not accepted", tick_ms);
+    until(0x2A52);
+    if (memcmp(saved, machine.cpu.x, sizeof(saved)) || machine.cpu.trap_depth || usb_flags)
+        fail("USB IRQ did not preserve context or clear flags", usb_flags);
+}
+static void consume_ep3(void)
+{
+    uint16_t len;
+    memcpy(&len, usb_regs + 0x2C, 2);
+    if (!(usb_regs[0x2E] & 3) && len) {
+        bytes_event("EP3-host-consume", 0x20000294, len);
+        if (len <= sizeof(command_reply) && machine.ram[0x296] == 0x94) {
+            memcpy(command_reply, machine.ram + 0x294, len);
+            command_reply_len = len;
+        }
+        usb_irq(2, 0x23);
+    }
+}
 static void scan(unsigned ms)
 {
     while (ms--) {
@@ -197,15 +330,35 @@ static void scan(unsigned ms)
         int32_t imm = ((word >> 31) << 20) | (((word >> 12) & 255) << 12)
             | (((word >> 20) & 1) << 11) | (((word >> 21) & 1023) << 1);
         imm = (imm ^ 0x100000) - 0x100000;
-        call(0x3AEE + imm, 0, 0);
+        if (real_irq) {
+            uint32_t saved[32];
+            machine.cpu.pc = 0x2A52;
+            machine.cpu.mstatus |= 8;
+            memcpy(saved, machine.cpu.x, sizeof(saved));
+            machine.pfic.pending |= 1ull << 12;
+            if (!cpu_take_interrupt(&machine)) fail("SysTick IRQ not accepted", tick_ms);
+            until(0x2A52);
+            if (memcmp(saved, machine.cpu.x, sizeof(saved)) || machine.cpu.trap_depth)
+                fail("IRQ return did not preserve registers", tick_ms);
+        } else {
+            call(0x3AEE + imm, 0, 0);
+        }
         /* Synthetic ready host consumes the actual OEM EP1 buffer after
          * each timer service. It is not a USB controller IRQ model. */
-        if ((ep_ctrl & 3) == 0 && tx_len && tick_ms % host_period == 0) {
+        if ((ep_ctrl & 3) == 0 && tx_len && tick_ms % host_period == 0
+            && (!real_irq || (machine.ram[0x444] && !(machine.ram[0x448] & 8)))) {
             if (tx_len != 8) fail("unexpected EP1 length", tx_len);
             bytes_event("EP1-host-consume", 0x20000214, tx_len);
             packets++;
-            ep_ctrl = (ep_ctrl & ~3u) | 2;
+            if (real_irq) {
+                usb_irq(2, 0x21);
+                if ((ep_ctrl & 3) != 2 || usb_flags) fail("OEM USB completion did not acknowledge EP1", ep_ctrl);
+            } else {
+                ep_ctrl = (ep_ctrl & ~3u) | 2;
+            }
         }
+        if (real_irq && machine.ram[0x444] && !(machine.ram[0x448] & 8)
+            && tick_ms % host_period == 0) consume_ep3();
     }
 }
 
@@ -215,6 +368,64 @@ static void layer_check_pair(const char *name, unsigned usage, unsigned usage2, 
         fail("native policy view changed OEM settings", machine.ram[0x1CC]);
     fprintf(trace, "{\"event\":\"layer-check\",\"name\":\"%s\",\"usage\":%u,\"usage2\":%u,\"mods\":%u,\"native_latch\":%u,\"native_cursor\":%u}\n",
             name, usage, usage2, mods, machine.ram[0x74], machine.ram[0xAC] & 0x10);
+}
+
+/* Offline byte link for the iOS protocol tests. Commands enter the actual
+ * OEM companion adapter, not a native C copy of the configuration handler. */
+static void config_server(void)
+{
+    char line[160];
+    machine.ram[0x462] = 3; /* Synthetic authenticated companion session. */
+    uint32_t completion = 0x3C80;
+    memcpy(machine.ram + 0x44C, &completion, 4);
+    uint32_t reset = 0x3C4C;
+    memcpy(machine.ram + 0x41C, &reset, 4); /* Original reset callback clears OEM EP3 progress and iAP2 state. */
+    usb_regs[0x2E] = 2;
+    puts("ready"); fflush(stdout);
+    while (fgets(line, sizeof(line), stdin)) {
+        if (line[0] == 'q') break;
+        uint8_t bytes[64]; unsigned n = 0, value;
+        size_t length = strcspn(line + 2, "\r\n");
+        if (length & 1 || length > 128) fail("invalid offline frame", length);
+        for (size_t i = 0; i < length; i += 2) {
+            if (sscanf(line + 2 + i, "%2x", &value) != 1) fail("invalid offline byte", i);
+            bytes[n++] = value;
+        }
+        if (line[0] == 'p') {
+            memcpy(machine.ram + 0x2400, bytes, n);
+            bytes_event("configuration-request", 0x20002400, n);
+            command_reply_len = 0;
+            call(0x2208, 0x20002400, n);
+            command_reply_len = 0;
+            consume_ep3();
+            printf("R ");
+            for (unsigned i = 0; i < command_reply_len; i++) printf("%02x", command_reply[i]);
+        } else if (line[0] == 'k' && n == 6) {
+            memcpy(keys, bytes, 6); scan(40);
+            printf("H ");
+            for (unsigned i = 0; i < 8; i++) printf("%02x", host_report[i]);
+        } else if (line[0] == 's' && n == 1) {
+            usb_regs[5] = bytes[0] ? 4 : 0;
+            usb_irq(4, 0);
+            scan(40);
+            printf("U %02x", machine.ram[0x448]);
+        } else if (line[0] == 'r' && n == 0) {
+            usb_irq(1, 0); scan(40); printf("U %02x", machine.ram[0x444]);
+        } else if (line[0] == 'c' && n == 0) {
+            machine.ram[0x462] = 3; /* Authentication remains a modeled handoff. */
+            machine.ram[0x444] = 1; scan(40); printf("U %02x", machine.ram[0x444]);
+        } else if (line[0] == 'j' && n == 0) {
+            inject_reset = true; printf("U armed");
+        } else if (line[0] == 'b' && n == 1) {
+            put16(0x458, 0); put16(0x45A, bytes[0] ? 1 : 0);
+            fprintf(trace, "{\"event\":\"companion-backpressure\",\"blocked\":%s}\n", bytes[0] ? "true" : "false");
+            printf("U %02x", bytes[0]);
+        } else fail("unknown offline command", line[0]);
+        putchar('\n'); fflush(stdout);
+    }
+    fprintf(trace, "{\"event\":\"configuration-summary\",\"irq_entries\":%u,\"irq_returns\":%u,\"max_mask_cycles\":%llu,\"preview_writes\":%u,\"min_sp\":%u}\n",
+            irq_entries, irq_returns, (unsigned long long)max_mask_cycles, preview_writes, min_sp);
+    fclose(trace);
 }
 static void layer_check(const char *name, unsigned usage, unsigned mods)
 {
@@ -293,6 +504,40 @@ static void layer_scenario(const char *name)
         layer_check("release-precedes-native-key-classification", 0x29, 0);
         if (machine.ram[0x74] & 2) fail("custom replacement activated Symbols after layer release", machine.ram[0x74]);
         keys[5] = 0; scan(20); layer_check("ownership-final-all-up", 0, 0);
+        for (int l = 0; l < CK_LAYERS; l++) {
+            map.action[l][ck_pos(0,3)].layer_switch = CK_LAYER_BASE;
+            map.action[l][ck_pos(3,5)].layer_switch = CK_LAYER_NAV;
+            map.action[l][ck_pos(5,4)] = (ck_action_t){.kind = CK_ACTION_OEM};
+        }
+        layer_map(&map);
+        keys[2] = 0x20; keys[5] = 0x10; scan(20);
+        keys[2] = 0; keys[5] = 0; scan(20);
+        keys[0] = 0x28; scan(20);
+        fprintf(trace, "{\"event\":\"projected-consumer-check\",\"consumer\":4,\"cursor_exit\":true}\n");
+        keys[0] = 0x20; scan(20);
+        keys[3] = 0x20; scan(20); keys[1] = 0x20; scan(20);
+        fprintf(trace, "{\"event\":\"projected-consumer-check\",\"consumer\":6,\"cursor_exit\":false}\n");
+        keys[3] = 0; scan(20);
+        fprintf(trace, "{\"event\":\"projected-consumer-check\",\"consumer\":6,\"cursor_exit\":false}\n");
+        keys[0] = 0; scan(20);
+        fprintf(trace, "{\"event\":\"projected-consumer-check\",\"consumer\":2,\"cursor_exit\":false}\n");
+        keys[1] = 0; scan(20);
+        fprintf(trace, "{\"event\":\"projected-consumer-check\",\"consumer\":0,\"cursor_exit\":false}\n");
+        const uint8_t masks[] = {CK_NATIVE_LAYERS, 1u << CK_LAYER_SYM};
+        for (unsigned mi = 0; mi < sizeof(masks); mi++) {
+            unsigned mask = masks[mi];
+            map.native_mask = mask;
+            for (int l = 0; l < CK_LAYERS; l++)
+                map.action[l][ck_pos(3,5)].layer_switch = CK_LAYER_SYM;
+            layer_map(&map);
+            machine.ram[0x1CC] = 0xA7;
+            unsigned before = pwm_writes, suppressed = pwm_suppressed;
+            keys[5] = 0x10; scan(20); keys[3] = 0x20; scan(20);
+            keys[1] = 0x20; scan(20);
+            fprintf(trace, "{\"event\":\"backlight-check\",\"native_mask\":%u,\"pwm_writes\":%u,\"suppressed\":%u,\"flags\":%u}\n",
+                    mask, pwm_writes - before, pwm_suppressed - suppressed, machine.ram[0x1CC]);
+            keys[1] = 0; keys[3] = 0; keys[5] = 0; scan(20);
+        }
         return;
     }
     if (!strcmp(name, "layers-modes")) {
@@ -384,6 +629,8 @@ int main(int argc, char **argv)
     bool layers = argc == 6 && !strncmp(argv[5], "layers-", 7);
     bool native_active = argc == 6 && (!strcmp(argv[5], "native-active") || compatibility || mixed || layers);
     if (argc == 6 && !strcmp(argv[5], "delayed-host")) host_period = 17;
+    real_irq = (argc == 6 && !strcmp(argv[5], "real-irq"))
+        || (argc == 4 && !strcmp(argv[3], "config-server"));
     chg_init(&machine);
     FILE *f = fopen(argv[1], "rb");
     if (!f) return 2;
@@ -412,6 +659,14 @@ int main(int argc, char **argv)
     /* Stop-before-SystemInit leaves extension init's call frame active.
      * Restore SP for the separately bounded scanner entry fixture. */
     machine.cpu.x[2] = 0x20005000;
+    machine.ram[0x444] = 1; /* Synthetic configured host, not enumeration. */
+    if (real_irq) {
+        if (machine.cpu.mtvec != 0x2007 || machine.cpu.intsyscr != 3)
+            fail("OEM CRT interrupt configuration mismatch", machine.cpu.mtvec);
+        machine.pfic.enabled = (1ull << 12) | (1ull << 45);
+        machine.pfic.prio[12] = 0x80;
+        machine.pfic.prio[45] = 0;
+    }
     machine.ram[0x1CC] = 0xA7; /* stock flags, synthetic settings */
     machine.ram[0x1CA] = 0x21; /* stock layout */
     put16(0x1D0, 5000);
@@ -426,6 +681,10 @@ int main(int argc, char **argv)
         if (native_active) machine.ram[remap_address - CHG_RAM_BASE] = 1;
     }
     scan(12);
+    if (argc == 4 && !strcmp(argv[3], "config-server")) {
+        config_server();
+        return 0;
+    }
     keys[0] = 1; scan(20);  /* Q press */
     keys[0] = 0; scan(20);  /* Q release, no later physical key */
     if (layers) {
@@ -517,9 +776,9 @@ int main(int argc, char **argv)
     }
     if (!callbacks || submissions < 2 || packets < 2)
         fail("missing scanner or HID path", packets);
-    fprintf(trace, "{\"event\":\"summary\",\"callbacks\":%u,\"submissions\":%u,\"packets\":%u,\"min_sp\":%u,\"engine_calls\":%u,\"mode_probes\":%u,\"sticky_mode_probes\":%u,\"gui_mode_probes\":%u,"
+    fprintf(trace, "{\"event\":\"summary\",\"irq_entries\":%u,\"irq_returns\":%u,\"usb_entries\":%u,\"nested_entries\":%u,\"deferred_usb\":%s,\"preview_writes\":%u,\"callbacks\":%u,\"submissions\":%u,\"packets\":%u,\"min_sp\":%u,\"engine_calls\":%u,\"mode_probes\":%u,\"sticky_mode_probes\":%u,\"gui_mode_probes\":%u,"
             "\"sticky_hits\":%u,\"cursor_hits\":%u,\"currency_hits\":[%u,%u,%u,%u,%u],\"layout_hits\":[%u,%u]}\n",
-            callbacks, submissions, packets, min_sp, engine_calls, mode_probes, sticky_mode_probes, gui_mode_probes, sticky_hits, cursor_hits,
+            irq_entries, irq_returns, usb_entries, nested_entries, deferred_usb ? "true" : "false", preview_writes, callbacks, submissions, packets, min_sp, engine_calls, mode_probes, sticky_mode_probes, gui_mode_probes, sticky_hits, cursor_hits,
             currency_hits[0], currency_hits[1], currency_hits[2], currency_hits[3], currency_hits[4],
             layout_hits[0], layout_hits[1]);
     fclose(trace);

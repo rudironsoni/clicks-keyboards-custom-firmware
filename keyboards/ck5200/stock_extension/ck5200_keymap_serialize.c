@@ -82,8 +82,7 @@ size_t ck_keymap_serialize(const ck_keymap_t *map, uint8_t *out, size_t cap)
         for (int pos = 0; pos < CK_KEYS; pos++)
             if (!action_is_empty(&map->action[layer][pos]))
                 count++;
-    if (count > 0xFF)
-        return 0;
+    /* At most CK_LAYERS * CK_KEYS == 108 entries, within one byte. */
 
     size_t off = 0;
     if (!wr_u8(out, cap, &off, CKM_MAGIC0)) return 0;

@@ -6,10 +6,14 @@ on:
     paths:
       - "keyboards/ck5200/**"
       - ".github/workflows/ck5200.yml"
+      - "ios/ClicksInspector/Sources/StockExtensionProtocol.swift"
+      - "ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift"
   pull_request:
     paths:
       - "keyboards/ck5200/**"
       - ".github/workflows/ck5200.yml"
+      - "ios/ClicksInspector/Sources/StockExtensionProtocol.swift"
+      - "ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift"
 
 permissions:
   contents: read
@@ -41,6 +45,7 @@ jobs:
           cc --version
           git --version
           curl --version
+          swiftc --version
 
       - name: Set up toolchain and dependencies
         run: bash scripts/setup.sh
@@ -105,6 +110,18 @@ jobs:
           set -o pipefail
           python3 stock_extension/assurance/run.py | tee build/stock_extension/v122-execution.log
 
+      - name: Execute iOS codec against V122 configuration
+        run: |
+          set -o pipefail
+          swiftc ../../ios/ClicksInspector/Sources/StockExtensionProtocol.swift \
+            ../../ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift \
+            -o build/stock_extension/assurance/swift-extension-test
+          build/stock_extension/assurance/swift-extension-test \
+            "$PWD/build/stock_extension/assurance/runner" \
+            "$PWD/build/stock_extension/ck5200_extension.bin" \
+            "$PWD/.stock/iKeyboard_CK-5200_V122_120.bin" \
+            "$PWD/build/stock_extension/assurance" | tee build/stock_extension/swift-execution.log
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -117,10 +134,12 @@ jobs:
             keyboards/ck5200/build/stock_extension/symbols.txt
             keyboards/ck5200/build/stock_extension/SHA256SUMS
             keyboards/ck5200/build/stock_extension/build-report.txt
+            keyboards/ck5200/build/stock_extension/build-source-sha256.json
             keyboards/ck5200/build/stock_extension/patch_manifest.json
             keyboards/ck5200/build/stock_extension/assurance/report.json
             keyboards/ck5200/build/stock_extension/assurance/*.trace.jsonl
             keyboards/ck5200/build/stock_extension/v122-execution.log
+            keyboards/ck5200/build/stock_extension/swift-execution.log
 
       - uses: actions/upload-artifact@v4
         with:

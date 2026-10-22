@@ -40,6 +40,7 @@ uint32_t ck_shim_next_deadline(const ck_engine_t *e)
 #else /* device build */
 
 #include "ck5200_keymap_serialize.h"
+#include "ck5200_irq.h"
 
 /* Separate companion transport and USB HID submission, as called by the
  * original V122 builder at 0x2864 and 0x286C. Queue/completion behavior
@@ -51,10 +52,12 @@ extern void oem_system_init(void);
 extern void oem_tick(void);
 extern void oem_builder(void *state_obj, const uint8_t *matrix, int size);
 extern void oem_layer(void *state_obj, const uint8_t *matrix, int size);
+extern int oem_command(void *context, const uint8_t *request, int size);
+extern void oem_pwm(void *timer, int channel, int enabled);
 
-/* No configuration channel exists yet. Start in exact stock delegation.
- * The offline execution fixture can enable the research remapping path
- * through this RAM byte. This is not a persistent settings operation. */
+/* Start in exact stock delegation. The extension-only RAM protocol can
+ * enable remapping after a complete validated apply. No flash write or
+ * physical configuration is authorized. Legacy fixtures also use RAM. */
 volatile uint8_t ck_remapping_enabled;
 ck_keymap_t ck_extension_keymap;
 
@@ -70,6 +73,7 @@ static ck_frame_t native_frame;
 static ck_frame_t preview_frame, last_custom;
 static bool capturing_native, native_fresh;
 static bool previewing;
+static void enqueue_report(const ck_frame_t *frame, bool force);
 
 static int oem_send(const void *frame, int len)
 {
@@ -84,8 +88,16 @@ int ck_capture_companion(const uint8_t *frame, int len)
 {
     if (!capturing_native)
         return oem_send(frame, len);
-    if ((len != 11 && len != 15) || frame[0] != 11 || frame[1] != 2)
-        return previewing ? len : oem_send(frame, len);
+    if ((len != 11 && len != 15) || frame[0] != 11 || frame[1] != 2) {
+        if (previewing) return len;
+        if (len == 4 && frame[0] == 4 && frame[1] == 4) {
+            ck_frame_t special = {.len = 4};
+            memcpy(special.bytes, frame, 4);
+            enqueue_report(&special, true);
+            return len;
+        }
+        return oem_send(frame, len);
+    }
     ck_frame_t *out = previewing ? &preview_frame : &native_frame;
     memcpy(out->bytes, frame, (size_t)len);
     out->len = (size_t)len;
@@ -100,18 +112,32 @@ int ck_capture_hid(const void *report, int len)
     return capturing_native ? len : oem_ep_submit(1, report, len);
 }
 
+void ck_capture_pwm(void *timer, int channel, int enabled)
+{
+    if (!previewing) oem_pwm(timer, channel, enabled);
+}
+
 /* EP1's OEM submit routine writes DMA immediately. It has no queue or
  * busy check (0x3E28-0x3EAA). Retain distinct reports until EP1 returns
  * to NAK, which the real IN-completion handler sets at 0x40CA-0x40D6. */
 #define CK_REPORT_QUEUE 8
 static ck_frame_t pending[CK_REPORT_QUEUE];
 static uint8_t pending_head, pending_count;
+static uint8_t pending_hid;
 static ck_frame_t last_enqueued;
-static bool queue_fault, fault_release_sent;
+static bool queue_fault, fault_release_sent, fault_companion_sent;
 
 static bool hid_ready(void)
 {
-    return (*(volatile uint16_t *)0x40023426u & 3u) == 2u;
+    return *(volatile uint8_t *)0x20000444u
+        && !(*(volatile uint16_t *)0x20000448u & 8u)
+        && (*(volatile uint16_t *)0x40023426u & 3u) == 2u;
+}
+
+static __attribute__((noinline)) bool companion_send(const ck_frame_t *frame)
+{
+    return oem_send(frame->bytes, (int)frame->len) != 0
+        || *(volatile uint8_t *)0x20000462u != 3;
 }
 
 static void flush_report(void)
@@ -120,17 +146,28 @@ static void flush_report(void)
         return;
     if (pending_count) {
         ck_frame_t *frame = &pending[pending_head];
-        oem_send(frame->bytes, (int)frame->len);
-        oem_hid_send(frame->bytes + 3, 8);
-        pending_head = (pending_head + 1) % CK_REPORT_QUEUE;
-        pending_count--;
-    } else if (queue_fault && !fault_release_sent) {
+        bool delivered = companion_send(frame);
+        if (pending_hid < pending_count) {
+            ck_frame_t *hid = &pending[(pending_head + pending_hid) % CK_REPORT_QUEUE];
+            if (hid->len >= 11) oem_hid_send(hid->bytes + 3, 8);
+            pending_hid++;
+        }
+        if (delivered && pending_hid) {
+            pending_head = (pending_head + 1) % CK_REPORT_QUEUE;
+            pending_count--; pending_hid--;
+        }
+    }
+    if (queue_fault && pending_hid == pending_count
+        && (!fault_release_sent || !fault_companion_sent) && hid_ready()) {
         /* Overflow mutes remaps, drains accepted reports, then emits a
          * terminal all-up report. It does not claim lossless overflow. */
         ck_frame_t empty = {.bytes = {0x0B, 2}, .len = 11};
-        oem_send(empty.bytes, (int)empty.len);
-        oem_hid_send(empty.bytes + 3, 8);
-        fault_release_sent = true;
+        if (!fault_companion_sent)
+            fault_companion_sent = companion_send(&empty);
+        if (!fault_release_sent) {
+            oem_hid_send(empty.bytes + 3, 8);
+            fault_release_sent = true;
+        }
     }
 }
 
@@ -145,7 +182,7 @@ static void enqueue_report(const ck_frame_t *frame, bool force)
     }
     pending[(pending_head + pending_count) % CK_REPORT_QUEUE] = *frame;
     pending_count++;
-    last_enqueued = *frame;
+    if (frame->len >= 11) last_enqueued = *frame;
 }
 
 extern uint8_t __extension_data_start[], __extension_data_end[];
@@ -164,11 +201,121 @@ void ck_extension_init(void)
     oem_system_init();
 }
 
-/* The default keymap record, embedded serialized in the image. */
-extern const uint8_t ck_default_keymap_record[];
-extern const unsigned int ck_default_keymap_record_len;
-
 static ck_engine_t engine_storage;
+static int last_projection;
+
+static bool ensure_engine(void)
+{
+    if (engine_storage.map) return true;
+    memset(&ck_extension_keymap, 0, sizeof(ck_extension_keymap));
+    ck_extension_keymap.native_mask = CK_NATIVE_LAYERS;
+    for (int layer = 0; layer < CK_LAYERS; layer++)
+        for (int pos = 0; pos < CK_KEYS; pos++)
+            ck_extension_keymap.action[layer][pos].kind = CK_ACTION_OEM;
+    ck_engine_init(&engine_storage, &ck_extension_keymap);
+    return true;
+}
+
+/* Extension-only command 0x94, protocol 1. All fields after the framing
+ * bytes are little-endian. No command writes flash or resets hardware.
+ * A complete packed record is staged before an all-up atomic apply. */
+static uint8_t config_stage[CK_KEYMAP_RECORD_MAX];
+static uint16_t config_size, config_written, config_generation;
+static uint32_t config_nonce;
+
+/* Continue the pinned OEM reset routine after its stolen LUI. */
+__asm__(".section .text.ck_oem_usb_reset,\"ax\",@progbits\n"
+        ".global ck_oem_usb_reset\nck_oem_usb_reset:\n"
+        "lui a5,0x40023\nj oem_usb_reset_tail\n.previous\n");
+extern void ck_oem_usb_reset(void);
+
+void ck_extension_usb_reset(void)
+{
+    config_nonce = config_size = config_written = 0;
+    pending_head = pending_count = pending_hid = 0;
+    queue_fault = ck_remapping_enabled != 0;
+    fault_release_sent = false;
+    fault_companion_sent = false;
+    ck_oem_usb_reset();
+}
+
+static uint16_t config_u16(const uint8_t *p) { return p[0] | (p[1] << 8); }
+
+int ck_extension_command(void *context, const uint8_t *request, int size)
+{
+    if (!request || size < 2) return 0;
+    if (request[1] != 0x94) return oem_command(context, request, size);
+    if (size < 12 || size > 36 || request[0] != size) return 0;
+    uint8_t reply[36] = {12, 2, 0x94, 0, 1, request[3]};
+    uint8_t record[CK_KEYMAP_RECORD_MAX];
+    uint32_t nonce;
+    memcpy(&nonce, request + 4, 4);
+    memcpy(reply + 6, &nonce, 4);
+    uint32_t prior = ck_irq_save();
+    uint16_t offset = config_u16(request + 10);
+    uint16_t expected = config_u16(request + 8);
+    bool valid = ensure_engine() && request[2] == 1 && nonce;
+    uint16_t record_len = valid && request[3] <= 1
+        ? ck_keymap_serialize(&ck_extension_keymap, record, sizeof(record)) : 0;
+    if (!valid) reply[3] = 3;
+    else if (request[3] == 0 && size == 12) {
+        config_nonce = nonce;
+        config_size = config_written = 0;
+        const uint8_t caps[] = {'C','K','X','1',4,3,6,6,0xD2,3,24,1};
+        memcpy(reply + 12, caps, sizeof(caps));
+        memcpy(reply + 24, &record_len, 2);
+        reply[26] = ck_remapping_enabled;
+        reply[0] = 27;
+    } else if (nonce != config_nonce) reply[3] = 3;
+    else if (expected != config_generation || config_generation == UINT16_MAX) reply[3] = 4;
+    else switch (request[3]) {
+    case 1: { /* READ: one byte count, byte offset in the packed record. */
+        if (size != 13 || !request[12] || request[12] > 24
+            || offset > record_len || request[12] > record_len - offset) { reply[3] = 1; break; }
+        memcpy(reply + 12, record + offset, request[12]);
+        reply[0] += request[12];
+        break;
+    }
+    case 2: /* BEGIN: offset declares complete record size. */
+        if (size != 12 || offset < 6 || offset > sizeof(config_stage)) { reply[3] = 1; break; }
+        config_size = offset; config_written = 0;
+        break;
+    case 3: /* WRITE: bounded, ordered chunks. */
+        if (!config_size || size == 12 || offset != config_written
+            || size - 12 > config_size - config_written) { reply[3] = 1; break; }
+        memcpy(config_stage + offset, request + 12, size - 12);
+        config_written += size - 12;
+        break;
+    case 4: { /* APPLY: explicit remapping enable byte, never automatic. */
+        if (size != 13 || request[12] > 1 || offset || !config_size
+            || config_written != config_size) { reply[3] = 1; break; }
+        uint8_t held = 0;
+        for (unsigned row = 0; row < CK_ROWS; row++) held |= last_matrix[row];
+        if (held || pending_count || queue_fault || !hid_ready()
+            || ck_engine_next_deadline(&engine_storage) != CK_NO_DEADLINE) { reply[3] = 2; break; }
+        if (ck_keymap_deserialize(config_stage, config_size, &ck_extension_keymap)) { reply[3] = 1; break; }
+        ck_engine_init(&engine_storage, &ck_extension_keymap);
+        memset(native_matrix, 0, sizeof(native_matrix));
+        memset(&native_frame, 0, sizeof(native_frame));
+        memset(&last_custom, 0, sizeof(last_custom));
+        last_enqueued.len = 0;
+        last_projection = -1;
+        ck_remapping_enabled = request[12];
+        config_generation++;
+        config_size = config_written = 0;
+        break;
+    }
+    case 5: /* ABORT: discard staged bytes without changing the active map. */
+        if (size != 12 || offset) { reply[3] = 1; break; }
+        config_size = config_written = 0;
+        break;
+    default: reply[3] = 1;
+    }
+    memcpy(reply + 10, &config_generation, 2);
+    ck_irq_restore(prior);
+    oem_send(reply, reply[0]);
+    return 0; /* Reply already submitted. Skip the OEM response buffer. */
+}
 
 /* Original latch handler treats any ordinary key as activity. A custom
  * key must consume the latch too, but must not inherit the native role
@@ -230,8 +377,8 @@ static void native_candidates(const uint8_t matrix[CK_ROWS], uint8_t out[CK_ROWS
 
 /* Keep underlying native tracking separate from an explicit custom layer.
  * Disabled native modes and output projections use private state/context
- * views. Only a real tracking call commits its owned state prefix and
- * native status byte. The OEM settings record is never modified. */
+ * views. A real tracking call commits its state prefix, status byte, and
+ * real backlight toggle. Temporary native-mode mask bits never persist. */
 static void native_call(void *state_obj, const uint8_t matrix[CK_ROWS], bool layer, int projection)
 {
     uint8_t mask = engine_storage.map->native_mask;
@@ -279,13 +426,15 @@ static void native_call(void *state_obj, const uint8_t matrix[CK_ROWS], bool lay
     if (!previewing && projection < 0) {
         memcpy(state_obj, state, 0x20);
         original_context[0] = context[0];
+        /* OEM 0x2900 toggles the backlight bit even in a native-disable
+         * policy view. Commit that real gesture, not temporary mode masks. */
+        original_context[0x120] = (original_context[0x120] & ~4u) | (context[0x120] & 4u);
     }
 }
 
 static void preview_native(void *state_obj, const uint8_t matrix[CK_ROWS], int projection)
 {
-    /* Preview transport is suppressed. Nested-IRQ capture safety remains
-     * a separate unproven gate, as in the accepted baseline. */
+    /* The builder critical section prevents unrelated IRQ submissions. */
     memset(&preview_frame, 0, sizeof(preview_frame));
     previewing = capturing_native = true;
     native_call(state_obj, matrix, false, projection);
@@ -295,6 +444,7 @@ static void preview_native(void *state_obj, const uint8_t matrix[CK_ROWS], int p
 static void merge_keys(ck_frame_t *out, const ck_frame_t *in)
 {
     out->bytes[3] |= in->bytes[3];
+    out->bytes[9] |= in->bytes[9];
     for (unsigned i = 5; i < 5 + CK_FRAME_KEYS && in->bytes[i]; i++) {
         unsigned slot = 5;
         while (slot < 5 + CK_FRAME_KEYS && out->bytes[slot] && out->bytes[slot] != in->bytes[i])
@@ -340,24 +490,22 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
 {
     if (size != CK_ROWS)
         return;
+    uint32_t prior = ck_irq_save();
     last_state = state_obj;
+    memcpy(last_matrix, matrix, CK_ROWS);
     if (!ck_remapping_enabled) {
         oem_builder(state_obj, matrix, size);
-        return;
+        goto done;
     }
-    if (engine_storage.map == 0) {
-        if (ck_keymap_deserialize(ck_default_keymap_record,
-                                   ck_default_keymap_record_len,
-                                   &ck_extension_keymap) != 0) {
-            /* Fail closed: an invalid embedded record must never produce
-             * reports from zeroed memory; leave the engine disabled. */
-            return;
-        }
-        ck_engine_init(&engine_storage, &ck_extension_keymap);
+    if (!ensure_engine()) goto done;
+    if (queue_fault) {
+        /* Mute new presses, but let real releases reach native latch
+         * tracking. Stale snapshots must not look held after reconnect. */
+        for (int row = 0; row < CK_ROWS; row++)
+            for (int col = 0; col < CK_COLS; col++)
+                engine_storage.held_active[ck_pos(row, col)] &= (matrix[row] & (1u << col)) != 0;
+        goto done;
     }
-    memcpy(last_matrix, matrix, CK_ROWS);
-    if (queue_fault)
-        return;
     if (engine_storage.oneshot_armed && shim_ms >= engine_storage.oneshot_deadline) {
         engine_storage.oneshot_armed = false;
         engine_storage.oneshot_from = -1;
@@ -379,7 +527,6 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
     last_custom = frame;
     native_fresh = false;
     int projection = ck_engine_custom_layer(&engine_storage) ? ck_engine_layer(&engine_storage) : -1;
-    static int last_projection;
     bool native_changed = memcmp(native_matrix, activity, CK_ROWS) || custom_changed;
     bool projection_changed = projection != last_projection;
     if (native_changed || projection_changed) {
@@ -406,6 +553,8 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
         if (render && (native_fresh || projection_changed)) {
             memcpy(native_frame.bytes + 5, preview_frame.bytes + 5, CK_FRAME_KEYS);
             native_frame.bytes[3] = projected_mods;
+            if (held_projection || projection >= 0)
+                native_frame.bytes[9] = preview_frame.bytes[9];
         }
         memcpy(native_matrix, activity, CK_ROWS);
         last_projection = projection;
@@ -419,12 +568,15 @@ void ck_extension_builder(void *state_obj, const uint8_t *matrix, int size)
     merge_keys(&merged, &frame);
     enqueue_report(&merged, native_fresh);
     flush_report();
+done:
+    ck_irq_restore(prior);
 }
 
 /* The scanner invokes the builder before this layer/backlight callback.
  * Give both OEM functions the same filtered physical-key history. */
 void ck_extension_layer(void *state_obj, const uint8_t *matrix, int size)
 {
+    uint32_t prior = ck_irq_save();
     if (ck_remapping_enabled && engine_storage.map) {
         uint8_t filtered[CK_ROWS];
         native_input(filtered);
@@ -435,6 +587,7 @@ void ck_extension_layer(void *state_obj, const uint8_t *matrix, int size)
     } else {
         oem_layer(state_obj, matrix, size);
     }
+    ck_irq_restore(prior);
 }
 
 /* Replaces only the call at 0x3AEE. The OEM interrupt entry/return stays
@@ -444,18 +597,23 @@ void ck_extension_tick(void)
 {
     shim_ms++;
     oem_tick();
+    uint32_t prior = ck_irq_save();
     if (ck_remapping_enabled && engine_storage.map) {
         flush_report();
         if (queue_fault) {
             uint8_t held = 0;
             for (unsigned row = 0; row < CK_ROWS; row++)
                 held |= last_matrix[row] & CK_ROW_MASK;
-            if (!held && fault_release_sent && hid_ready()) {
-                queue_fault = fault_release_sent = false;
+            if (!held && fault_release_sent && fault_companion_sent && hid_ready()) {
+                queue_fault = fault_release_sent = fault_companion_sent = false;
                 last_enqueued.len = 0;
+                pending_head = pending_count = pending_hid = 0;
+                memset(native_matrix, 0, sizeof(native_matrix));
+                memset(&native_frame, 0, sizeof(native_frame));
+                memset(&last_custom, 0, sizeof(last_custom));
                 ck_engine_init(&engine_storage, &ck_extension_keymap);
             }
-            return;
+            goto done;
         }
         uint32_t next = ck_engine_next_deadline(&engine_storage);
         if (next != CK_NO_DEADLINE && shim_ms >= next) {
@@ -463,6 +621,8 @@ void ck_extension_tick(void)
             ck_extension_layer(last_state, last_matrix, CK_ROWS);
         }
     }
+done:
+    ck_irq_restore(prior);
 }
 
 #endif /* CK_SHIM_HOST */

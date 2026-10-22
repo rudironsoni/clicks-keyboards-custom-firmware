@@ -35,6 +35,52 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
+## Current stopping point, 2026-10-22 (offline RAM configuration and USB safety)
+
+Rudi accepted `d6d3461718ce73a1d661c61e58df34e5fa2d59bf` as the bounded
+native/custom ownership increment. Firmware CI `39821804798` and iOS CI
+`39821804796` passed. Downloaded firmware hashes matched the local image.
+The current increment is tested locally and awaits hosted CI.
+
+- Extension-only command `0x94`, protocol 1, provides a nonce-bound
+  `CKX1` capability reply, packed-map readback, bounded ordered staging,
+  atomic all-up application, and abort. Old generations and incomplete or
+  invalid records cannot replace the active map. USB reset discards the
+  session and incomplete transaction. No command writes flash.
+- The production Swift codec/client drives actual V122 `0x2208` through
+  the patched command call at `0x2218`. Replies execute original EP3
+  submission and completion. Native gestures then produce edited Esc/Tab
+  through original EP1 submission/completion. No map/enable RAM injection
+  occurs in this configuration proof. Stock V122 fails capability identity.
+- Full 978-byte records apply and read back. Lost acknowledgements close
+  the Swift session without retry. A new handshake/readback recovers the
+  actual committed state. The client is not connected to AccessoryInspector
+  or an editor UI. Physical dispatch remains disabled.
+- Real SysTick/USB IRQ entry/return, nested USB completion, preview IRQ
+  deferral, suspend/resume, bus reset, companion backpressure, notification
+  retention, saturation, overflow, and final all-up recovery pass in the
+  bounded model. USB configuration and authenticated iAP2 state are still
+  synthetic. Full startup, EP0 enumeration, and iAP2 authentication are open.
+- The write audit found an actual PWM side effect in OEM previews. A
+  reversible hook at `0x3062` suppresses only preview PWM calls. Removing
+  the hook reproduces the audit failure at `0x4F0E`, `0x40012C20`.
+  A real native backlight gesture still updates PWM and its settings bit,
+  including when native NAV is disabled. Five projected-consumer checks
+  compare full HID and companion packets, including Cursor status payloads.
+- All 37 Python tests, existing native/Swift suites, 20 V122 cases, and
+  Swift-to-V122 integration pass locally. The original 299 layer checks
+  and selected 130-settings comparisons remain intact.
+- Image: 27,058 bytes, extent `0x89B2`, headroom 78 bytes. No complete
+  unused application page remains. Two maximum A/B records need at least
+  eight 256-byte pages before journal code. Decision: RAM-only extension
+  phase with iPhone-backed profiles. Keyboard-flash persistence is not met.
+
+Evidence and exact wire format:
+[section 14](keyboards/ck5200/docs/stock-extension-feasibility.md#14-offline-ram-configuration-and-usb-safety).
+R3 remains unmet. M4 stays closed. The vendor inquiry stays unsent. No
+physical command, flash write, settings write, reset, or probe occurred.
+The exact-QMK assurance gate and physical dispatch policy stay unchanged.
+
 ## Current stopping point, 2026-10-22 (native/custom layer ownership)
 
 Rudi accepted `21a985c` as the bounded active-OEM-compatibility baseline.

@@ -20,11 +20,13 @@
  * Both OEM companion submission and EP1 HID submission are distinct calls.
  *
  * The separate V122 profile executes CRT initialization and the bounded
- * scanner/report path. Full startup, IRQ/USB completion semantics, iAP2
- * delivery, and configuration/persistence remain outside that proof.
+ * scanner/report path. IRQ/configuration cases also execute real SysTick
+ * and USB completion handlers. Full startup, enumeration, iAP2 auth,
+ * physical delivery, and persistence remain outside that proof.
  * Native SYM/NAV selects programmable layers by default when the engine
  * is enabled. Each native mode can be disabled. Custom activators win.
- * See keyboards/ck5200/docs/stock-extension-feasibility.md, section 13.
+ * Offline RAM configuration executes through the OEM command adapter.
+ * See keyboards/ck5200/docs/stock-extension-feasibility.md, section 14.
  */
 #ifndef CK5200_EXTENSION_SHIM_H
 #define CK5200_EXTENSION_SHIM_H

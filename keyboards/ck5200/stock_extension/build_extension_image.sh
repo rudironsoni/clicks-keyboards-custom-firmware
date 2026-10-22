@@ -36,7 +36,8 @@ TESTS_DIR="$ROOT/tests"
 python3 "$ROOT/tools/stock_extension_patch.py" "$STOCK" \
     "$OUT/v122_patched.bin" "$OUT/patch_manifest.json"
 
-# 2. Generate the serialized default keymap record (host tool).
+# 2. Generate the serialized default as reference evidence (not linked).
+# The device initializes the identical all-OEM map with a small RAM loop.
 "$HOSTCC" -std=c99 -Os -I "$EXT_DIR" -I "$TESTS_DIR" \
     "$EXT_DIR/ck5200_keymap_engine.c" \
     "$EXT_DIR/ck5200_keymap_serialize.c" \
@@ -56,7 +57,6 @@ CFLAGS=(-std=c99 -Os -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medlow
 "$CC" "${CFLAGS[@]}" -c "$EXT_DIR/ck5200_keymap_engine.c" -o "$OUT/engine.o"
 "$CC" "${CFLAGS[@]}" -c "$EXT_DIR/ck5200_keymap_serialize.c" -o "$OUT/serialize.o"
 "$CC" "${CFLAGS[@]}" -c "$EXT_DIR/ck5200_extension_shim.c" -o "$OUT/shim.o"
-"$CC" "${CFLAGS[@]}" -c "$OUT/ck5200_default_record.c" -o "$OUT/record.o"
 "$CC" "${CFLAGS[@]}" -c "$EXT_DIR/ck5200_freestanding.c" -o "$OUT/freestanding.o"
 
 # 5. Link the complete image.
@@ -64,7 +64,7 @@ CFLAGS=(-std=c99 -Os -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medlow
     -T "$EXT_DIR/extension.ld" \
     -Wl,-Map,"$OUT/ck5200_extension.map" \
     "$OUT/v122_blob.o" "$OUT/shim.o" "$OUT/engine.o" "$OUT/serialize.o" \
-    "$OUT/record.o" "$OUT/freestanding.o" \
+    "$OUT/freestanding.o" \
     -o "$OUT/ck5200_extension.elf"
 "$NM" -n "$OUT/ck5200_extension.elf" > "$OUT/symbols.txt"
 # The new hook targets come from the linked symbols, not guessed offsets.
@@ -74,9 +74,13 @@ TICK_TARGET="$(awk '$3 == "ck_extension_tick" {print "0x" $1}' "$OUT/symbols.txt
 LAYER_TARGET="$(awk '$3 == "ck_extension_layer" {print "0x" $1}' "$OUT/symbols.txt")"
 COMPANION_TARGET="$(awk '$3 == "ck_capture_companion" {print "0x" $1}' "$OUT/symbols.txt")"
 HID_TARGET="$(awk '$3 == "ck_capture_hid" {print "0x" $1}' "$OUT/symbols.txt")"
+COMMAND_TARGET="$(awk '$3 == "ck_extension_command" {print "0x" $1}' "$OUT/symbols.txt")"
+USB_RESET_TARGET="$(awk '$3 == "ck_extension_usb_reset" {print "0x" $1}' "$OUT/symbols.txt")"
+PWM_TARGET="$(awk '$3 == "ck_capture_pwm" {print "0x" $1}' "$OUT/symbols.txt")"
 HOOKS=(--startup-target "$STARTUP_TARGET" --tick-target "$TICK_TARGET"
        --layer-target "$LAYER_TARGET" --companion-target "$COMPANION_TARGET"
-       --hid-target "$HID_TARGET")
+       --hid-target "$HID_TARGET" --command-target "$COMMAND_TARGET"
+       --usb-reset-target "$USB_RESET_TARGET" --pwm-target "$PWM_TARGET")
 python3 "$ROOT/tools/stock_extension_patch.py" "$STOCK" \
     "$OUT/v122_patched.bin" "$OUT/patch_manifest.json" \
     "${HOOKS[@]}"
@@ -118,9 +122,17 @@ pathlib.Path(sys.argv[2]).write_text("\n".join(report) + "\n")
 print("\n".join(report))
 PY
 python3 - "$OUT" <<'PY'
-import hashlib, pathlib, sys
+import hashlib, json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
+root = out.parents[1]
+sources = [*sorted((root / 'stock_extension').glob('*.c')),
+           *sorted((root / 'stock_extension').glob('*.h')),
+           root / 'stock_extension/extension.ld', root / 'stock_extension/build_extension_image.sh',
+           root / 'tools/stock_extension_patch.py']
+(out / 'build-source-sha256.json').write_text(json.dumps({str(p.relative_to(root)):
+    hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}, indent=2) + '\n')
 names = ['ck5200_extension.' + suffix for suffix in ('bin', 'elf', 'map', 'disassembly.txt')]
+names.append('build-source-sha256.json')
 (out / 'SHA256SUMS').write_text(''.join(
     f'{hashlib.sha256((out / name).read_bytes()).hexdigest()}  {name}\n' for name in names))
 PY
