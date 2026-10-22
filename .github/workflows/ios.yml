@@ -11,6 +11,7 @@ on:
       - "keyboards/ck5200/firmware/**"
       - "keyboards/ck5200/scripts/pins.env"
       - "keyboards/ck5200/tests/qmk_shim/**"
+      - "keyboards/ck5200/stock_extension/**"
   pull_request:
     paths:
       - "ios/ClicksInspector/**"
@@ -20,11 +21,39 @@ on:
       - "keyboards/ck5200/firmware/**"
       - "keyboards/ck5200/scripts/pins.env"
       - "keyboards/ck5200/tests/qmk_shim/**"
+      - "keyboards/ck5200/stock_extension/**"
 
 permissions:
   contents: read
 
 jobs:
+  extension-editor:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare genuine V122 emulator
+        working-directory: keyboards/ck5200
+        run: |
+          brew install xcodegen
+          bash scripts/setup.sh
+          bash scripts/revert-stock.sh --download-only
+          python3 stock_extension/assurance/run.py
+      - name: Verify editor, profiles, exact HID and recovery in Simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          python3 ios/ClicksInspector/Tests/run-extension-editor.py --device "$DEVICE_ID" --output evidence/extension-editor
+      - name: Retain editor screens and V122 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-editor-${{ github.sha }}
+          path: |
+            evidence/extension-editor/
+            keyboards/ck5200/build/stock_extension/build-report.txt
+            keyboards/ck5200/build/stock_extension/build-source-sha256.json
+            keyboards/ck5200/build/stock_extension/assurance/report.json
+          retention-days: 30
   verify:
     runs-on: macos-15
     timeout-minutes: 45

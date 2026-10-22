@@ -1,6 +1,6 @@
 import Foundation
 
-private enum TestFailure: Error { case failed(String), lostAcknowledgement }
+private enum TestFailure: Error { case failed(String) }
 private func check(_ condition: Bool, _ message: String) throws {
     if !condition { throw TestFailure.failed(message) }
 }
@@ -46,10 +46,46 @@ private final class ExtensionEmulator {
         process.waitUntilExit()
         try check(process.terminationStatus == 0, "emulator failed")
     }
+
+    // Exercise the production partial-write adapter and async frame assembler.
+    @MainActor func transport(dropApplyAck: Bool = false) -> StockExtensionTransport {
+        let link = StreamLink(output: nil)
+        var request: [UInt8] = []
+        var notificationTail: [UInt8] = []
+        link.write = { [weak link] pointer, count in
+            if !notificationTail.isEmpty {
+                let tail = notificationTail
+                notificationTail = []
+                link?.handleBytes(tail)
+            }
+            let accepted = min(3, count)
+            request += Array(UnsafeBufferPointer(start: pointer, count: accepted))
+            if request.count == Int(request[0]) {
+                let packet = request
+                request = []
+                Task { @MainActor in
+                    do {
+                        let reply = try self.exchange(packet)
+                        if dropApplyAck && packet[3] == 4 { return }
+                        // OEM traffic may precede a reply in the same delivery.
+                        link?.handleBytes([11,2,0,0,0,0,0,0,0,0,0] + Array(reply.prefix(2)))
+                        for (index, byte) in reply.dropFirst(2).enumerated() {
+                            await Task.yield()
+                            link?.handleBytes(index == reply.count - 3 ? [byte,4,4] : [byte])
+                        }
+                        notificationTail = [1,0] // Completes after the next request starts.
+                    } catch { link?.handleLoss("emulator error: \(error)") }
+                }
+            }
+            return accepted
+        }
+        let adapter = StockExtensionTransport(link)
+        return adapter
+    }
 }
 
 @main enum StockExtensionProtocolTests {
-    static func main() throws {
+    @MainActor static func main() async throws {
         var record: [UInt8] = [67,75,77,4,108,6]
         for layer in UInt8(0)..<3 { for pos in UInt8(0)..<36 { record += [pos,layer,0x22] } }
         let original = try StockExtensionMap(record: record)
@@ -68,55 +104,89 @@ private final class ExtensionEmulator {
         catch StockExtensionError.invalidRecord {}
         var sends = 0
         let stock = StockExtensionSession(nonce: 123) { _ in sends += 1; return [8,2,0x94,255,0,0,0,0] }
-        do { try stock.open(); throw TestFailure.failed("stock identity accepted") }
+        do { try await stock.open(); throw TestFailure.failed("stock identity accepted") }
         catch StockExtensionError.framing {}
-        do { try stock.apply(original, enabled: true); throw TestFailure.failed("stock mutation allowed") }
+        do { try await stock.apply(original, enabled: true); throw TestFailure.failed("stock mutation allowed") }
         catch StockExtensionError.identity {}
         try check(sends == 1, "mutation sent before capability identity")
+
+        let silentLink = StreamLink(output: nil)
+        let silent = StockExtensionTransport(silentLink)
+        silent.timeoutNanoseconds = 20_000_000
+        let waiting = StockExtensionSession(nonce: 130, transfer: silent.exchange)
+        let opening = Task { try await waiting.open() }
+        await Task.yield()
+        silentLink.handleBytes([27,2,0x94,0,1]) // Truncated HELLO must time out and discard queued output.
+        do { try await waiting.open(); throw TestFailure.failed("parallel operation accepted") }
+        catch StockExtensionError.busy {}
+        do { try await opening.value; throw TestFailure.failed("missing reply accepted") }
+        catch StockExtensionError.timedOut {}
+        try check(!waiting.identified && silentLink.outboxCount == 0, "timeout retained stale output")
+        let lostLink = StreamLink(output: nil)
+        let lost = StockExtensionTransport(lostLink)
+        let disconnect = Task { try await lost.exchange([12,0x94,1,0,1,0,0,0,0,0,0,0]) }
+        await Task.yield()
+        lostLink.handleLoss("disconnect")
+        do { _ = try await disconnect.value; throw TestFailure.failed("disconnect accepted") }
+        catch StockExtensionError.disconnected {}
+        let cancelledLink = StreamLink(output: nil)
+        let cancelled = StockExtensionTransport(cancelledLink)
+        let cancelTask = Task { try await cancelled.exchange([12,0x94,1,0,1,0,0,0,0,0,0,0]) }
+        await Task.yield()
+        cancelTask.cancel()
+        do { _ = try await cancelTask.value; throw TestFailure.failed("cancel accepted") }
+        catch is CancellationError {}
 
         if CommandLine.arguments.count == 5 {
             let args = CommandLine.arguments
             let stockDevice = try ExtensionEmulator(runner: args[1], image: args[3], trace: args[4] + "/swift-stock.trace.jsonl")
-            let stockSession = StockExtensionSession(nonce: 124, transfer: stockDevice.exchange)
-            do { try stockSession.open(); throw TestFailure.failed("real stock identity accepted") }
+            let stockAdapter = stockDevice.transport()
+            let stockSession = StockExtensionSession(nonce: 124, transfer: stockAdapter.exchange)
+            do { try await stockSession.open(); throw TestFailure.failed("real stock identity accepted") }
             catch StockExtensionError.framing {}
+            do { try await stockSession.apply(original, enabled: true); throw TestFailure.failed("stock mutation sent") }
+            catch StockExtensionError.identity {}
+            stockAdapter.close()
             try stockDevice.stop()
 
             let device = try ExtensionEmulator(runner: args[1], image: args[2], trace: args[4] + "/swift-extension.trace.jsonl")
             try check(device.line("r ") == "U 00", "initial USB reset")
             try check(device.line("c ") == "U 01", "synthetic configuration handoff")
-            let session = StockExtensionSession(nonce: 125, transfer: device.exchange)
-            try session.open()
-            var map = try session.read()
+            let adapter = device.transport()
+            let session = StockExtensionSession(nonce: 125, transfer: adapter.exchange)
+            try await session.open()
+            var map = try await session.read()
             try check(map == original, "initial firmware map differs")
-            try map.set(.init(usage: 0x29), layer: 1, row: 0, column: 0)
-            try map.set(.init(usage: 0x2B), layer: 2, row: 4, column: 4)
-            try session.apply(map, enabled: true)
+            try map.set(.init(usage: 0x29), layer: 2, row: 0, column: 0)
+            try map.set(.init(usage: 0x2B), layer: 1, row: 2, column: 0)
+            try await session.apply(map, enabled: true)
             try check(device.line("k 000000000010") == "H 0000000000000000", "native Symbols activation")
-            try check(device.line("k 010000000010") == "H 0000290000000000", "iOS SYM edit did not emit Esc")
-            try check(device.line("k 000000000000") == "H 0000000000000000", "Esc release")
+            try check(device.line("k 000001000010") == "H 00002b0000000000", "iOS SYM+E did not emit Tab")
+            try check(device.line("k 000000000000") == "H 0000000000000000", "Tab release")
             try check(device.line("k 000020000010") == "H 0000000000000000", "native Cursor activation")
             _ = device.line("k 000000000000")
-            try check(device.line("k 000000001000") == "H 00002b0000000000", "iOS NAV edit did not emit Tab")
+            try check(device.line("k 010000000000") == "H 0000290000000000", "iOS NAV+Q did not emit Esc")
             _ = device.line("k 000000000000")
-            try session.apply(maximum, enabled: false)
-            try session.apply(map, enabled: true)
-            let interrupted = StockExtensionSession(nonce: 126) { bytes in
-                let reply = try device.exchange(bytes)
-                if bytes[3] == 4 { throw TestFailure.lostAcknowledgement }
-                return reply
-            }
-            try interrupted.open()
+            try await session.apply(maximum, enabled: false)
+            try await session.apply(map, enabled: true)
+            adapter.close()
+            session.close()
+            let lostAckAdapter = device.transport(dropApplyAck: true)
+            let interrupted = StockExtensionSession(nonce: 126, transfer: lostAckAdapter.exchange)
+            try await interrupted.open()
             var changed = map
             try changed.set(.init(usage: 0x2B), layer: 0, row: 0, column: 0)
-            do { try interrupted.apply(changed, enabled: true); throw TestFailure.failed("lost ack accepted") }
-            catch TestFailure.lostAcknowledgement {}
+            do { try await interrupted.apply(changed, enabled: true); throw TestFailure.failed("lost ack accepted") }
+            catch StockExtensionError.timedOut {}
             try check(!interrupted.identified, "lost acknowledgement did not close client session")
-            let recovered = StockExtensionSession(nonce: 127, transfer: device.exchange)
-            try recovered.open()
-            try check(try recovered.read() == changed, "atomic commit was not recoverable by readback")
+            let recoveredAdapter = device.transport()
+            let recovered = StockExtensionSession(nonce: 127, transfer: recoveredAdapter.exchange)
+            try await recovered.open()
+            try check(try await recovered.read() == changed, "atomic commit was not recoverable by readback")
+            recoveredAdapter.close()
             try device.stop()
             print("PASS iOS codec -> V122 command adapter -> EP3 reply -> atomic RAM map -> native gestures -> EP1 HID")
+            print("PASS async fragmented streams, partial writes, NAV+Q Esc, SYM+E Tab, reconnect and lost-ack readback")
         }
         print("PASS extension identity, typed map, and maximum-size codec checks")
     }

@@ -14,7 +14,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 14.** Rudi accepted `9113dab` only as an
+**Current evidence: section 15.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -594,8 +594,9 @@ The remaining flash bytes are not a verified persistence allocation.
 
 ## 14. Offline RAM configuration and USB safety
 
-Status: **local verification passes. Hosted verification is pending.**
-`d6d3461` remains the accepted ownership baseline. This increment does not
+Status at `1cbb07a`: **accepted offline RAM-configuration milestone.**
+Firmware CI `39846660539` and iOS CI `39846660777` passed at that exact commit.
+The remaining details in this section describe that baseline. This increment does not
 authorize installation, physical configuration, M4 trials, or vendor contact.
 
 ### RAM configuration and iOS proof
@@ -744,3 +745,123 @@ test. The unsigned diagnostics-only iPhone application also builds locally.
 Firmware CI runs the Swift integration separately and retains its
 log, traces, ELF/BIN, source manifest, and execution report. Hosted success
 must refer to the exact new commit, not these local results.
+
+## 15. Live editor software integration
+
+Status: **local software verification passes. Hosted verification is pending.**
+This increment does not change the extension image or authorize physical commands.
+`1cbb07a` remains the accepted offline baseline. Its iOS CI is green, not pending.
+
+### Client, streams, and ownership
+
+`StockExtensionSession` retains the same codec and protocol-1 checks but now
+awaits asynchronous transfers. A busy guard covers complete operations, including
+every stage and the final handshake/readback. Concurrent callers receive `busy`.
+There is no queued retry of an uncertain mutation.
+
+`StockExtensionTransport` connects that client to `KeyboardPacketLink`, including
+the existing EASession-backed `StreamLink`. It assembles frames with a 36-byte
+bound, skips OEM key/status notifications, and accepts fragmented replies.
+Timeout, cancellation, disconnection, or invalid framing closes the adapter and
+discards pending output. Reconnect uses a fresh nonce and reads the committed map.
+An OEM notification can start after a reply and finish during the next exchange.
+Frame-start tracking prevents that earlier frame from becoming the next reply.
+
+`AccessoryInspector` owns stream routing and owner changes. Stock recording,
+stock read sweeps, QMK keymap operations, and firmware transactions cannot share
+an active extension exchange. Owner changes close the previous link first.
+The management guard checks actual in-flight operations, not only the phase label.
+Backgrounding closes the editor link and invalidates pending work.
+
+The physical extension entry point checks a false authorization gate before
+creating an EASession. The controller also rejects physical editor links.
+No iPhone build sends extension commands to an accessory in this increment.
+The dormant stream routing is implemented, but physical EASession compatibility
+is not tested or claimed. Stock V122 rejects the capability handshake in actual
+emulation. The client refuses APPLY before sending any mutation to stock.
+
+### Screen and phone storage
+
+The app has a new "Extension RAM editor" screen. Its grid identifies all
+36 switches by Base legend and matrix coordinate on each of the three layers.
+The action sheet exposes keyboard usages `00..ff`, Esc/Tab buttons, Ctrl/Shift/
+Alt/Cmd, modifier-only actions, shortcuts, disabled/transparent/OEM actions,
+and hold/toggle/one-shot/tap-hold activation targeting any layer, including Base.
+Native Symbols and Navigation have independent switches.
+
+The UI explains the existing activation contract, not a new one. Tap-hold
+selects its target immediately while pressed. A quick, uninterrupted release
+can send the tap usage without modifiers. One-shot expires after 1000 ms.
+Transparent on Symbols/Navigation resolves to Base, not another intermediate layer.
+
+`ExtensionProfiles.json` stores typed named maps and the enabled flag separately
+from `QMKProfiles.json`. Each file has a schema version. Invalid, corrupt, or
+unsupported files are preserved and cannot be overwritten by Save. Profiles
+survive app termination. Loading changes only the draft. Reconnect reads RAM.
+After power loss, the user must load a profile and press Apply explicitly.
+
+### Genuine V122 emulator workflow
+
+`editor_server.py` binds only `127.0.0.1:8765` and starts the existing
+`config-server` runner. It validates the image and source hashes against the
+passing assurance report. It serializes extension packets and matrix scans,
+records commands/replies, and retains the machine across client reconnects.
+The power-loss control restarts the machine. The lost-ack control executes
+APPLY but withholds its reply. Neither control accesses a physical device.
+
+The simulator-only `V122EmulatorLink` exchanges bytes through that bridge and
+delivers one-byte fragments to the production async adapter. Mapping, native
+gestures, atomic apply, EP3 replies, and EP1 reports execute in V122. There is
+no Swift or Python implementation of those firmware behaviors.
+
+The updated protocol test uses production `StreamLink` partial writes plus
+fragmented OEM/reply delivery. It tests stock rejection before mutation, the
+full 978-byte record, truncated-response timeout, cancellation, disconnection,
+concurrent-operation rejection, and lost-ack recovery without automatic retry.
+
+The host editor workflow and Simulator UI workflow edit NAV Q at `(0,0)` to
+Esc and SYM E at `(2,0)` to Tab. They apply/read back the map, execute native
+gestures, and check complete HID reports:
+
+- NAV+Q: `0000290000000000`.
+- SYM+E: `00002b0000000000`.
+- Release: `0000000000000000`.
+
+The UI workflow also saves a named profile, terminates and relaunches the app,
+demonstrates a different RAM map after power loss, requires manual reapplication,
+and reconnects after a lost APPLY acknowledgement to read the actual committed map.
+Screenshots and raw V122 traces distinguish this proof from physical compatibility.
+
+Reproduce locally with normal Apple tools, without an offload wrapper:
+
+```sh
+# From keyboards/ck5200, with the existing pinned dependencies and stock fixture:
+python3 stock_extension/assurance/run.py
+# From the repository root, use an available iPhone Simulator UDID:
+python3 ios/ClicksInspector/Tests/run-extension-editor.py --device <simulator-udid>
+```
+
+Omit `--device` for the host editor workflow only. Port 8765 must be free.
+Evidence is written to `ios/ClicksInspector/build/extension-editor/`: host/UI
+logs, screenshots, command/reply records, and per-boot V122 traces. The iOS
+workflow has a separate editor job that retains this evidence. Hosted results
+for this increment remain unverified until its workflows finish successfully.
+Use a fresh `--output` directory if a previous UI result bundle already exists.
+
+Local verification passed: the full Swift suite, 37 Python tests, native tests,
+20 V122 assurance cases with 299 layer checks, asynchronous Swift-to-V122
+integration, the host editor workflow, editor/ownership Simulator tests, the
+existing QMK profile UI workflow, and an unsigned Debug iPhone build.
+The editor evidence under `ios/ClicksInspector/build/extension-editor-verified/`
+contains seven screenshots and 281 recorded command/boot/fault events. The host
+and UI workflows each recover after one lost APPLY acknowledgement.
+
+The separate exact-QMK binary assurance run was not repeated for this iOS change.
+Its hash-pinned source gate is unchanged. The older local QMK build is not
+accepted as a replacement image. The extension BIN still has SHA-256
+`2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132`.
+
+**Independent open gates:** full startup/USB enumeration/iAP2 authentication,
+real interrupt latency and SysTick coalescing, keyboard-flash persistence, and
+R3 independent recovery. Simulator success closes none of these gates.
+M4 stays closed. The vendor inquiry remains unsent. No keyboard write occurred.

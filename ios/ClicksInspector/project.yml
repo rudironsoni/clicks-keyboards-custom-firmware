@@ -87,6 +87,17 @@ targets:
     dependencies:
       - target: ClicksInspector
 schemes:
+  StockExtensionEditor:
+    build:
+      targets:
+        ClicksInspector: all
+    test:
+      config: Debug
+      environmentVariables:
+        V122_EDITOR_UI_TEST: "1"
+      targets:
+        - ClicksInspectorAppTests
+        - ClicksInspectorUITests
   StockFirmwareManager:
     build:
       targets:

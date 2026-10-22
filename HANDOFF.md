@@ -35,7 +35,56 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
-## Current stopping point, 2026-10-22 (offline RAM configuration and USB safety)
+## Current stopping point, 2026-10-22 (live editor software integration)
+
+Rudi accepted `1cbb07ac5804c158ed39c4fc347d9f82dcba014b` as the offline
+RAM-configuration milestone. Firmware CI `39846660539` and iOS CI
+`39846660777` both passed. The earlier pending-iOS observation is superseded.
+Rudi authorized committing and pushing the editor increment on 2026-10-22.
+Hosted verification for this increment is pending. Physical commands stay blocked.
+
+- `StockExtensionSession` now uses async transfer without a second codec.
+  A complete handshake/read/apply operation rejects concurrent calls.
+  `StockExtensionTransport` assembles bounded frames over `KeyboardPacketLink`,
+  tolerates OEM notifications, and closes on timeout, cancellation, or loss.
+  `AccessoryInspector` routes the existing streams to one session owner.
+- The three-layer screen edits all 108 positions, key usages, shortcuts,
+  modifiers, OEM/disabled/transparent actions, independent native modes,
+  and hold/toggle/one-shot/tap-hold activation. Descriptions match the
+  existing engine, including immediate tap-hold activation and Base fallback.
+- Typed named profiles use `ExtensionProfiles.json`, separate from QMK.
+  Unknown/corrupt files are preserved. Loading changes only the draft.
+  Reconnect reads RAM and never applies a profile.
+- Simulator transport uses a loopback HTTP bridge to the genuine V122
+  runner. The bridge contains no mapping or HID implementation. Link loss
+  keeps the emulated RAM. Power loss restarts the actual emulated machine.
+  The bridge checks the image and source hashes against passing assurance.
+- The visible Simulator workflow passed edit/apply/readback, exact NAV+Q
+  Esc and SYM+E Tab reports, profile save/relaunch, RAM loss with manual
+  reapply, and recovery after a lost APPLY reply. Ownership and background
+  cancellation checks pass. The management guard checks in-flight work,
+  not only its phase label. QMK simulator connections also claim ownership.
+- Final local checks pass: the Swift suite, 37 Python tests, native tests,
+  20 V122 cases with 299 layer checks, async Swift-to-V122 integration,
+  the host editor workflow, editor/ownership Simulator tests, the existing
+  QMK profile UI workflow, and an unsigned Debug iPhone build.
+  Seven editor screenshots and raw traces are retained under
+  `ios/ClicksInspector/build/extension-editor-verified/`.
+- Hosted checks for this editor increment are pending.
+  The separate exact-QMK binary assurance run was not repeated. Its pinned
+  source gate is unchanged. The local QMK build is an older documented
+  artifact, not a replacement for the accepted assurance image.
+- Physical extension commands remain blocked before EASession creation
+  and at the editor controller boundary. Firmware code, image capacity,
+  the full 978-byte record bound, and the exact-QMK hash gate are unchanged.
+
+Run instructions and evidence scope:
+[section 15](keyboards/ck5200/docs/stock-extension-feasibility.md#15-live-editor-software-integration).
+Full USB lifecycle assurance and keyboard-flash persistence remain separate
+open gates. R3 is unmet, M4 stays closed, and the vendor inquiry stays unsent.
+No physical keyboard operation occurred.
+
+## Historical stopping point, 2026-10-22 (offline RAM configuration and USB safety)
 
 Rudi accepted `d6d3461718ce73a1d661c61e58df34e5fa2d59bf` as the bounded
 native/custom ownership increment. Firmware CI `39821804798` and iOS CI

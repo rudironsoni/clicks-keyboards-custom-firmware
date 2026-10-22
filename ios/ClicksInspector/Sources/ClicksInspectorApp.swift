@@ -19,9 +19,14 @@ struct ClicksInspectorApp: App {
                     }
                     Section("QMK RAM profiles") {
                         NavigationLink("Edit QMK keymap and phone profiles") {
-                            QMKKeymapView(custom: inspector.customFirmware)
+                            QMKKeymapView(custom: inspector.customFirmware, inspector: inspector)
                         }
                         .accessibilityIdentifier("qmk.open")
+                    }
+                    Section("Stock-derived extension") {
+                        NavigationLink("Edit three-layer RAM map and phone profiles") {
+                            StockExtensionView(inspector: inspector, editor: inspector.extensionEditor)
+                        }.accessibilityIdentifier("extension.open")
                     }
                     Section("Session") {
                         Text("Open session uses the stock read-only path. Firmware controls require a separate session.")
@@ -303,6 +308,7 @@ private struct ConfirmationView: View {
 /// Layer-by-layer keymap editor for the custom firmware.
 private struct QMKKeymapView: View {
     @ObservedObject var custom: CustomFirmwareController
+    @ObservedObject var inspector: AccessoryInspector
     @State private var editingCell: Cell?
     @State private var profileName = ""
     @FocusState private var profileNameFocused: Bool
@@ -423,6 +429,7 @@ private struct QMKKeymapView: View {
 
     #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
     private func connectSimulation() {
+        guard inspector.claimFirmwareEmulator() else { return }
         custom.connectedTarget = .init(model: "CK-5200", firmwareRevision: "QMK", hardwareRevision: "1.2.0")
         custom.attach(SimulatedQMKLink())
     }

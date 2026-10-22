@@ -21,7 +21,8 @@ run StockEvidenceTests "${EVIDENCE[@]}"
 run StockTrialTests "${EVIDENCE[@]}"
 run RecorderBenchmark "${EVIDENCE[@]}"
 run ck5200_protocol_check Sources/CustomKeyboardProtocol.swift
-run StockExtensionProtocolTests Sources/StockExtensionProtocol.swift
+run StockExtensionProtocolTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StreamLink.swift
+run StockExtensionEditorTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StockExtensionProfile.swift Sources/StockExtensionController.swift Sources/V122EmulatorLink.swift
 run ck5200_layout_check "${COMMON[@]}"
 run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
 echo "RUN DiagnosticsOnlyTests (default build)"

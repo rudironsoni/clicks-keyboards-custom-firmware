@@ -2,6 +2,7 @@ import Foundation
 
 enum StockExtensionError: Error {
     case invalidRecord, identity, framing, stale, rejected(UInt8), readback
+    case busy, disconnected, timedOut
 }
 
 /// Typed three-layer map. This is not the four-layer QMK profile format.
@@ -18,6 +19,13 @@ struct StockExtensionMap: Equatable, Codable {
     }
     var nativeMask: UInt8
     var actions: [Action]
+
+    static var oem: Self {
+        // Use the same decoder and validation as a firmware record.
+        var record: [UInt8] = [67,75,77,4,108,6]
+        for layer in UInt8(0)..<3 { for pos in UInt8(0)..<36 { record += [pos,layer,0x22] } }
+        return try! Self(record: record)
+    }
 
     mutating func set(_ action: Action, layer: Int, row: Int, column: Int) throws {
         guard actions.count == 108, (0..<3).contains(layer), (0..<6).contains(row), (0..<6).contains(column) else {
@@ -106,24 +114,33 @@ struct StockExtensionMap: Equatable, Codable {
     private static func le(_ value: UInt16) -> [UInt8] { [UInt8(value & 255), UInt8(value >> 8)] }
 }
 
-/// Transport-independent codec/client. No AccessoryInspector, UI, or physical
-/// dispatch path is connected to this client. Tests supply an emulator link.
+/// One complete operation owns the session, including its readback.
+@MainActor
 final class StockExtensionSession {
-    private let transfer: ([UInt8]) throws -> [UInt8]
+    private let transfer: ([UInt8]) async throws -> [UInt8]
     private let nonce: UInt32
     private var generation: UInt16 = 0
     private var recordLength = 0
     private(set) var identified = false
     private(set) var remappingEnabled = false
+    private var busy = false
+    private var epoch = 0
 
-    init(nonce: UInt32, transfer: @escaping ([UInt8]) throws -> [UInt8]) {
+    init(nonce: UInt32, transfer: @escaping ([UInt8]) async throws -> [UInt8]) {
         self.nonce = nonce
         self.transfer = transfer
     }
 
-    func open() throws {
+    func open() async throws {
+        guard !busy else { throw StockExtensionError.busy }
+        busy = true
+        defer { busy = false }
+        try await handshake()
+    }
+
+    private func handshake() async throws {
         identified = false
-        let caps = try exchange(0)
+        let caps = try await exchange(0)
         guard nonce != 0, caps.count == 15, caps[14] <= 1,
               Array(caps.prefix(12)) == [67,75,88,49,4,3,6,6,0xD2,3,24,1] else {
             throw StockExtensionError.identity
@@ -134,12 +151,19 @@ final class StockExtensionSession {
         identified = true
     }
 
-    func read() throws -> StockExtensionMap {
+    func read() async throws -> StockExtensionMap {
+        guard !busy else { throw StockExtensionError.busy }
+        busy = true
+        defer { busy = false }
+        return try await readMap()
+    }
+
+    private func readMap() async throws -> StockExtensionMap {
         guard identified else { throw StockExtensionError.identity }
         var record: [UInt8] = []
         while record.count < recordLength {
             let count = min(24, recordLength - record.count)
-            let chunk = try exchange(1, offset: record.count, payload: [UInt8(count)])
+            let chunk = try await exchange(1, offset: record.count, payload: [UInt8(count)])
             guard chunk.count == count else { identified = false; throw StockExtensionError.framing }
             record += chunk
         }
@@ -147,30 +171,43 @@ final class StockExtensionSession {
         catch { identified = false; throw error }
     }
 
-    func apply(_ map: StockExtensionMap, enabled: Bool) throws {
+    func apply(_ map: StockExtensionMap, enabled: Bool) async throws {
+        guard !busy else { throw StockExtensionError.busy }
+        busy = true
+        defer { busy = false }
         guard identified else { throw StockExtensionError.identity }
         let record = try map.encode()
-        _ = try exchange(2, offset: record.count)
+        _ = try await exchange(2, offset: record.count)
         for offset in stride(from: 0, to: record.count, by: 24) {
-            _ = try exchange(3, offset: offset, payload: Array(record[offset..<min(offset + 24, record.count)]))
+            _ = try await exchange(3, offset: offset, payload: Array(record[offset..<min(offset + 24, record.count)]))
         }
-        _ = try exchange(4, payload: [enabled ? 1 : 0])
-        try open()
-        guard remappingEnabled == enabled, try read() == map else {
+        _ = try await exchange(4, payload: [enabled ? 1 : 0])
+        try await handshake()
+        let readback = try await readMap()
+        guard remappingEnabled == enabled, readback == map else {
             identified = false; throw StockExtensionError.readback
         }
     }
 
-    func abort() throws { _ = try exchange(5) }
-    func close() { identified = false }
+    func abort() async throws {
+        guard !busy else { throw StockExtensionError.busy }
+        busy = true
+        defer { busy = false }
+        _ = try await exchange(5)
+    }
+    func close() { epoch += 1; identified = false }
 
-    private func exchange(_ op: UInt8, offset: Int = 0, payload: [UInt8] = []) throws -> [UInt8] {
+    private func exchange(_ op: UInt8, offset: Int = 0, payload: [UInt8] = []) async throws -> [UInt8] {
         guard op == 0 || identified else { throw StockExtensionError.identity }
         let token = (0..<4).map { UInt8((nonce >> ($0 * 8)) & 255) }
         let request: [UInt8] = [UInt8(12 + payload.count), 0x94, 1, op] + token
             + [UInt8(generation & 255), UInt8(generation >> 8), UInt8(offset & 255), UInt8(offset >> 8)] + payload
         do {
-            let reply = try transfer(request)
+            try Task.checkCancellation()
+            let current = epoch
+            let reply = try await transfer(request)
+            try Task.checkCancellation()
+            guard current == epoch else { throw StockExtensionError.disconnected }
             guard (12...36).contains(reply.count), Int(reply[0]) == reply.count,
                   Array(reply[1..<3]) == [2,0x94], reply[4] == 1, reply[5] == op,
                   Array(reply[6..<10]) == token else { throw StockExtensionError.framing }

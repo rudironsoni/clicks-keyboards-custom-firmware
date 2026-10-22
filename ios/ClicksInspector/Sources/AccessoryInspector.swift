@@ -9,12 +9,18 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     static let supportedProtocol = "com.clickscompanion.protocol"
 
     let customFirmware = CustomFirmwareController()
+    let extensionEditor = StockExtensionController()
     let stockEvidence = StockEvidenceRecorder()
     @Published private(set) var stockSweepRemaining = 0
     private var stockQueue: [StockReadCommand] = []
     private var sweepTimer: Timer?
     private var checkpointTimer: Timer?
     private var firmwareSession = false
+    private var extensionSession = false
+    private var managementBusy: Bool {
+        customFirmware.phaseIsBusy || customFirmware.flashInFlight
+            || customFirmware.keymapOperationRunning || customFirmware.selfTestRunning
+    }
     static var evidenceDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("StockEvidence", isDirectory: true)
@@ -23,6 +29,12 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     private var customLinkAttached = false
 
     private func attachCustomFirmwareLink() {
+        if extensionSession {
+            let link = StreamLink(output: session?.outputStream)
+            customStreamLink = link
+            Task { await extensionEditor.connect(link, emulated: false) }
+            return
+        }
         guard firmwareSession, !stockEvidence.isRecording, !customLinkAttached else { return }
         customLinkAttached = true
         /* The custom protocol now flows through the host-testable stream
@@ -94,7 +106,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     var canReadSelectedCommand: Bool {
-        guard !firmwareSession, !customLinkAttached, case .open(let connectionID) = state,
+        guard !extensionSession, !extensionEditor.ownsSession, !firmwareSession, !customLinkAttached, case .open(let connectionID) = state,
               let session,
               let accessory = session.accessory,
               accessory.connectionID == connectionID,
@@ -165,10 +177,43 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     func openSession(for accessory: EAAccessory, firmwareControls: Bool = false) {
-        guard !customFirmware.phaseIsBusy, !(firmwareControls && stockEvidence.isRecording) else { return }
+        openSession(for: accessory, firmwareControls: firmwareControls, extensionControls: false)
+    }
+
+    var canOpenExtensionEditor: Bool {
+        !managementBusy && !stockEvidence.isRecording && pendingRead == nil
+            && stockSweepRemaining == 0 && !extensionEditor.busy
+    }
+
+    func openExtensionSession(for accessory: EAAccessory) {
+        guard StockExtensionController.physicalCommandsAllowed, canOpenExtensionEditor else { return }
+        openSession(for: accessory, firmwareControls: false, extensionControls: true)
+    }
+
+    #if targetEnvironment(simulator)
+    func claimExtensionEmulator() -> Bool {
+        guard canOpenExtensionEditor, !extensionSession else { return false }
+        closeSession(reason: "Switch exclusively to V122 emulator")
+        extensionSession = true
+        return true
+    }
+
+    func claimFirmwareEmulator() -> Bool {
+        guard !managementBusy, !extensionEditor.busy, !stockEvidence.isRecording,
+              pendingRead == nil, stockSweepRemaining == 0 else { return false }
+        closeSession(reason: "Switch exclusively to QMK emulator")
+        firmwareSession = true
+        return true
+    }
+    #endif
+
+    private func openSession(for accessory: EAAccessory, firmwareControls: Bool, extensionControls: Bool) {
+        guard !managementBusy, !extensionEditor.busy,
+              !((firmwareControls || extensionControls) && stockEvidence.isRecording) else { return }
         log("User tapped Open session; connection \(accessory.connectionID)")
         closeSession(reason: "Close previous session before opening")
         firmwareSession = firmwareControls
+        extensionSession = extensionControls
         guard accessory.isConnected,
               EAAccessoryManager.shared().connectedAccessories.contains(where: { $0.connectionID == accessory.connectionID }) else {
             fail("Accessory is no longer connected")
@@ -200,6 +245,9 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     func closeSession(reason: String = "User tapped Close session") {
+        extensionEditor.disconnect()
+        extensionSession = false
+        firmwareSession = false
         log(reason)
         stockEvidence.record(source: "EA", kind: "session-close", fields: ["reason": reason])
         timeout?.invalidate()
@@ -226,7 +274,12 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             customStreamLink?.handleLoss(reason)
             customStreamLink = nil
             customFirmware.connectedTarget = nil
+        } else {
+            // Simulator QMK links attach directly, without EASession streams.
+            // They must also relinquish ownership before an editor switch.
+            customFirmware.detach()
         }
+        customStreamLink = nil
         if let session {
             let streams: [Stream?] = [session.inputStream, session.outputStream]
             for stream in streams.compactMap({ $0 }) {
@@ -350,7 +403,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                 stockEvidence.record(source: "EA", kind: "rx-fragment", bytes: received, readID: pendingRead?.evidenceID)
                 if pendingRead != nil {
                     receiveReadFragment(received)
-                } else if customLinkAttached {
+                } else if customLinkAttached || extensionSession {
                     /* Fragments forward exactly as delivered, in order;
                      * reassembly is the controller's job (review
                      * 2026-10-12). */
@@ -492,8 +545,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     func startStockRecording() {
-        guard !customFirmware.phaseIsBusy, !stockEvidence.isRecording else { return }
-        if firmwareSession || pendingRead != nil { closeSession(reason: "Switch to stock characterization") }
+        guard !managementBusy, !extensionEditor.busy, !stockEvidence.isRecording else { return }
+        if extensionSession || extensionEditor.ownsSession || firmwareSession || pendingRead != nil { closeSession(reason: "Switch to stock characterization") }
         firmwareSession = false
         selectedReadCommand = .version
         readState = "Not started"
@@ -534,7 +587,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     func clearStockEvidence() {
-        guard !stockEvidence.isRecording, !customFirmware.phaseIsBusy else { return }
+        guard !stockEvidence.isRecording, !managementBusy, !extensionEditor.busy else { return }
         closeSession(reason: "Clear stock evidence")
         checkpointTimer?.invalidate()
         stockEvidence.clear(in: Self.evidenceDirectory)
