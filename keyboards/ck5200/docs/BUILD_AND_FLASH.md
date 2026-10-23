@@ -8,8 +8,8 @@ macOS needs CMake, Ninja, Python, and libusb. The setup script downloads a check
 
 ```sh
 bash keyboards/ck5200/scripts/setup.sh
-bash keyboards/ck5200/scripts/test.sh
 bash keyboards/ck5200/scripts/build.sh
+bash keyboards/ck5200/scripts/test.sh
 ```
 
 Source dependencies are in `keyboards/ck5200/external`. They are nested Git checkouts managed by `scripts/bootstrap.sh`, not tracked submodules. Do not modify or repin them as a build workaround. The build output is in `keyboards/ck5200/build`, not in the source tree.
