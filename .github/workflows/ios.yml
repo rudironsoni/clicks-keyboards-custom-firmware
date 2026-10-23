@@ -8,12 +8,18 @@ on:
       - ".github/workflows/ios.yml"
       - "**/*.md"
       - "scripts/check-readiness.py"
+      - "keyboards/ck5200/firmware/**"
+      - "keyboards/ck5200/scripts/pins.env"
+      - "keyboards/ck5200/tests/qmk_shim/**"
   pull_request:
     paths:
       - "ios/ClicksInspector/**"
       - ".github/workflows/ios.yml"
       - "**/*.md"
       - "scripts/check-readiness.py"
+      - "keyboards/ck5200/firmware/**"
+      - "keyboards/ck5200/scripts/pins.env"
+      - "keyboards/ck5200/tests/qmk_shim/**"
 
 permissions:
   contents: read
@@ -21,13 +27,20 @@ permissions:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Install project generator
         run: brew install xcodegen
+      - name: Fetch pinned QMK for Swift/C integration tests
+        run: |
+          source keyboards/ck5200/scripts/pins.env
+          git init keyboards/ck5200/external/qmk_firmware
+          git -C keyboards/ck5200/external/qmk_firmware remote add origin https://github.com/qmk/qmk_firmware.git
+          git -C keyboards/ck5200/external/qmk_firmware fetch --depth=1 origin "$QMK_COMMIT"
+          git -C keyboards/ck5200/external/qmk_firmware checkout --detach FETCH_HEAD
       - name: Record toolchain and revision
         run: |
           mkdir -p evidence
@@ -57,7 +70,16 @@ jobs:
           xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
             -scheme ClicksInspector -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+      - name: Build release diagnostics and QMK RAM iPhone configurations
+        run: |
+          set -o pipefail
+          for CONFIG in Release QMKKeymap; do
+            xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+              -scheme ClicksInspector -configuration "$CONFIG" \
+              -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+              2>&1 | tee "evidence/iphone-$CONFIG-build.log"
+          done
       - name: Test recording, export, and deletion in Simulator
         run: |
           set -o pipefail
@@ -66,7 +88,23 @@ jobs:
             -scheme ClicksInspector -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+      - name: Test QMK editing, durable profiles, reconnect, and runtime factory restore
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration QMKKeymap \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:ClicksInspectorUITests/QMKProfileUITests \
+            -parallel-testing-enabled NO -resultBundlePath evidence/qmk-ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/qmk-ui-tests.log
+      - name: Export simulator screenshots
+        if: always()
+        run: |
+          if [ -d evidence/qmk-ui-tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path evidence/qmk-ui-tests.xcresult --output-path evidence/qmk-screenshots
+          fi
       - name: Publish complete verification logs
         if: always()
         uses: actions/upload-artifact@v4

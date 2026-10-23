@@ -16,6 +16,72 @@ It sends no settings, reset, update, or unknown-command requests.
 The `AuthorizedStockUpdate` build configuration retains the stock-only update path for a later separately authorized milestone. Do not install that configuration for M1. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
 Apple manages the accessory session and authentication. Opening a session does not prove memory access or recovery.
 
+## M3 QMK RAM profiles
+
+`QMKKeymap` is a separate build configuration with `QMK_RAM_KEYMAP`, without
+`STOCK_UPDATE_AUTHORIZED`. It permits `0x90` through `0x93` only after the
+current session reports model `CK-5200`, hardware `1.2.0`, and version payload
+`51 4d 00 01` (`QM`). Stock, unknown identities, and rescue `RS` cannot use
+these commands. A0 through A3 remain blocked at the controller's transport
+boundary. Debug and Release retain their diagnostics-only policy.
+
+Open **Edit QMK keymap and phone profiles**. A firmware-control connection reads
+all four 6x6 layers. Turn on **Allow RAM writes for this session**, select a layer,
+and tap a cell to edit its keycode. Every acknowledged write is read back before
+the UI reports success. The permission switch resets on disconnect.
+
+**Save current layout on iPhone** stores a named schema-version-1 profile in
+`Documents/QMKProfiles.json`, with the target identity, dimensions, all 144
+keycodes, and the selected desired profile. Writes replace the JSON file
+atomically. Load and save errors are visible. An invalid existing file is
+preserved, rather than silently replaced. Profiles survive app relaunch;
+keyboard edits remain RAM-only and disappear on power loss.
+
+After reconnect, the controller reads the device and compares it with the saved
+desired profile. **Reapply saved profile to RAM** is always manual. Only changed
+cells are sent, and each has its own readback. A failed operation reports the
+number of verified writes and warns that the last write may have reached RAM.
+After timeout or malformed readback, reconnect is required because this protocol
+has no transaction IDs. Reconnect reads actual RAM before any further writes.
+
+**Restore factory layout in RAM** sends the real `0x93` runtime reset, reads all
+144 keys, and compares them with the compiled factory layout. It keeps phone
+profiles. This command does not flash, reboot, or restore stock firmware.
+
+### Software verification and simulator evidence
+
+`Tests/QMKProfileTests.swift` runs the actual Swift controller against
+`ck5200_keymap_handle`, the pinned QMK core, the real compiled keymap, and QMK's
+transient EEPROM driver. `Tests/QMKBridge.c` only supplies hardware hooks.
+The tests cover all four layers, persistence, runtime restore, manual reapply,
+partial application, lost replies, partial-reply timeouts, reconnect, stale
+session callbacks, wrong identities, and the A0-A3 boundary. Run
+`bash ios/ClicksInspector/test.sh` with the pinned firmware dependencies present.
+
+In the QMKKeymap simulator build, **Connect simulated QMK keyboard** and
+**Simulate power loss and reconnect** drive the same editor and controller using
+a labelled software fixture. The fixture is compiled out of iPhone builds.
+`QMKProfileUITests` edits a key, saves a profile, terminates and relaunches the app,
+manually reapplies the profile, and restores factory RAM. The simulator fixture
+uses the same production C/QMK bridge as the host tests, not a Swift command
+mock. Xcode builds that library only for QMKKeymap simulator destinations.
+It attaches screenshots
+named `qmk-editing`, `qmk-reapplied`, and `qmk-restored` to the result bundle.
+
+CI builds Debug, Release, and QMKKeymap, runs the host suite and simulator UI
+tests, and uploads `evidence/qmk-ui-tests.xcresult` plus exported
+`evidence/qmk-screenshots/` in `ios-verification-<sha>`.
+For local runs, use ignored `ios/ClicksInspector/build/m3/qmk-ui-tests.xcresult`
+and export attachments to `ios/ClicksInspector/build/m3/qmk-screenshots/`.
+These are software evidence only. M1 and M2 remain accepted; R3 is unmet and
+custom flashing remains no-go.
+
+Local verification status for this change: **blocked before Xcode execution**.
+The required machine check could not run because `xcode-offload` and
+`external-ssd-root` are missing from the required PATH. The Xcode wrappers are
+also absent from `~/.local/bin`. No new simulator screenshots or passing Xcode
+results are claimed until that machine setup is restored and the checks run.
+
 ## Build and install
 
 Requirements: full Xcode with an iOS SDK, XcodeGen 2.46.0 or later, and an Apple development signing team for the physical iPhone. XcodeGen generates the local project from `project.yml`; generated project files and build output are ignored.
@@ -87,7 +153,7 @@ The app bundles both images, but the full product lifecycle is not yet authorize
 
 - **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized; the controller refuses any image that is not the authorized stock artifact, and the buttons and the import path are removed until a separately reviewed image exists.
 - **Stock update implementation**: retained behind `AuthorizedStockUpdate`; default builds refuse it before any firmware packet. Restoring stock from custom firmware remains unauthorized and unverified.
-- **Self-test, custom mode only**: reads identity and keymaps, then round-trips a write on the spare crossing. This is not part of stock characterization.
+- **Self-test, custom mode only**: reads identity and keymaps, then temporarily remaps Left Shift at (2,3) and restores its original value. This is not part of stock characterization.
 - **Stock key recorder**: focused UIKit text input plus `UIPress`/`UIKey` and `GCKeyboard` callbacks. Visible text proves that iOS delivered text, not that all HID behavior is correct.
 - **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
 - **Keymap editor**: now shows both the readable name and the hex value per cell, with an expanded preset list including arrows and the iOS keyboard toggle.

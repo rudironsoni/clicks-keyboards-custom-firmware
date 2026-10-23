@@ -67,7 +67,7 @@ An unsigned simulator build or generic unsigned iPhone build cannot substitute f
 10. Record the commit, signing/install result, and the JSON session UUID with your observations.
 
 For separately scoped follow-up observations, use [the operating-state procedure](STOCK_CHARACTERIZATION.md#safe-operating-state-procedure).
-The catalog covers 35 statically decoded non-spare crossings and an unmapped Shift entry. Printed labels and their matrix positions remain unverified. Q has a documented conflict between the decode and the custom keymap; do not infer its position from the custom HID value. Unknown consumer caps and unknown mode controls must remain unobservable until identified.
+`CK-5200-V122-H120-trials-v1` is the immutable historical M1 catalogue from `246f2b8`. It retains 35 decoded crossings, an unmapped Shift entry, and the Q mapping-conflict label so restored captures keep their original definitions. These are historical catalogue statements, not current matrix facts or new verification of old trial IDs. The corrected M3 matrix is documented in [M3 first-boot evidence](../../keyboards/ck5200/docs/m3-first-boot.md) and used by the separate QMK factory map. Printed cap-to-matrix mappings remain unverified. Unknown consumer caps and unknown mode controls must remain unobservable until identified.
 The exported `coverage` array lists every trial, including `not-started` entries, with callback, applied-text, and gap event references. A completed trial means an observation was finished, not that a physical key passed validation. Compare the actual case with the evidence before accepting a mapping.
 The app cannot observe system-consumed shortcuts, raw HID packets, or events during suspension. Mark those cases as unobservable.
 
