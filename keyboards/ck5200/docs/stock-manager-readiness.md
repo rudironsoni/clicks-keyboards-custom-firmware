@@ -64,7 +64,7 @@ Existing recorder, parser, stock transaction and M1 regression checks remain. Ad
 
 The bridge uses one fresh process per mode/fault to reset C globals. Mode 0 overrides only version bytes; it is not a stock firmware emulator. `sm_model_install()` is explicitly a host copy model. `sm_disconnect()` includes explicit host staging cleanup for QM, which does not automatically abort on disconnect in accepted M2. These limits prevent interpreting host results as physical recovery evidence.
 
-Local Xcode checks are blocked because this Mac lacks `external-ssd-root` and `xcode-offload`. The required doctor command failed with command-not-found before any Xcode command was run. Hosted macOS CI supplies Swift/build/simulator evidence. Firmware C tests and the official-app static checks can run locally.
+Hosted macOS CI supplies Swift/build/simulator evidence. Firmware C tests and the official-app static checks can run locally.
 
 ## Independent review
 

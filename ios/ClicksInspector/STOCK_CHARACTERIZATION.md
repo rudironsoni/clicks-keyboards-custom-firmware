@@ -210,7 +210,6 @@ No live keyboard update belongs to M1. Physical firmware acceptance remains sepa
 - `git diff --check` passed.
 
 The build emitted the App Intents metadata notice. Clean compilation of the existing firmware controller also emitted its pre-existing weak-capture warning at line 506.
-The machine-specific precheck could not run because `external-ssd-root` and `xcode-offload` were absent.
 Normal `xcrun`/`xcodebuild` resolved the installed Xcode after setting `DEVELOPER_DIR`. No storage configuration changed.
 
 Not run: a signed installation, physical keyboard capture, firmware writes, or the unchanged firmware C/Python suite.
