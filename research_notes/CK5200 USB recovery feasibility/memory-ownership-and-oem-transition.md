@@ -246,7 +246,7 @@ The stock dispatcher (`0x3216`) reads byte 0 as the declared frame length
 | --- | --- | --- | --- |
 | A1 begin | `[06, A1, len_be32]` | `0x37A8`: `len <= 0x6A00`; init cursor=4, first staging word `0xFFFFFFFF`, page offset 0 | `[08, 02, A1, 00, 00,00,6A,00]` (echoes max size 0x6A00) |
 | A2 data | `[0x26, A2, offset_be32, data[32]]` per 32-byte chunk | `0x380A`: rejects any offset != staging cursor; buffers; fast-erase+fast-programs each full staging page at `0x08008A00+` | `[08, 02, A2, 00, next_offset_be32]` |
-| A3 commit | `[06, A3, total_be32]` | `0x38DE`: requires `total ==` A1 length `==` received cursor; fills the partial staging page with `0xFF`; writes the 4-byte length marker at `0x08008A00` via the read-modify-write helper | `[08, 02, A3, 00, total_be32]` |
+| A3 commit | `[06, A3, total_be32]` | `0x3782–0x3792`: accepts `total == received cursor` **or** `total == A1 length`; `0x38DE` fills the partial page with `0xFF`; `0x390C` writes the stored A1 length to the staging marker via the partial-page writer | `[08, 02, A3, 00, A1_length_be32]` |
 | A0 reboot | `[02, A0]` | `0x3954`: sets bit 1 of the state byte at ctx+0, replies first | `[04, 02, A0, 00]` then reset |
 
 The A2 offset echo is a resync: the OEM host uses the response's 4-byte
@@ -263,10 +263,11 @@ product code) agree on every byte.
 
 ### 2.3 Device-side control flow and the exact unknown boundary
 
-- A3's marker write is the **only** commit action the application performs. The
-  marker slot is initialized to `0xFFFFFFFF` by A1 and only receives the real
-  length at A3, via a page read-modify-write. An interrupted staging session
-  therefore leaves an invalid marker, which any sane consumer must ignore.
+- A3's marker write is the **only** commit action the application performs.
+  A1 initializes `0xFFFFFFFF` in the RAM page buffer, not immediately in flash.
+  The first full A2 page write attempts to store that invalid marker. A3 later
+  attempts to store the declared length through a page read-modify-write.
+  Without flash readback, an interrupted session cannot prove marker contents.
 - The application **never reads** the marker: the only `0x08008A00` references
   are the three staging write sites. Nothing in the app consumes the staged image.
 - The complete flash-write call inventory of both V121 and V122 is five sites:
@@ -277,15 +278,12 @@ product code) agree on every byte.
   the config record to `0xF700`; bit 1 executes the reset at `0x3a20-0x3a32`:
   writes `0xBEEF0080` to `R32_PFIC_CFGR` (`0xE000E048`, KEY3=0xBEEF + SYSRST
   bit 7, RM §7.5.2) and spins. The A0 reply is sent before this runs.
-- **The unknown begins exactly at that PFIC write.** After the system reset the
-  hardware enters at `0x08000000`, inside the unread boot stage `[0x0,0x2000)`,
-  which owns the reset vector and must transfer control to `0x2000`. Since the
-  application demonstrably performs no destination copy and never consumes the
-  marker, the boot stage is the only possible consumer: it must read the marker
-  at `0x8A00`, copy the staged image to `[0x2000, 0x2000+len)`, and clear or
-  invalidate the marker. Everything about that consumer, its validation, copy
-  order, tail handling, interruption behavior, and whether it ever exposes a
-  USB interface, remains unknown: those bytes were never read.
+- **The static trace ends at that PFIC write.** The physical acknowledgement
+  does not prove that the main loop reached it or that hardware reset completed.
+  [INFERENCE] The unread boot stage `[0x0,0x2000)` consumes staged updates,
+  because the application performs no destination copy and never reads the marker.
+  Its marker validation, copy order, tail handling, marker clearing, interruption
+  behavior, and possible USB interface remain unknown. Those bytes were never read.
 
 ### 2.4 Session closure and post-reboot verification
 
@@ -301,17 +299,50 @@ the four commands: the iOS app declares only `com.clickscompanion.protocol` and
 `com.clicks.protocl` in `UISupportedExternalAccessoryProtocols`, and the Android
 app contains no other protocol surface.
 
+### 2.5 Post-transfer forensic correction, 2026-10-23
+
+[CORRECTION] The A3 condition is OR, not AND. Branches at `0x378C` and
+`0x3792` both enter the commit path. The marker and reply use the stored A1
+length, not a newly verified flash length. Rudi's captured attempt satisfies
+both equalities, so this correction does not establish its failure cause.
+
+The complete writer/helper trace checks BUSY only. The page writer at `0x3174`
+calls unlock `0x4956`, erase `0x49D4`, buffer reset `0x4982`, 64 word loads
+through `0x49AA`, page program `0x49FE`, and fast lock `0x4974`. The four
+BUSY loops mask only bit 0 of `FLASH_STATR` at `0x4002200C`. They do not check
+write-protection error bit `0x10` or EOP bit `0x20`, compare flash contents,
+retry, or impose a timeout. These bit definitions match the retained CH32X035 SDK.
+The partial-page writer at `0x31B2` reads old page contents before overlaying
+the requested bytes. That read preserves neighboring bytes. It is not
+verification after programming. Its return value is a byte count, not a
+flash-success status. A2/A3 do not test a write result before acknowledging.
+
+Thus the capture proves bytes submitted by the phone and application progress.
+Staging contents, the committed marker, destination contents, and the hardware
+reset remain unverified. A BUSY-clear programming failure is not excluded by
+successful acknowledgements. A permanently BUSY controller instead strands the
+routine in its polling loop and prevents its acknowledgement.
+
+The retained iOS executable now supplies a bounded post-A0 trace. Its EAF
+worker calls the A0 helper at `0x10017B184`, then selects success at
+`0x10017B188` without testing the returned value. No second installation
+command or post-A0 delay appears before the worker resumes its continuation.
+This is not a trace of every dynamic app route. Full evidence, the physical
+timeline gaps, and bounded image-fault results are in
+[section 19 of the extension record](../../keyboards/ck5200/docs/stock-extension-feasibility.md#19-post-transfer-installation-forensics-2026-10-23).
+
 ## 3. Recovery routes with the corrected evidence
 
 ### 3.1 What the update chain now proves, and what it cannot, about interruption
 
-The staging+marker design is a persistent, application-independent update queue:
+The application writes a staging area and length marker. Their persistence
+requires successful flash programming, which the host acknowledgements do not verify.
 
-- Staging failures and power loss during A1/A2/A3 only affect `[0x8A00,0xF500)`;
-  the running application is untouched and can retry.
-- A power loss between erase and program inside any staging page write leaves
-  `0xFF` (invalid marker or corrupted staged image) — the boot stage must ignore
-  an invalid marker, and a corrupted staging session can be re-run from the app.
+- The application staging routines target `[0x8A00,0xF500)`, not application
+  flash. This does not prove that a later boot leaves the application intact.
+- [CORRECTION] Power loss during staging does not establish safe retry. A stale
+  or partially programmed marker can remain. The unknown boot stage may act on
+  that marker. Its response to an erased or corrupted staged image is unverified.
 - A power loss after a valid A3 marker but during the boot stage's destination
   copy leaves the marker valid and the staged image intact **only if** the boot
   stage consumes the marker in the retry-friendly order.
@@ -398,10 +429,9 @@ after an interrupted commit, and (b) whether it exposes any interface when the
 application cannot run. Three existing restrictions block every acquisition
 route: no flash readback or SDI probing of `[0x0,0x2000)` (physical/authorization
 ban), no firmware write or reset experiment on the only keyboard (M1 ban), and
-the vendor inquiry remains unsent by standing decision. The strongest technical
-action available is to send the prepared vendor inquiry with §2.3's questions,
-which are now precise: marker validation and retry semantics, copy granularity
-(`length`-exact vs page-rounded), final-page handling, and marker clearing.
+contacting Clicks is excluded by Rudi's current decision. The earlier proposal
+to send the inquiry is superseded. Retained artifacts and bounded offline
+analysis remain the permitted routes. They did not supply the missing boot stage.
 
 ### 3.4 Net effect on the installation decision
 

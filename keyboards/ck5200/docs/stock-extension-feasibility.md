@@ -15,7 +15,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 18.** Rudi accepted `9113dab` only as an
+**Current evidence: section 19.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -1211,3 +1211,239 @@ Rudi excludes contacting Clicks. Further investigation must use retained artifac
 and offline execution unless he separately authorizes another route.
 No physical keyboard command, app replacement, or publication ran during the
 preceding offline trace. That trace changed no firmware, app code, or saved evidence.
+
+## 19. Post-transfer installation forensics, 2026-10-23
+
+**Acceptance failed on the physical keyboard. Root cause remains unproved.**
+This investigation separates submitted bytes, staging contents, reset execution,
+and destination contents. It adds no keymap feature, UI redesign, firmware
+change, vendor contact, hardware operation, or physical keyboard command.
+The saved `sentRebootPending` journal remains unchanged.
+Rudi subsequently confirmed that normal typing still works. This does not
+establish extension execution. The missing function is full remapping.
+
+### 19.1 Physical-event reconstruction
+
+Source: the preserved `post-install-capability-evidence-01/StockUpdateAudit.jsonl`.
+Times below are UTC, converted from the phone's Foundation `Date` values.
+They are host observations, not measurements of the keyboard's reset signal.
+The source hashes remain those in section 18.
+
+| UTC on 2026-10-23 | Saved observation | What it establishes |
+| --- | --- | --- |
+| `06:56:09.291195` | One `trialStart` for the pinned 27,136-byte transfer | Host transaction started. |
+| `06:56:09.365189` | A1 dispatched with length `0x6A00` | Requested staging length. |
+| `06:56:09.367833` | A1 reply accepted | Application advertised `0x6A00`. |
+| Before A3 | 848 A2 dispatches and 848 advancing replies | Submitted payload matches the pinned transfer. Not flash readback. |
+| `06:56:11.214583` | A3 dispatched | Commit marker write requested. |
+| `06:56:11.225189` | A3 reply payload `00006a00` | Application acknowledged its declared length. |
+| `06:56:11.227195` | A0 dispatched | Reset requested through the application. |
+| `06:56:11.231726` | A0 reply accepted with empty payload | Command acknowledged before any observed reset. |
+| Not captured | Stream closure after A0 | No timestamp or cause can be reconstructed. |
+| Not captured | Accessory detach/reattach after A0 | Hardware reset completion cannot be established. |
+| Screenshot only | A subsequent V122 identity read completed | Application protocol remained responsive. No timestamped reply bytes survive in this audit. |
+| `07:26:52.826076` / `07:26:52.827859` | First capability request/rejection | Complete `080294ff00000000` reply. |
+| `07:26:52.844752` | `extension.closed`, detail `disconnected` | App protocol adapter closed after rejection. Not an EA detach event. |
+| `07:27:33.223424` / `07:27:33.243560` | Second capability request/rejection | Same complete negative reply with a fresh request nonce. |
+| `07:27:33.245267` | Second `extension.closed` | Same app-side close behavior. |
+
+The update audit does not record EA attach/detach or stream lifecycle events.
+`AccessoryInspector` sends those events to the separate stock recorder, whose
+`record()` returns immediately when recording is off. The installer excludes
+active stock recording. Its general log is an in-memory, 200-entry list.
+The retained update snapshots contain only the update audit and journal.
+A bounded scan of 11 retained stock/checkpoint JSON bundles found no events
+in the attempt window `06:50–07:40` UTC. Older exports and Simulator bundles
+cannot fill this gap. Missing events do not establish that no reset occurred.
+No new recording or device retrieval was requested to fill the gap.
+
+### 19.2 Staging-write acknowledgement contract
+
+The complete trace uses pinned V122, SHA-256
+`8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8`.
+All 6,655 encoded words in the retained disassembly match that binary.
+Flash register names and bits match the retained CH32X035 SDK header
+`external/ch32x035/EVT/EXAM/SRC/Peripheral/inc/ch32x035.h`.
+
+| Linked address | Actual operation | Error/verification behavior |
+| --- | --- | --- |
+| `0x4956–0x4972` | Writes unlock keys to KEYR and MODEKEYR | Does not check that unlock succeeded. |
+| `0x49D4–0x49FC` | Sets FTER, writes page address, sets STRT, polls STATR | Only tests BUSY bit `0x01`. No error result. |
+| `0x4982–0x49A8` | Sets FTPG and BUFRST, polls STATR, clears FTPG | Only tests BUSY. No timeout. |
+| `0x49AA–0x49D2` | Sets FTPG, stores one word, sets BUFLOAD, polls STATR | Only tests BUSY. No word comparison. |
+| `0x49FE–0x4A24` | Sets FTPG, writes page address, sets STRT, polls STATR | Only tests BUSY. No page comparison. |
+| `0x4974–0x4980` | Sets FLOCK | No success result. |
+| `0x3174–0x31AE` | Calls these helpers, loading 64 four-byte words per page | No flash readback, error branch, retry, or status return. |
+| `0x31B2–0x3214` | Reads the old page, overlays the requested bytes, calls `0x3174` | The read occurs before programming. The returned value counts overlaid bytes, not programming success. |
+| `0x38CA–0x38D8` | A2 calls `0x3174`, then advances page state | Does not branch on a programming result. |
+| `0x390C–0x3946` | A3 calls `0x31B2`, then constructs a zero-status reply | Does not verify the marker or resulting page. |
+
+No helper checks STATR write-protection error `0x10` or end-of-operation
+flag `0x20`. A controller that clears BUSY but leaves data unwritten is a
+software counterexample to "ACK proves flash content": this call tree does
+not detect that outcome. This is not evidence that such a failure occurred.
+If BUSY never clears, the helper loops indefinitely and cannot acknowledge.
+There is no software timeout or recovery in those loops.
+
+Two additional contract corrections emerged from the same trace:
+
+- **[CORRECTION] A1 sets the invalid marker in RAM, not immediately in flash.**
+  The first full A2 page attempts to program that marker. A1 alone does not
+  establish persistent marker invalidation.
+- **[CORRECTION] A3 uses OR, not AND.** Branches at `0x378C` and `0x3792`
+  accept either received-cursor equality or declared-length equality. The
+  marker and acknowledgement use the stored A1 length. This attempt's host
+  capture satisfies both equalities, so this is not an identified cause.
+
+The [memory-ownership/OEM-transition note](../../../research_notes/CK5200%20USB%20recovery%20feasibility/memory-ownership-and-oem-transition.md#25-post-transfer-forensic-correction-2026-10-23)
+now contains these corrections. The proven facts are submitted bytes and
+application progression. Staging bytes, marker contents, and installed bytes
+remain three separate, unverified device states.
+
+### 19.3 Exact-image and fault analysis
+
+`tools/post_transfer_forensics.py` reuses the existing V122 CPU runner.
+It checks the saved transfer/journal, every patch-manifest word in the bundled
+image, both actual request nonces, and a bounded fault matrix. It writes only
+derived output. It never opens a device or changes an input artifact.
+
+Reproduce from the repository root after the existing assurance build:
+
+```sh
+python3 keyboards/ck5200/tools/post_transfer_forensics.py \
+  --evidence ios/ClicksInspector/build/post-install-capability-evidence-01 \
+  --output ios/ClicksInspector/build/post-transfer-forensics-reproduced-20261023 \
+  --ios-executable tmp/ck5200-tail-evidence/und/Payload/Clicks.app/Clicks
+```
+
+All six cases passed. The test's expected failure cases are not installations:
+
+| Offline input | Observed result for the saved requests | Meaning and limit |
+| --- | --- | --- |
+| Exact uploaded image, including 78 `FF` bytes | Two 27-byte `CKX1` replies with the respective nonce | The bounded command path works when these bytes execute. No copier proof. |
+| Unchanged stock V122 | Exact `080294ff00000000` twice | Original OEM path reproduces the physical reply. |
+| Extension with only `0x2218` restored to its OEM call | Exact `080294ff00000000` twice | A missing command hook can produce the reply even with other extension hooks present. |
+| Extension with its startup call restored to OEM SystemInit | Host guard reports `extension BSS not cleared` before requests | Detects skipped initialization under poisoned RAM. Not a measured guest response and not every possible RAM state. |
+| Extension code region `[0x6900,end)` replaced by `FF` | Illegal-instruction fault at `0x70B2`, no reply | This selected corruption does not reproduce a working stock responder. Not exhaustive corruption coverage. |
+| Extension command entry deliberately redirected to `0x3216` | Exact `080294ff00000000` twice | An OEM-equivalent bypass also reproduces the reply. This chosen mutation is not observed on the device. |
+
+The normal image's `0x2218` call targets `0x715C`. Its `0x48CE` startup hook
+targets `0x70B2`. The existing runner executes CRT initialization to SystemInit,
+checks OEM data/BSS and extension BSS, and then uses synthetic configured USB
+and authenticated companion state. It does not execute the unknown boot stage,
+complete SystemInit, enumerate EP0, or authenticate against a physical iPhone.
+These limits apply to the new probes as well as the old assurance report.
+
+A follow-up probe checks the receive route before `0x2208`. In retained V122,
+startup registers `0x2208` through `0x4776` and `0x6298`. The authenticated
+receive adapter at `0x629E` invokes that callback at `0x62BC`, which reaches
+the patched call at `0x2218`. A derived local runner executes the original
+registration helper, checks its stored callback at `0x20000524`, and submits
+both captured requests through `0x629E`. The exact padded image returns
+`CKX1` twice. The removed-command-hook input returns the exact `FF` reply twice.
+Local evidence is `ios/ClicksInspector/build/post-transfer-callback-route-20261023/`.
+The original runner source remains unchanged. This checks the callback route
+under synthetic authentication. It does not execute physical USB reception
+or prove that the device contains these bytes. No bypass defect was found
+in this retained route.
+
+Static handler audit adds a control-flow boundary: for a valid request whose
+command remains `0x94`, `ck_extension_command()` does not delegate to OEM.
+It constructs a header of at least 12 bytes and uses status `0–4`, not `FF`.
+Invalid request length returns without an extension reply. Ordinary capability
+validation failure is therefore not the OEM eight-byte rejection path.
+Arbitrary corruption of code, pointers, or request memory remains outside that
+statement. The probes are falsifying examples, not an exhaustive proof over
+every possible startup or memory fault.
+
+Derived evidence is `post-transfer-forensics-reproduced-20261023/report.json`.
+It records original hashes, runner hash, UTC timeline, exact replies, selected
+mutation hashes, failure output, and explicit limits. Original audit and journal
+bytes compare equal before and after replay.
+The original-output overlap check also rejects output into the evidence directory.
+All 37 existing Python tests, readiness checks, local link paths, and whitespace
+checks pass. The forensic change does not rebuild firmware or rerun the full
+Swift suite. No firmware or Swift implementation changed.
+
+### 19.4 Retained iOS updater after A0
+
+The retained unencrypted `Clicks` executable remains SHA-256
+`d56a59180adad89542107924edc1cc046507f6b11730f912f2855a8c408f5c6b`,
+with Mach-O `cryptid 0`. This pass targeted the EAF worker and its reboot path,
+not the unrelated `PKService` Bluetooth command metadata.
+
+| Address | Executable evidence |
+| --- | --- |
+| `0x10017B05C` | Worker calls A1 helper `0x100179BC4`, A2 helper `0x100179E54`, and A3 helper `0x10017A2B4`, branching on their Boolean results. |
+| `0x10017A544` | A0 helper uses a static Swift byte array whose two bytes at `0x10084DF30` are `02 A0`. It uses the existing session's output stream and main-queue synchronous transport closure. |
+| `0x10017A6C0–0x10017A718` | Helper tests the returned command byte against `A0`, returns a Boolean, and does not perform a destination check. |
+| `0x10017B184–0x10017B194` | Worker calls A0, then immediately writes success without testing A0's returned Boolean. |
+| `0x10017B1D4–0x10017B20C` | Worker resumes its continuation and returns. No additional install command, reset wait, disconnect wait, or post-reset identity check appears in this tail. |
+| `0x1001CBF80–0x1001CC0F4` | Separate SessionHandler teardown closes both streams, removes them from the run loop, sets delegates to nil, and releases the stored session. It contains no installation command. |
+
+The script checks the pinned executable, A0 call target, static request bytes,
+and immediate success instruction. Objective-C stub selector references confirm
+`close`, `removeFromRunLoop:forMode:`, `setDelegate:`, and `outputStream` for
+the lifecycle trace. Local `ios-after-a0-windows.txt` preserves the exact windows.
+
+**Result:** the traced iOS EAF worker has no consequential second installation
+step after A0. Unlike the Android driver, it can select success even when its
+A0 helper returns false. Our captured attempt received an A0 acknowledgement,
+so that weaker OEM success policy does not explain this failure. This is static
+worker parity, not proof of every dynamic model-selection route or physical
+execution of the vendor app. No iPhone-specific missing install command was found.
+
+### 19.5 Boot-stage evidence search
+
+The six retained stock applications still start at linked `0x2000` and contain
+no `[0x0000,0x2000)` bytes. This pass also inspected both retained IPA inventories
+(312 entries each) and the APK inventory (1,183 entries). No boot/firmware-named
+payload was found. The only `.bin` names were Apple's 23-byte ZIP metadata and
+Kotlin's 1,738-byte `DebugProbesKt.bin`. Neither is a keyboard image.
+A scan of 8–64 KiB archive members for an RV32 JAL prefix found no candidate.
+This signature test cannot exclude an embedded, compressed, renamed, or
+differently structured loader. Package hashes and results are preserved in
+local `package-inventory.json`.
+
+Public searches for `"CK-5200" bootloader firmware dump`,
+`"Clicks" "CH32X035" bootloader dump`, `"CK-5200" firmware bootloader github`,
+and `"iKeyboard_CK-5200" dump` returned no model-matched executable evidence.
+GitHub code search for `"CK-5200" bootloader` also returned no result.
+Generic CH32X035 or unrelated keyboard loaders are not evidence of this OEM
+loader. This is a bounded negative search, not a claim that no dump exists.
+No vendor contact, SDI research, or hardware acquisition occurred.
+
+### 19.6 Separate CI reconciliation
+
+At exact `fa4725a`, firmware run `39923157723` and the iOS `verify` job in
+run `39923157707` passed. The `extension-editor` job failed. Its retained
+`ui-workflow.log` identifies line 44, not a protocol or emulator-build failure.
+The index-based back-button query selected the hidden My Clicks
+`keyboard.connection` button beneath the installer sheet. The failure screenshot
+and accessibility tree show a second navigation bar named `Extension installer`
+with the actual `Connection` back button.
+
+Commit `aa590fa59348b766d6f7ab849dc11937c213d5af` changes one test query to
+`app.navigationBars["Extension installer"].buttons["Connection"].tap()`.
+No app or firmware code changed. Local receiver tests and the complete enabled
+editor workflow pass in `forensics-ci-selector-20261023/`.
+Hosted [run `39932153737`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39932153737)
+passed at that exact commit. Both jobs passed: `extension-editor` completed at
+`09:50:43` UTC and `verify` at `09:59:14` UTC on 2026-10-23. The hosted editor
+step verified profiles, exact HID, and recovery in Simulator. The separate
+`verify` job passed Swift tests, app builds, recorder/export checks, stock-manager
+checks, and QMK profile regressions. This closes hosted software verification
+of the test fix. It does not establish physical installation or recovery.
+
+### 19.7 Decision boundary
+
+The available evidence cannot distinguish silent staging/marker failure,
+acknowledged A0 without completed reset, boot-stage image rejection or skipped
+copy, and an installed but bypassed/corrupted hook. The bounded probes narrow
+specific examples, not all physical realizations of those classes.
+
+No demonstrated causal explanation identifies which class occurred. Changing
+padding, repeating installation, resetting for diagnosis, clearing the journal,
+or adding keymap/UI features is not a correction supported by these results.
+The acceptance outcome remains: **submitted bytes verified; staging, reset,
+and application replacement unverified; installed extension check failed.**

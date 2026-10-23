@@ -35,7 +35,59 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
-## Current stopping point, 2026-10-23 (My Clicks and explicit extension installer)
+## Current stopping point, 2026-10-23 (post-transfer installation forensics)
+
+- The physical extension check failed. The saved evidence cannot distinguish
+  staging/marker failure, incomplete reset, boot-stage rejection/skipped copy,
+  or an installed but bypassed/corrupted hook. No physical cause is established.
+  Rudi confirmed that normal typing still works. Full remapping remains unavailable.
+- A0 was acknowledged at `06:56:11.231726` UTC. The audit has no subsequent
+  stream-closure or EA detach/reattach record. Eleven retained stock/checkpoint
+  bundles have no events in `06:50–07:40` UTC. This gap cannot establish reset.
+- The complete V122 flash-helper trace checks BUSY only. It has no error-flag
+  check, post-write comparison, retry, timeout, or flash-success result.
+  A2/A3 acknowledgements prove application progress, not flash contents.
+  [CORRECTION] A1 initializes the invalid marker in RAM. A3 accepts cursor
+  equality OR declared-length equality. This transfer satisfies both equalities.
+- Six offline probes pass. Stock, a restored OEM command hook, and an OEM
+  redirect each produce the exact physical `FF` reply. The exact uploaded
+  image produces `CKX1` in the bounded runner. Skipped initialization fails
+  a host BSS guard. An erased extension traps before replying. These selected
+  cases do not identify the physical failure or cover all memory corruption.
+  A follow-up probe through the original receive adapter at `0x629E` also
+  reaches the hook. It returns `CKX1` with the exact image and `FF` with the
+  command hook removed. Authentication remains synthetic, not physical proof.
+- The retained iOS EAF worker calls A0 at `0x10017B184`, then selects success
+  without checking its return. No second install command or reset wait appears
+  before continuation return. This static trace does not cover every app route.
+  No model-matched boot-stage executable was found in retained packages or
+  the bounded public search. Bytes `[0x0000,0x2000)` remain unavailable.
+- The unrelated hosted editor failure selected a hidden navigation button.
+  The one-line test fix is published at `aa590fa59348b766d6f7ab849dc11937c213d5af`.
+  Local receiver/editor checks pass. Hosted run `39932153737` passed both
+  `extension-editor` and `verify` at that exact commit. The jobs completed at
+  `09:50:43` and `09:59:14` UTC on 2026-10-23. Hosted acceptance covers software
+  checks only, not physical extension execution.
+  Firmware CI `39923157723` passed at `fa4725a`; iOS `39923157707` passed
+  `verify` but failed `extension-editor`. Do not claim that workflow passed.
+- Rudi requested publication of all local project changes. The forensic replay
+  and documentation form this increment. Retained app packages and raw build/
+  evidence artifacts stay local. No app or firmware code changed in the forensic
+  work. Original audit and journal hashes still match
+  section 18. Preserve `sentRebootPending`. Do not reflash, repeat capability
+  reads, change padding, reset/power-cycle for diagnosis, or change the journal.
+  No vendor contact, hardware operation, app replacement, or device command ran.
+- All six replay cases, 37 existing Python tests, original-output protection,
+  readiness, local link paths, and whitespace checks pass. The full Swift suite
+  and firmware build were not repeated for this offline tool/document change.
+
+Evidence and reproduction:
+[section 19](keyboards/ck5200/docs/stock-extension-feasibility.md#19-post-transfer-installation-forensics-2026-10-23).
+The replay is `keyboards/ck5200/tools/post_transfer_forensics.py`.
+The fully remappable physical keyboard remains undelivered. R3 remains unmet.
+M4 stays closed. No new keymap or UI work belongs to this investigation.
+
+## Historical stopping point, 2026-10-23 (My Clicks and explicit extension installer)
 
 - Rudi requested publication of all local project changes. Contacting Clicks
   is not an option. Continue with offline analysis of retained artifacts.
