@@ -115,6 +115,8 @@ jobs:
         run: |
           set -o pipefail
           python3 stock_extension/assurance/run.py | tee build/stock_extension/v122-execution.log
+          python3 tools/executable_installation_probes.py
+          python3 -c 'from tools.ios_updater_forensics import behavioral_cases; print("reconstructed iOS worker cases:", len(behavioral_cases()))'
 
       - name: Execute iOS codec against V122 configuration
         run: |
@@ -147,6 +149,8 @@ jobs:
             keyboards/ck5200/build/stock_extension/patch_manifest.json
             keyboards/ck5200/build/stock_extension/assurance/report.json
             keyboards/ck5200/build/stock_extension/assurance/*.trace.jsonl
+            keyboards/ck5200/build/installation-probes/report.json
+            keyboards/ck5200/build/installation-probes/*.jsonl
             keyboards/ck5200/build/stock_extension/v122-execution.log
             keyboards/ck5200/build/stock_extension/swift-execution.log
 

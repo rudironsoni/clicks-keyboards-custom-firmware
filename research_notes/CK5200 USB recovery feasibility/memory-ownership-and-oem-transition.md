@@ -4,6 +4,21 @@ Checked: 2026-10-20. Branch `feat/ck5200-tail-ownership-evidence`, based on `6a2
 Scope: static analysis of already-held artifacts only. No device access, firmware
 command, reset, ISP operation, protection change, or vendor contact occurred.
 
+**[CORRECTION 2026-10-23, comprehensive iOS investigation]** The unresolved
+iOS encoder statements below are historical. Direct Swift array/helper data
+flow now reconstructs A1/A2/A3/A0 from the pinned decrypted executable. All 851
+preserved update requests match. CK-prefix routing selects EAF, not PKService.
+See the [original iOS record](../../docs/ck5200-original-ios-investigation.md)
+and [installation verdict](../../docs/ck5200-installation-feasibility-verdict.md).
+The older stock-manager record already contained direct wrapper evidence.
+Android is not a substitute for this iOS reconstruction.
+
+**[CORRECTION 2026-10-23, acknowledgement semantics]** The response offset is
+not reliable resynchronization by itself. The vendor host advances its source
+chunk index independently. A partial/backward ACK can therefore misalign later
+data. Our installer rejects non-exact progress. All retained physical ACKs
+advance exactly, so this vendor weakness is not demonstrated as the failure.
+
 This note supersedes the preservation conclusion of [v122-tail.md](v122-tail.md)
 and supplies the missing evidence that review demanded. It answers three
 questions: what the flash regions actually own, what the OEM update transition

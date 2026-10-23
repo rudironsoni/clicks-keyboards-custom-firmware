@@ -35,6 +35,7 @@ static bool inject_reset;
 static uint32_t min_sp = 0x20005000;
 static FILE *trace;
 static uint32_t remap_address, keymap_address;
+static bool startup_probe, receive_probe, corrupt_callback;
 
 static void fail(const char *why, uint32_t value)
 {
@@ -67,6 +68,8 @@ static uint32_t ram32(uint32_t address)
 void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
 {
     (void)m; (void)v;
+    if (startup_probe && write)
+        fprintf(trace, "{\"event\":\"startup-write\",\"pc\":%u,\"address\":%u,\"width\":%d,\"value\":%u}\n", pc, a, n, v);
     if (write && copy_state && pc >= 0x26D8 && pc < 0x3100) {
         if (inside(a, n, copy_state, copy_state + 0x44) && a + n > copy_state + 0x20)
             fail("OEM policy wrote outside copied-back state prefix", a);
@@ -152,6 +155,11 @@ bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v)
 void gate_instruction(ChgMachine *m, uint32_t address)
 {
     pc = address;
+    if (startup_probe || (receive_probe && (pc == 0x4776 || pc == 0x629E
+            || pc == 0x62BC || pc == 0x2208 || pc == 0x2218
+            || pc == 0x715C || pc == 0x3216 || pc == 0x62CC)))
+        fprintf(trace, "{\"event\":\"instruction\",\"pc\":%u,\"ra\":%u,\"sp\":%u,\"a0\":%u,\"a1\":%u,\"a2\":%u}\n",
+                pc, m->cpu.x[1], m->cpu.x[2], m->cpu.x[10], m->cpu.x[11], m->cpu.x[12]);
     if (pc == 0x2796 || pc == 0x2958) {
         copy_state = image_end > 0x68D8 && m->cpu.x[10] != 0x20000068
             && !m->ram[CK_PREVIEWING - CHG_RAM_BASE] ? m->cpu.x[10] : 0;
@@ -395,7 +403,15 @@ static void config_server(void)
             memcpy(machine.ram + 0x2400, bytes, n);
             bytes_event("configuration-request", 0x20002400, n);
             command_reply_len = 0;
-            call(0x2208, 0x20002400, n);
+            if (receive_probe) {
+                call(0x4776, 0x2208, 0); /* Original receive-callback registration. */
+                if (ram32(0x20000524) != 0x2208) fail("wrong receive callback", ram32(0x20000524));
+                if (corrupt_callback) memset(machine.ram + 0x524, 0, 4);
+                fprintf(trace, "{\"event\":\"receive-fixture\",\"callback\":%u,\"authentication\":%u}\n",
+                        ram32(0x20000524), machine.ram[0x462]);
+                machine.cpu.x[12] = n;
+                call(0x629E, 0x20000460, 0x20002400);
+            } else call(0x2208, 0x20002400, n);
             command_reply_len = 0;
             consume_ep3();
             printf("R ");
@@ -628,9 +644,12 @@ int main(int argc, char **argv)
         || (argc == 6 && !strcmp(argv[5], "mixed"));
     bool layers = argc == 6 && !strncmp(argv[5], "layers-", 7);
     bool native_active = argc == 6 && (!strcmp(argv[5], "native-active") || compatibility || mixed || layers);
+    startup_probe = argc == 4 && !strcmp(argv[3], "startup-probe");
+    receive_probe = argc == 4 && (!strcmp(argv[3], "receive-probe") || !strcmp(argv[3], "receive-corrupt-callback"));
+    corrupt_callback = receive_probe && !strcmp(argv[3], "receive-corrupt-callback");
     if (argc == 6 && !strcmp(argv[5], "delayed-host")) host_period = 17;
     real_irq = (argc == 6 && !strcmp(argv[5], "real-irq"))
-        || (argc == 4 && !strcmp(argv[3], "config-server"));
+        || (argc == 4 && !strcmp(argv[3], "config-server")) || receive_probe;
     chg_init(&machine);
     FILE *f = fopen(argv[1], "rb");
     if (!f) return 2;
@@ -643,6 +662,11 @@ int main(int argc, char **argv)
     memset(machine.ram, 0xA5, sizeof(machine.ram));
     machine.entry = 0x2000;
     cpu_reset(&machine);
+    if (startup_probe) {
+        /* No synthetic USB, authentication, settings, SP, callback or MMIO changes. */
+        for (unsigned i = 0; i < 200000; i++) step();
+        fail("startup instruction budget exceeded", machine.cpu.pc);
+    }
     until(0x3BBA); /* execute genuine CRT and extension init, not SystemInit */
     if (memcmp(machine.ram, machine.flash + 0x6880, 0x58))
         fail("OEM data initialization mismatch", 0x6880);
@@ -681,7 +705,7 @@ int main(int argc, char **argv)
         if (native_active) machine.ram[remap_address - CHG_RAM_BASE] = 1;
     }
     scan(12);
-    if (argc == 4 && !strcmp(argv[3], "config-server")) {
+    if ((argc == 4 && !strcmp(argv[3], "config-server")) || receive_probe) {
         config_server();
         return 0;
     }

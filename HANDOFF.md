@@ -7,6 +7,28 @@
 The authoritative current gate is [flash-readiness.md](keyboards/ck5200/docs/flash-readiness.md).
 This replaces the obsolete first-flash instructions. Git history preserves them as historical evidence only.
 
+## Current stopping point, 2026-10-23 (installation feasibility verdict)
+
+**NO-GO for installation under the current constraints.** The physical
+programmable keyboard is not delivered. This is not technical impossibility.
+The [verdict](docs/ck5200-installation-feasibility-verdict.md) owns the decision,
+minimum evidence and links to the iOS, differential, executable/OEM, fault-tree
+and sanitized ledger records.
+
+The decrypted iOS encoder and normal EAF workflow are reconstructed directly.
+All 851 captured update requests match its encoding for the padded image.
+Vendor success after A0 proves no installation. Exact raw/padded receive
+fixtures return `CKX1`; stock, disabled hook and OEM redirect return the exact
+physical `FF`. Full startup reaches unsupported RCC read `0x3BBE` / `0x40021000`.
+No synthetic continuation closes that gate. The physical cause remains
+undecidable without device-side evidence. OEM boot-stage copying and R3 remain
+unverified. No firmware or installer-byte correction is justified.
+
+No keyboard commands, writes, resets, reconnect/power experiments, physical
+phone app changes or journal changes occurred. `sentRebootPending` is preserved.
+M4 stays closed. The accepted firmware and editor remain unchanged. Do not
+resume physical installation from these offline results.
+
 Stock diagnostics baseline: complete and accepted on 2026-10-14.
 Five inspected sessions cover stock getters, mixed typing, exports, reconnect, and app transitions.
 Use the acceptance scope, evidence hashes, and deferred gaps in the authoritative readiness record before choosing further work.
@@ -472,7 +494,7 @@ recoverable flash storage follow only after executable equivalence passes.
 The QMK-pinned assurance gate and iOS app remain untouched.
 
 Reproduction and detailed evidence:
-[stock-extension-feasibility.md section 11](keyboards/ck5200/docs/stock-extension-feasibility.md#11-oem-integration-increment-after-the-9113dab-review).
+[stock-extension-feasibility.md section 11](keyboards/ck5200/docs/stock-extension-feasibility.md#11-accepted-bounded-execution-baseline-57fef66).
 
 ## Current stopping point, 2026-10-21 (settings protocol)
 

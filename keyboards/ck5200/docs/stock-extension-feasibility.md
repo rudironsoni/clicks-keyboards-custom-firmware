@@ -1447,3 +1447,19 @@ padding, repeating installation, resetting for diagnosis, clearing the journal,
 or adding keymap/UI features is not a correction supported by these results.
 The acceptance outcome remains: **submitted bytes verified; staging, reset,
 and application replacement unverified; installed extension check failed.**
+
+## 20. Installation feasibility verdict, 2026-10-23
+
+The [comprehensive verdict](../../../docs/ck5200-installation-feasibility-verdict.md)
+is **NO-GO under the current constraints**, not a claim of technical impossibility.
+It supersedes unresolved-iOS-encoder wording in earlier research notes, without
+changing the preserved physical evidence or earlier bounded-test results.
+
+The decrypted iOS encoder now matches all 851 captured update requests.
+Its worker reports success after A0 without checking the result. Raw versus
+padded transfer is a real difference but not a proven cause. Exact-image
+startup stops at unsupported RCC read `0x3BBE` / `0x40021000` in both stock and
+custom images. The original receive-route controls reproduce `CKX1` or exact
+`FF` as documented, but cannot identify the physical installed bytes.
+OEM copying and independent recovery remain unverified. No firmware correction,
+physical operation or journal change follows from these offline results.
