@@ -226,9 +226,9 @@ Call path, with decompiled class names:
 | Image validation | `p002a1.o.m` (state `Q0.a CheckSHA256`) | SHA-256 of the downloaded file compared to the manifest `sha256sum`. On mismatch it aborts ("file not match") before any device command. |
 | Load | `p002a1.o.m` (state `Q0.e LoadFile`) | Reads the whole file into memory. |
 | Transfer | `p002a1.s.j` states `StartUpdate`, `StartWrite`, `FinishUpdate` | `T0.o.b(len)`, `T0.o.c(bytes)`, `T0.o.a(len)` (below). |
-| Reboot | `p002a1.s.j` state `Reboot` | Sends `02 A0`; on ACK declares `Success`. |
+| Reboot | `p002a1.s.j` state `Reboot` | Sends `02 A0`; declares `Success` when transport write `L0.a.f` returns true. No A0 reply read follows. |
 | Sideload path | `p002a1.q.m` | Loads an image from app assets and runs the same A1/A2/A3/A0 with **no** SHA-256 check. |
-| Post-reboot verification | none in the driver | Success is the A0 acknowledgement. No second-stage, boot, or recovery protocol exists anywhere in the app (searched classes, strings, broadcast actions: only `APP_ACCESSORY_CONNECT/DISCONNECT`, `ACTION_FIRMWARE_UPDATE_SUCCESSFUL/FAILED`, and settings events). |
+| Post-reboot verification | none in the driver | Success is the A0 transport write result, not installation proof. No second-stage, boot, or recovery protocol was found in the app (searched classes, strings, broadcast actions: only `APP_ACCESSORY_CONNECT/DISCONNECT`, `ACTION_FIRMWARE_UPDATE_SUCCESSFUL/FAILED`, and settings events). |
 
 The Android transport (`L0.a`) enumerates VID `0x352E` PID `0x2306`, claims
 **interface 1** (the `FF/F0/01` companion-data interface), and exchanges frames
@@ -289,7 +289,10 @@ product code) agree on every byte.
 
 ### 2.4 Session closure and post-reboot verification
 
-The OEM driver declares success at the A0 ACK. The re-attach path is the ordinary
+The OEM Android driver declares success at the A0 transport write result.
+[CORRECTION 2026-10-23] Re-reading `p002a1.s.j` and `L0.a.f` confirms that no
+A0 acknowledgement read follows. The earlier ACK claim was incorrect.
+The re-attach path is the ordinary
 accessory connection flow: on the next connect the host reads identity/version
 (the stock identify payload `01 20 01 22` = hardware 1.2.0, firmware 1.2.2) and
 `p002a1.b` compares `firmwareRevision > current` for future updates. No evidence

@@ -105,10 +105,31 @@ private final class ExtensionEmulator {
         var sends = 0
         let stock = StockExtensionSession(nonce: 123) { _ in sends += 1; return [8,2,0x94,255,0,0,0,0] }
         do { try await stock.open(); throw TestFailure.failed("stock identity accepted") }
-        catch StockExtensionError.framing {}
+        catch StockExtensionError.rejected(255) {}
         do { try await stock.apply(original, enabled: true); throw TestFailure.failed("stock mutation allowed") }
         catch StockExtensionError.identity {}
         try check(sends == 1, "mutation sent before capability identity")
+
+        // Switch protocol owners without closing the link or dropping the
+        // beginning of a notification that spans the ownership change.
+        var handoff = KeyboardPacketFramer(maximumLength: 36)
+        _ = try handoff.append([4, 4], awaitingReply: false)
+        let handoffLink = StreamLink(output: nil)
+        handoffLink.onReceiverReady = { [weak handoffLink] in handoffLink?.handleBytes([1, 0]) }
+        var observations: [String] = []
+        let handoffAdapter = StockExtensionTransport(handoffLink, incomingFramer: handoff,
+            diagnostic: { event, _, _ in observations.append(event) })
+        handoffLink.write = { [weak handoffLink] pointer, count in
+            let request = Array(UnsafeBufferPointer(start: pointer, count: count))
+            let caps: [UInt8] = [67,75,88,49,4,3,6,6,0xD2,3,24,1,6,0,0]
+            let reply: [UInt8] = [27,2,0x94,0,1,0] + Array(request[4..<8]) + [0,0] + caps
+            Task { @MainActor in handoffLink?.handleBytes(reply) }
+            return count
+        }
+        let handedSession = StockExtensionSession(nonce: 129, transfer: handoffAdapter.exchange)
+        try await handedSession.open()
+        try check(handedSession.identified && observations == ["request", "reply"], "handoff lost framing state or capability diagnostics")
+        handoffAdapter.close()
 
         let silentLink = StreamLink(output: nil)
         let silent = StockExtensionTransport(silentLink)
@@ -143,7 +164,7 @@ private final class ExtensionEmulator {
             let stockAdapter = stockDevice.transport()
             let stockSession = StockExtensionSession(nonce: 124, transfer: stockAdapter.exchange)
             do { try await stockSession.open(); throw TestFailure.failed("real stock identity accepted") }
-            catch StockExtensionError.framing {}
+            catch StockExtensionError.rejected(255) {}
             do { try await stockSession.apply(original, enabled: true); throw TestFailure.failed("stock mutation sent") }
             catch StockExtensionError.identity {}
             stockAdapter.close()

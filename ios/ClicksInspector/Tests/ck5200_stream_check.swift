@@ -114,7 +114,8 @@ struct StreamCheck {
         /* 5. Composed transaction: the real controller over the real stream
          * adapter, with partial writes on the way out and fragments on the
          * way back. */
-        do {
+        let notifications: [([UInt8], [UInt8])] = [([4, 4], [1, 0]), ([11, 2, 0, 0, 0, 0, 0, 0, 0], [0, 0])]
+        for (prefix, tail) in notifications {
             let link = StreamLink(output: nil)
             var outgoing: [UInt8] = []
             var pendingPartial = 1
@@ -131,14 +132,18 @@ struct StreamCheck {
             controller.connectedTarget = CustomFirmwareController.ConnectedTarget(
                 model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
             controller.attach(link)
+            // This notification starts before identify sends its request.
+            // Its tail shares the next read with the version header, matching
+            // the physical failure fragment 01 00 08 02 03 00 01 20 01.
+            link.handleBytes(prefix)
             var replyDelivered = false
             await waitUntil("identify completes over the stream adapter") {
                 /* Once the whole request is on the wire, the reply arrives
                  * in two fragments: reassembly is the controller's job. */
                 if !replyDelivered, outgoing == [0x02, 0x03] {
                     replyDelivered = true
-                    link.handleBytes([0x08, 0x02, 0x03, 0x00, 0x01])
-                    link.handleBytes([0x20, 0x01, 0x22])
+                    link.handleBytes(tail + [8, 2, 3, 0, 1, 0x20, 1])
+                    link.handleBytes([0x22])
                 }
                 if case .stockFirmware = controller.phase { return true }
                 return false
@@ -146,6 +151,11 @@ struct StreamCheck {
             expect(outgoing == [0x02, 0x03], "the version request reached the wire intact, one byte at a time")
             expect(controller.lastVersionPayload == [0x01, 0x20, 0x01, 0x22],
                    "fragmented reply reassembled into the exact version payload")
+            expect(CustomFirmwareController.thermalBlockReason(.nominal) == nil
+                   && CustomFirmwareController.thermalBlockReason(.fair) == nil
+                   && CustomFirmwareController.thermalBlockReason(.serious)?.contains("iOS reports serious") == true
+                   && CustomFirmwareController.thermalBlockReason(.critical)?.contains("iOS reports critical") == true,
+                   "thermal policy reports the actual iOS state, not surface temperature")
 
             /* Session loss while connected: the controller reports it. */
             link.handleLoss("Connection lost")
@@ -154,6 +164,12 @@ struct StreamCheck {
                 return false
             }
         }
+
+        var malformed = KeyboardPacketFramer(maximumLength: 15)
+        do {
+            _ = try malformed.append([0, 0, 8, 2, 3, 0, 1, 0x20, 1, 0x22], awaitingReply: true)
+            expect(false, "orphan bytes must not be skipped to find a plausible reply")
+        } catch { expect(true, "orphan bytes still fail closed, without header scanning") }
 
         // A buffered A3 must never leave after timeout or a malformed response.
         for invalidReply in [false, true] {

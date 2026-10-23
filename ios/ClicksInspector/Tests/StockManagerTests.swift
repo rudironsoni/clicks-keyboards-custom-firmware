@@ -5,11 +5,12 @@ private final class ProductionLink: KeyboardPacketLink {
     var onClosed: ((String) -> Void)?
     var packets: [[UInt8]] = []
     let fault: String
+    let imageSize: Int
     var injected = false
     var closed = false
     var checkBoundary: (() -> Void)?
     var afterLastDataACK: (() -> Void)?
-    init(_ fault: String) { self.fault = fault }
+    init(_ fault: String, imageSize: Int = 18_648) { self.fault = fault; self.imageSize = imageSize }
     func close() { closed = true; onFragment = nil; onClosed = nil }
     func send(_ bytes: [UInt8]) {
         precondition(!closed)
@@ -37,7 +38,7 @@ private final class ProductionLink: KeyboardPacketLink {
             onClosed?("modeled reset request closed the link"); return
         }
         if count > 0 { onFragment?(Array(reply.prefix(count))) }
-        if bytes[1] == 0xa2 && Array(reply[4..<8]) == [0, 0, 0x48, 0xd8] {
+        if bytes[1] == 0xa2 && reply[4..<8].reduce(0, { ($0 << 8) | Int($1) }) == imageSize {
             afterLastDataACK?()
         }
     }
@@ -58,7 +59,9 @@ struct StockManagerTests {
     @MainActor static func main() async throws {
         let mode = Int32(CommandLine.arguments[1])!
         let fault = CommandLine.arguments[2]
-        let image = [UInt8](try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[3])))
+        let raw = [UInt8](try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[3])))
+        let artifact: PreparedFirmwareImage.Artifact = CustomFirmwareController.extensionUpdatesEnabled ? .programmable : .stock
+        let image = try PreparedFirmwareImage(raw, artifact: artifact).bytes
         precondition(sm_boot(mode))
         if fault != "unauthenticated" { precondition(sm_authenticate()) }
         CustomFirmwareController.resetPendingUpdateForTesting()
@@ -66,17 +69,23 @@ struct StockManagerTests {
         let c = CustomFirmwareController()
         c.exchangeTimeoutNanos = 50_000_000
         c.rebootConfirmTimeoutNanos = 50_000_000
-        c.prepareStock(image)
-        precondition(c.preparedStock?.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256)
-        var invalid = image; invalid[100] ^= 1
-        precondition((try? PreparedStockImage(invalid)) == nil)
+        if artifact == .stock {
+            c.prepareStock(raw)
+            precondition(c.preparedStock?.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256)
+        }
+        var invalid = raw; invalid[100] ^= 1
+        precondition((try? PreparedFirmwareImage(invalid, artifact: artifact)) == nil)
         c.connectedTarget = .init(model: fault == "wrong-model" ? "CK-5200B" : "CK-5200",
                                  firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
-        let link = ProductionLink(fault)
+        let link = ProductionLink(fault, imageSize: image.count)
+        func flash() {
+            c.flash(image: raw, rebootToInstall: true, artifact: artifact,
+                    authorizedSession: artifact == .programmable ? c.installationSessionID : nil)
+        }
         c.attach(link)
         try await settle(c)
         if fault == "unauthenticated" || fault == "wrong-model" {
-            c.flash(image: image, rebootToInstall: true)
+            flash()
             precondition(sm_write_count() == 0 && sm_reboot_count() == 0)
             precondition(!link.packets.contains { (0xa0...0xa3).contains($0[1]) })
             print("PASS \(mode) \(fault): zero writes")
@@ -107,7 +116,7 @@ struct StockManagerTests {
                 c.attach(ProductionLink("read-only"))
             }
         }
-        c.flash(image: image, rebootToInstall: true)
+        flash()
         try await settle(c)
         precondition(sm_protected_intact())
         if fault == "ok" {
@@ -115,8 +124,9 @@ struct StockManagerTests {
             precondition(sm_marker() == image.count && sm_reboot_count() == 1)
             precondition(c.pendingUpdate?.outcome == .sentRebootPending)
             precondition(c.pendingUpdate?.sourceMode == cMode(mode))
-            // Explicit host installer model, not original installer execution.
-            precondition(sm_model_install())
+            // This host copy model is stock-only. Extension checks stop at
+            // staging/reboot and make no claim about destination flash.
+            if artifact == .stock { precondition(sm_model_install()) }
             precondition(sm_protected_intact())
         } else if fault == "lost-a3" {
             precondition(sm_marker() == image.count && sm_reboot_count() == 0)
@@ -124,7 +134,7 @@ struct StockManagerTests {
             precondition(link.packets.filter { $0[1] == 0xa3 }.count == 1)
         } else if fault == "commit-failure" {
             precondition(sm_marker() == UInt32.max && sm_reboot_count() == 0)
-            precondition(sm_write_count() == 75 && sm_staged_matches(image, image.count))
+            precondition(sm_write_count() == (image.count + 4 + 255) / 256 + 2 && sm_staged_matches(image, image.count))
             precondition(c.pendingUpdate?.outcome == .commitUnknown)
         } else {
             precondition((sm_marker() == 0 || sm_marker() == UInt32.max) && sm_reboot_count() == 0 && c.pendingUpdate == nil)
@@ -138,7 +148,7 @@ struct StockManagerTests {
         let requests = link.packets.count
         // No continuation after timeout, no automatic retry, no late reply revival.
         link.onFragment?([8, 2, 0xa2, 0, 0, 0, 0, 32])
-        if fault != "session-swap" { c.flash(image: image, rebootToInstall: true) }
+        if fault != "session-swap" { flash() }
         precondition(link.packets.count == requests && sm_write_count() == writes)
         if let record = c.pendingUpdate {
             let fresh = CustomFirmwareController()

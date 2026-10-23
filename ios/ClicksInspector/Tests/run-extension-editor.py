@@ -15,6 +15,7 @@ def main():
     app = root / "ios/ClicksInspector"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", help="Simulator UDID. Omit to run only the host workflow.")
+    parser.add_argument("--configuration", choices=["Debug", "ExtensionInstaller"], default="Debug")
     parser.add_argument("--output", type=Path, default=app / "build/extension-editor")
     args = parser.parse_args()
     output = args.output.resolve()
@@ -26,7 +27,8 @@ def main():
         if not server.stdout.readline().startswith("V122 editor bridge:"):
             raise RuntimeError("V122 editor bridge failed to start. Port 8765 must be free.")
         sources = ["StockExtensionProtocol", "StockExtensionTransport", "CustomKeyboardProtocol",
-                   "StockExtensionProfile", "StockExtensionController", "V122EmulatorLink"]
+                   "StockExtensionProfile", "StockExtensionController", "V122EmulatorLink",
+                   "KeyboardPresentation", "KeycodeNames", "FactoryLayout"]
         executable = output / "editor-test"
         subprocess.run(["xcrun", "swiftc", *(str(app / f"Sources/{name}.swift") for name in sources),
                         str(app / "Tests/StockExtensionEditorTests.swift"), "-o", str(executable)], check=True)
@@ -35,15 +37,16 @@ def main():
         if args.device:
             subprocess.run(["xcodegen", "generate", "--spec", str(app / "project.yml")], check=True)
             with (output / "ui-workflow.log").open("w") as log:
-                subprocess.run(["xcodebuild", "-project", str(app / "ClicksInspector.xcodeproj"),
-                                "-scheme", "StockExtensionEditor", "-configuration", "Debug",
+                result = subprocess.run(["xcodebuild", "-project", str(app / "ClicksInspector.xcodeproj"),
+                                "-scheme", "StockExtensionEditor", "-configuration", args.configuration,
                                 "-destination", f"platform=iOS Simulator,id={args.device}",
                                 "-only-testing:ClicksInspectorUITests/StockExtensionUITests",
                                 "-only-testing:ClicksInspectorAppTests/StockReceiverTests",
                                 "-parallel-testing-enabled", "NO", "-resultBundlePath", str(output / "ui.xcresult"),
-                                "CODE_SIGNING_ALLOWED=NO", "test"], stdout=log, stderr=subprocess.STDOUT, check=True)
+                                "CODE_SIGNING_ALLOWED=NO", "test"], stdout=log, stderr=subprocess.STDOUT)
             subprocess.run(["xcrun", "xcresulttool", "export", "attachments", "--path", str(output / "ui.xcresult"),
                             "--output-path", str(output / "screenshots")], check=True)
+            result.check_returncode()
         print(f"PASS extension editor workflow. Evidence: {output}")
     finally:
         server.terminate()

@@ -35,7 +35,184 @@ No physical experiment or hardware implementation may start without a separate d
 
 Further recordings require a specific need in a separately scoped task. Do not resume SDI research.
 
-## Current stopping point, 2026-10-22 (live editor software integration)
+## Current stopping point, 2026-10-23 (My Clicks and explicit extension installer)
+
+- Rudi requested publication of all local project changes. Contacting Clicks
+  is not an option. Continue with offline analysis of retained artifacts.
+  This publication request does not authorize another physical keyboard test.
+- Publication checks passed: full Swift suite (`publish-swift-20261023.log`),
+  37 Python tests using the repository virtual environment, V122 host editor
+  workflow (`publish-editor-20261023/`), and enabled-config Simulator workflow
+  (`publish-editor-ui-20261023/`). The latter passed all three receiver tests
+  and the complete editor UI test, with 14 captures. These paths are under
+  `ios/ClicksInspector/build/`. The separate stack-viewer plugin passed 16 tests.
+  Readiness, whitespace, pinned-image equality, and staged secret scans passed.
+  No new physical verification ran. Hosted CI results remain separate.
+
+- **Installation remains unverified. Stop physical checks and update attempts.**
+  `ios/ClicksInspector/build/post-install-capability-evidence-01/` contains two
+  user-initiated capability reads. Requests `0c940100547becbf00000000` and
+  `0c940100a60a007000000000` both received `080294ff00000000`.
+  The running firmware rejects `0x94` with status `ff`. This is a complete
+  negative reply, not a framing failure. The app closes the session after
+  the failed capability check. No further capability read is needed.
+- Offline tracing confirms A0 at `0x3954` sets bit 1 at `0x200000AC`.
+  The main loop calls `0x39FA` at `0x238E`. Its reset branch writes
+  `0xBEEF0080` to `0xE000E048` at `0x3A30`. No second host install command
+  appears in this path or the retained OEM Android updater. The physical
+  acknowledgement does not prove execution of the reset or boot-stage copier.
+- The captured transfer matches the bundled extension plus 78 `FF` bytes.
+  Its command hook at `0x2218` targets `ck_extension_command` at `0x715C`.
+  The OEM unknown-command branch constructs the exact captured rejection.
+  [INFERENCE] The capability request reached an OEM command path rather than
+  the bundled extension handler. This does not establish destination flash
+  contents or explain why the hook is inactive.
+- The exact missing evidence is device-side staging/marker integrity,
+  destination application contents, and boot-stage `[0x0000,0x2000)` behavior.
+  In particular, application acceptance of length `0x6A00` does not prove
+  boot-stage acceptance. Do not change padding or firmware on that basis.
+  **Next: resolve this evidence gap through offline analysis of retained artifacts.
+  Do not reflash, reset, power-cycle as a test, clear, or conclude the journal.**
+  No physical keyboard operation, app replacement, or publication ran during
+  the preceding offline trace. See section 18 for byte checks and evidence hashes.
+
+- Rudi executed the first physical extension update, then reported that the
+  capability check failed. Preserve `ios/ClicksInspector/build/post-install-evidence-01/`.
+  Its audit has one A1, 848 ordered A2 frames/replies, A3 acknowledgement,
+  and A0 acknowledgement. Reconstructed client TX bytes match the pinned
+  27,136-byte transfer hash exactly. `analysis.json` records the verification.
+  The journal is `sentRebootPending`, with `rebootRequested: true`. This proves
+  protocol progress, not boot-stage copying or a running extension.
+- The stock-version getter worked after the attempt, as shown in Rudi's
+  screenshots. The extension keeps that same version, so it cannot distinguish
+  installed extension from unmodified stock. The old app recorded no capability
+  reply, and its generic framing error incorrectly implied stock was running.
+- Capability checking now hands off the existing EASession and partial frame
+  state instead of closing/reopening the session. Exact 0x94 requests/replies
+  and framing failures append `extension.*` events to the existing audit.
+  A short negative reply reports its status, not a false identity diagnosis.
+  Version and capability state are labeled separately. No firmware changed.
+- Full Swift checks, genuine V122 protocol integration, and the editor/ownership
+  UI workflow passed (`post-install-fix-swift.log`, `post-install-genuine-protocol/`,
+  `post-install-fix-ux-02/`). The first UI run caught an asynchronous toggle
+  assertion; the test now waits for acknowledgement/readiness before checking.
+- The signed diagnostic fix is installed. Snapshots `post-install-evidence-02/`
+  and `post-install-evidence-03/` prove the commit journal survived replacement
+  byte-for-byte. Before replacing the app, the audit confirmed only one trial
+  and no recent update command. No agent keyboard query, reset, or flash ran.
+  Rudi completed the requested capability reads. Their rejection and the current
+  stop condition are recorded above. Do not repeat the reads or change the journal.
+
+- Rudi reached the confirmation sheet, enabled the acknowledgement, and found
+  Flash disabled without a reason. The sheet now carries an immutable session
+  item instead of a Boolean plus separate optional session state. Eligibility
+  is evaluated live when the view updates and again when Flash is pressed.
+  A changed session or failed preflight has a visible explanation. The existing
+  controller checks remain independent and unchanged.
+- Full Swift checks and the complete editor/ownership UI workflow passed in
+  `confirmation-fix-swift.log` and `confirmation-fix-ux/`. Two Simulator-only,
+  view-only cases exercise the real ConfirmationView: acknowledgement enables
+  Flash when eligible, and a failed check keeps it disabled with a reason.
+  These cases have no keyboard link or firmware operation. They do not prove
+  the physical installer. Host checks cover matching/stale session items.
+- Before reinstalling, read-only retrieval of the current phone audit found
+  no update transaction and no commit journal. The signed confirmation-fix
+  build is installed and verified on the iPhone. No agent keyboard command,
+  app launch, or physical flash ran. Physical confirmation retry is unverified.
+
+- Rudi reported a thermal block on a cool-feeling phone, then an identity
+  error: `Expected at most 8 bytes, got 9`. Read-only retrieval of the app's
+  existing audit found `010008020300012001` and `000008020300012001`.
+  No update-command events or commit journal were found in that capture.
+- The receiver wrongly treated stream reads as replies and discarded input
+  before a receiver/request was ready. Stock reads, firmware replies, and the
+  extension now share one bounded frame parser. It keeps partial recognized
+  OEM notifications, rejects unknown/orphan bytes, and never scans for a header.
+  Input waits until the session receiver is ready. Version length stays eight.
+  [INFERENCE] The observed prefixes are notification tails. Their preceding
+  headers were not in the old audit, so physical retry remains unverified.
+- Thermal protection is unchanged: serious/critical/unknown iOS states block.
+  The screen now names the iOS thermal-pressure state instead of claiming the
+  phone surface is hot. Battery and thermal notifications refresh it, and
+  preflight records retain those reported states. No temperature is measured.
+- The full Swift suite, new stock receiver test, editor/ownership workflow,
+  signed iPhone build, and readiness check passed for the framing fix.
+  Evidence: `stream-framing-fix-swift.log` and `stream-framing-fix-ux/` under
+  `ios/ClicksInspector/build/`. Tests reproduce both saved nine-byte prefixes
+  after a known notification header and still reject orphan bytes. No new
+  physical keyboard query or flash was executed by the agent.
+  The signed framing-fix build was reinstalled and verified on the iPhone.
+  Its firmware resource and extension-only compilation flag remain unchanged.
+
+- Rudi requested the enabled extension installer, stronger reliability checks,
+  and an explicit weak-evidence list. `ExtensionInstaller` is a separate app
+  configuration for only the pinned stock-derived extension. Default Debug
+  stays write-disabled. StockFlashTrial remains stock-only and QMK flashing
+  stays closed. No agent-executed physical flash is authorized or performed.
+- Connection now links to Install programmable extension. It validates the
+  bundled executable, adds deterministic erased-state padding, binds consent
+  to the live session, requires fresh V122 identity before A1, checks phone
+  power/thermal state, and reuses the existing audited updater and journal.
+  Source hash is unchanged. Transfer is 27,136 bytes, SHA-256
+  `438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2`.
+- The enabled-build Simulator editor/ownership workflow passed in
+  `ios/ClicksInspector/build/extension-installer-ux-02/`. The installer image
+  loads and the install control stays disabled offline. The exact padded image
+  also passed 15 genuine V122 runtime cases with unchanged HID output/coverage.
+  Boot-stage copying, staging integrity readback, full USB/startup, and recovery
+  remain unproven. Do not describe physical anti-brick confidence as very high.
+- The full Swift suite passed (`extension-installer-swift-verified-02.log`),
+  including default/M4 boundaries, the new extension guards, all existing
+  stock-manager cases, and ten full-area extension staging/fault cases through
+  production C. The extension cases do not invoke the stock-only copy model
+  and do not prove the OEM installer. All 37 Python tests and readiness checks pass.
+  A held-staging regression confirms a duplicate install request cannot fail
+  or cancel the active exchange. The final signed phone build includes this fix.
+- The signed `ExtensionInstaller` app is now installed on the iPhone 15 Pro Max
+  `00008130-001E74A11193803A`, bundle `com.rudironsoni.clicks-inspector`,
+  version `0.2.0`, build `4`. The bundled image/signature and compilation flags
+  were checked. Only `EXTENSION_INSTALLER` is enabled, not M4/stock/QMK/test
+  write flags. No agent app launch, keyboard command, or physical flash ran.
+  The original installation procedure is historical. Do not repeat it during
+  the current investigation. The preserved journal blocks another attempt.
+
+- Review of `cf99619` is correct: the dedicated editor CI job failed before
+  Simulator verification because it did not build the extension image.
+  In iOS run `39858956521`, `verify` passed and `extension-editor` failed.
+  The workflow as a whole failed. No hosted editor acceptance is claimed.
+- The local workflow now builds the extension before assurance. A clean
+  output-directory run passes all 20 V122 cases with the accepted image hash.
+- The app opens into My Clicks. Diagnostics, logs, firmware tools, and QMK
+  controls moved under Advanced. Stock firmware does not expose QMK controls.
+  Save and Apply remain visible. Draft storage and RAM synchronization are
+  separate states. Offline drafts persist across app launches.
+- The editor uses QWERTY cap geometry from the vendor photo, readable action
+  names, a searchable category picker, native Dynamic Type, and VoiceOver
+  labels. Raw HID input is under Advanced. Four cap-to-matrix assignments
+  remain unverified and are not silently guessed. Their decoded switches
+  remain editable with that warning.
+- RAM consent is no longer a firmware-recovery boolean. Eligible stock
+  opening automatically reads the authorized version. Capability reads
+  require explicit confirmation. Apply requires verified CKX1 identity and
+  per-session RAM consent. Loss/disconnect revokes consent. Firmware flash
+  gates remain unchanged. No physical keyboard operation ran.
+- The complete redesigned UI workflow passed in `my-clicks-ux-06/` and all
+  11 screenshots were inspected. Disabled Apply is readable in light/dark
+  mode. Maximum accessibility sizes use a key list and a compact action bar.
+  Recorder, stock-manager, and QMK UI regressions passed under Advanced.
+  Recorder source bytes exactly match all three UI captures. No publication occurred.
+- Rudi authorized app installation on 2026-10-23. Before the installer request, a signed Debug
+  app was installed on the iPhone 15 Pro Max `00008130-001E74A11193803A`.
+  `devicectl` confirms `com.rudironsoni.clicks-inspector`, version `0.2.0`,
+  build `4`. The app still appears as Clicks Inspector and opens into My Clicks.
+  Firmware-write and QMK-only compilation flags are absent. No app launch,
+  keyboard session, settings command, or firmware write ran during installation.
+  Installation is separate from the completed Simulator screenshot/UI checks.
+
+See [section 18](keyboards/ck5200/docs/stock-extension-feasibility.md#18-first-user-run-extension-update-and-capability-check).
+R3, full USB assurance, and keyboard-flash persistence remain open.
+
+## Historical stopping point, 2026-10-22 (live editor software integration)
 
 Rudi accepted `1cbb07ac5804c158ed39c4fc347d9f82dcba014b` as the offline
 RAM-configuration milestone. Firmware CI `39846660539` and iOS CI

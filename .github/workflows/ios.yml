@@ -38,11 +38,14 @@ jobs:
           brew install xcodegen
           bash scripts/setup.sh
           bash scripts/revert-stock.sh --download-only
+          bash stock_extension/build_extension_image.sh
+          cmp build/stock_extension/ck5200_extension.bin ../../ios/ClicksInspector/Resources/ck5200_extension.bin
           python3 stock_extension/assurance/run.py
       - name: Verify editor, profiles, exact HID and recovery in Simulator
         run: |
           DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
           python3 ios/ClicksInspector/Tests/run-extension-editor.py --device "$DEVICE_ID" --output evidence/extension-editor
+          python3 ios/ClicksInspector/Tests/run-extension-editor.py --configuration ExtensionInstaller --device "$DEVICE_ID" --output evidence/extension-installer
       - name: Retain editor screens and V122 execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,6 +53,7 @@ jobs:
           name: extension-editor-${{ github.sha }}
           path: |
             evidence/extension-editor/
+            evidence/extension-installer/
             keyboards/ck5200/build/stock_extension/build-report.txt
             keyboards/ck5200/build/stock_extension/build-source-sha256.json
             keyboards/ck5200/build/stock_extension/assurance/report.json
@@ -109,6 +113,13 @@ jobs:
             -scheme ClicksInspector -configuration StockFlashTrial \
             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
             2>&1 | tee evidence/stock-flash-trial-build.log
+      - name: Build unsigned extension-only installer
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration ExtensionInstaller \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/extension-installer-build.log
       - name: Test recording, export, and deletion in Simulator
         run: |
           set -o pipefail

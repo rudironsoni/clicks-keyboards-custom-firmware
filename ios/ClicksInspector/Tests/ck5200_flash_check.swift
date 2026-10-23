@@ -285,6 +285,10 @@ struct FlashCheck {
             FileHandle.standardError.write("usage: ck5200_flash_check <stock.bin> <custom.bin>\n".data(using: .utf8)!)
             exit(2)
         }
+        #if EXTENSION_INSTALLER
+        await extensionInstallerCheck(raw: loadFile(args[1]), stock: loadFile(args[2]))
+        exit(checkFailures == 0 ? 0 : 1)
+        #else
         let stockImage = loadFile(args[1])
         let customImage = loadFile(args[2])
         defer { CustomFirmwareController.resetPendingUpdateForTesting() }
@@ -905,5 +909,87 @@ struct FlashCheck {
 
         print(checkFailures == 0 ? "ok" : "==== \(checkFailures) failure(s) ====")
         exit(checkFailures == 0 ? 0 : 1)
+        #endif
     }
 }
+
+#if EXTENSION_INSTALLER
+@MainActor
+private func extensionInstallerCheck(raw: [UInt8], stock: [UInt8]) async {
+    defer { CustomFirmwareController.resetPendingUpdateForTesting() }
+    guard let image = try? PreparedFirmwareImage(raw, artifact: .programmable) else {
+        expect(false, "pinned extension image accepted"); return
+    }
+    expect(image.bytes.count == 27_136 && image.sha256 == CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256,
+           "exact full-page transfer size and hash")
+    expect(Array(image.bytes.prefix(raw.count)) == raw && image.bytes.dropFirst(raw.count).allSatisfy { $0 == 0xff },
+           "accepted executable unchanged; only 78 erased-state padding bytes added")
+    expect(!CustomFirmwareController.stockUpdatesEnabled && CustomFirmwareController.extensionUpdatesEnabled,
+           "installer build cannot authorize a stock or QMK update")
+    do {
+        let link = ScriptedDeviceLink(image: image.bytes)
+        let c = makeController(link: link)
+        await waitUntil("installer identifies stock", timeout: 5) { c.stockMode == .stock && !c.keymapOperationRunning }
+        let consent = ExtensionInstallConfirmation(id: c.installationSessionID)
+        expect(consent.blockReason(currentSession: c.installationSessionID, preflight: c.extensionInstallBlockReason) == nil,
+               "confirmation carries the eligible session without a separate optional capture")
+        expect(consent.blockReason(currentSession: c.installationSessionID + 1, preflight: nil)?.contains("connection changed") == true
+               && consent.blockReason(currentSession: c.installationSessionID, preflight: "Power check failed") == "Power check failed",
+               "stale consent and failed preflight keep an explicit confirmation reason")
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable)
+        expect(link.a1Count == 0, "no session consent sends no A1")
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID - 1)
+        expect(link.a1Count == 0, "stale-session consent sends no A1")
+        var damaged = raw; damaged[100] ^= 1
+        c.flash(image: damaged, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        expect(link.a1Count == 0, "modified image sends no A1")
+        c.flash(image: stock, rebootToInstall: true)
+        expect(link.a1Count == 0, "stock reflash is not enabled by extension permission")
+        link.versionPayload = [1, 0x20, 1, 0x23]
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        await waitUntil("fresh identity failure stops installer", timeout: 5) { !c.flashInFlight }
+        expect(link.a1Count == 0, "identity is checked again before staging")
+        c.detach()
+    }
+    // Main path: the existing updater emits every frame, including full-area
+    // padding, commit, and reboot. Device byte equality is a TEST assertion.
+    do {
+        let link = ScriptedDeviceLink(image: image.bytes)
+        link.holdA2After = 0
+        let c = makeController(link: link)
+        await waitUntil("main installer identifies stock", timeout: 5) { c.stockMode == .stock && !c.keymapOperationRunning }
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        await waitUntil("extension staging is held before commit", timeout: 5) { link.a2Count == 1 }
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        if case .busy = c.phase { expect(true, "duplicate install request leaves the active exchange intact") }
+        else { expect(false, "duplicate install request interrupted staging") }
+        link.holdA2After = nil
+        link.releaseA2Hold()
+        await waitUntil("extension reaches reboot request", timeout: 20) { link.a0Seen }
+        expect(link.a1Count == 1 && link.a2Count == 848 && link.a3Count == 1 && link.stagingVerified && link.protocolErrors.isEmpty,
+               "one ordered transfer: 848 exact chunks, full-byte comparison, one commit")
+        expect(c.pendingUpdate?.imageSHA256 == image.sha256 && c.pendingUpdate?.imageSize == image.bytes.count,
+               "journal pins the actual transfer, not just the source executable")
+        let fresh = CustomFirmwareController()
+        expect(fresh.pendingUpdate == c.pendingUpdate && fresh.extensionInstallBlockReason != nil,
+               "relaunch retains installation uncertainty and blocks another flash")
+    }
+    // Key failure: the device receives A3 but its reply is lost. Never retry,
+    // reboot, or erase the commit-unknown journal after a reconnect.
+    do {
+        let link = ScriptedDeviceLink(image: image.bytes)
+        link.dropA3ReplyOnce = true
+        let c = makeController(link: link)
+        await waitUntil("lost-ack installer identifies stock", timeout: 5) { c.stockMode == .stock && !c.keymapOperationRunning }
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        await waitUntil("lost extension commit reply stops", timeout: 20) { link.a3Count == 1 && !c.flashInFlight }
+        expect(c.pendingUpdate?.outcome == .commitUnknown && !link.a0Seen && link.a3Count == 1,
+               "lost A3 reply preserves uncertainty, sends no reboot, and has no retry")
+        expect(CustomFirmwareController().pendingUpdate == c.pendingUpdate,
+               "extension commit-unknown record survives relaunch")
+        c.flash(image: raw, rebootToInstall: true, artifact: .programmable, authorizedSession: c.installationSessionID)
+        expect(link.a1Count == 1, "an uncertain installation cannot start another transaction")
+    }
+    print("Extension installer checks: \(checkFailures) failures. Software model only, not physical flash proof.")
+}
+#endif

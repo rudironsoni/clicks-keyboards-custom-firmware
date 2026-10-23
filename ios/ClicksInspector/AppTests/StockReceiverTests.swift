@@ -2,6 +2,15 @@ import XCTest
 @testable import ClicksInspector
 
 final class StockReceiverTests: XCTestCase {
+    @MainActor func testStockVersionAfterCoalescedNotification() async {
+        let inspector = AccessoryInspector()
+        inspector.simulateVersionResponse([4, 4, 1, 0, 8, 2, 3, 0, 1, 0x20, 1, 0x22])
+        XCTAssertTrue(inspector.stockVersionVerified)
+        XCTAssertEqual(inspector.readState, "Completed")
+        inspector.background()
+        await inspector.stockEvidence.waitForCheckpoints()
+    }
+
     @MainActor func testExtensionOwnershipAndBackgroundCancellation() async {
         let inspector = AccessoryInspector()
         let management = SilentLink()

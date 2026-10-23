@@ -6,6 +6,7 @@ configs:
   StockFirmwareManager: release
   QMKKeymap: debug
   StockFlashTrial: release
+  ExtensionInstaller: debug
 options:
   minimumXcodeGenVersion: 2.46.0
   deploymentTarget:
@@ -38,6 +39,8 @@ targets:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FIRMWARE_MANAGER"
         StockFlashTrial:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FLASH_TRIAL STOCK_FIRMWARE_MANAGER"
+        ExtensionInstaller:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) EXTENSION_INSTALLER"
         QMKKeymap:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) QMK_RAM_KEYMAP"
           SWIFT_OBJC_BRIDGING_HEADER: "Tests/QMKBridge.h"

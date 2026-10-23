@@ -208,10 +208,14 @@ final class StockExtensionSession {
             let reply = try await transfer(request)
             try Task.checkCancellation()
             guard current == epoch else { throw StockExtensionError.disconnected }
+            // Stock rejects unknown commands with a short reply, without an
+            // extension nonce/header. Treat this as rejection, never identity.
+            guard (4...36).contains(reply.count), Int(reply[0]) == reply.count,
+                  Array(reply[1..<3]) == [2, 0x94] else { throw StockExtensionError.framing }
+            guard reply[3] == 0 else { throw StockExtensionError.rejected(reply[3]) }
             guard (12...36).contains(reply.count), Int(reply[0]) == reply.count,
                   Array(reply[1..<3]) == [2,0x94], reply[4] == 1, reply[5] == op,
                   Array(reply[6..<10]) == token else { throw StockExtensionError.framing }
-            guard reply[3] == 0 else { throw StockExtensionError.rejected(reply[3]) }
             guard op < 2 || reply.count == 12 else { throw StockExtensionError.framing }
             let next = UInt16(reply[10]) | UInt16(reply[11]) << 8
             if op != 0 {

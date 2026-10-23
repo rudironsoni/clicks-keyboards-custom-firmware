@@ -22,7 +22,7 @@ run StockTrialTests "${EVIDENCE[@]}"
 run RecorderBenchmark "${EVIDENCE[@]}"
 run ck5200_protocol_check Sources/CustomKeyboardProtocol.swift
 run StockExtensionProtocolTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StreamLink.swift
-run StockExtensionEditorTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StockExtensionProfile.swift Sources/StockExtensionController.swift Sources/V122EmulatorLink.swift
+run StockExtensionEditorTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StockExtensionProfile.swift Sources/StockExtensionController.swift Sources/V122EmulatorLink.swift Sources/KeyboardPresentation.swift Sources/KeycodeNames.swift Sources/FactoryLayout.swift
 run ck5200_layout_check "${COMMON[@]}"
 run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
 echo "RUN DiagnosticsOnlyTests (default build)"
@@ -41,6 +41,11 @@ xcrun swiftc -D STOCK_FLASH_TRIAL -module-cache-path "$BUILD/cache" "${COMMON[@]
     Tests/ck5200_flash_check.swift -o "$BUILD/flash-trial"
 "$BUILD/flash-trial" Resources/iKeyboard_CK-5200_V122_120.bin Resources/ck5200_qmk.bin
 
+echo "RUN ck5200_flash_check (ExtensionInstaller)"
+xcrun swiftc -D EXTENSION_INSTALLER -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" \
+    Tests/ck5200_flash_check.swift -o "$BUILD/extension-installer"
+"$BUILD/extension-installer" Resources/ck5200_extension.bin Resources/iKeyboard_CK-5200_V122_120.bin
+
 # Even the old write flag and the new manager configuration cannot write.
 for FLAGS in STOCK_UPDATE_AUTHORIZED STOCK_FIRMWARE_MANAGER; do
     xcrun swiftc -D "$FLAGS" -D DIAGNOSTICS_BOUNDARY_TEST -module-cache-path "$BUILD/cache" \
@@ -57,6 +62,13 @@ for MODE in 0 1 2; do
 done
 for FAULT in wrong-model interrupted expired commit-failure lost-a1 lost-a2 lost-a3 partial session-swap; do
     "$BUILD/stock-manager" 2 "$FAULT" Resources/iKeyboard_CK-5200_V122_120.bin
+done
+echo "RUN extension transfer through production C staging (modeled stock identity, not OEM installer proof)"
+xcrun swiftc -D EXTENSION_INSTALLER -module-cache-path "$BUILD/cache" \
+    -import-objc-header Tests/StockManagerBridge.h "${COMMON[@]}" "${CONTROLLER[@]}" \
+    Tests/StockManagerTests.swift "$BUILD/libStockManagerBridge.a" -o "$BUILD/extension-staging"
+for FAULT in ok unauthenticated wrong-model interrupted commit-failure lost-a1 lost-a2 lost-a3 partial session-swap; do
+    "$BUILD/extension-staging" 0 "$FAULT" Resources/ck5200_extension.bin
 done
 echo "RUN QMKProfileTests (production C handler and pinned QMK)"
 bash Tests/build-qmk-bridge.sh "$BUILD"

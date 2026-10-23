@@ -17,6 +17,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     private var checkpointTimer: Timer?
     private var firmwareSession = false
     private var extensionSession = false
+    private var identifyOnOpen = false
+    @Published private(set) var stockVersionVerified = false
     private var managementBusy: Bool {
         customFirmware.phaseIsBusy || customFirmware.flashInFlight
             || customFirmware.keymapOperationRunning || customFirmware.selfTestRunning
@@ -28,11 +30,20 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     private var customStreamLink: StreamLink?
     private var customLinkAttached = false
 
-    private func attachCustomFirmwareLink() {
+    private func attachCustomFirmwareLink(extensionFramer: KeyboardPacketFramer? = nil) {
         if extensionSession {
             let link = StreamLink(output: session?.outputStream)
             customStreamLink = link
-            Task { await extensionEditor.connect(link, emulated: false) }
+            link.onReceiverReady = { [weak self] in self?.readReadyInput() }
+            let target = session?.accessory
+            let verified = target?.modelNumber == "CK-5200" && target?.hardwareRevision == "1.2.0"
+            let framer = extensionFramer ?? KeyboardPacketFramer(maximumLength: 36)
+            Task {
+                await extensionEditor.connect(link, emulated: false, accessoryIdentityVerified: verified,
+                    incomingFramer: framer, diagnostic: { [weak self] event, bytes, detail in
+                        self?.customFirmware.recordExtensionDiagnostic(event, bytes: bytes, detail: detail)
+                    })
+            }
             return
         }
         guard firmwareSession, !stockEvidence.isRecording, !customLinkAttached else { return }
@@ -42,6 +53,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
          * streams and the read-only stock query path (review 2026-10-12). */
         let link = StreamLink(output: session?.outputStream)
         customStreamLink = link
+        link.onReceiverReady = { [weak self] in self?.readReadyInput() }
         if let accessory = session?.accessory {
             customFirmware.connectedTarget = CustomFirmwareController.ConnectedTarget(
                 model: accessory.modelNumber,
@@ -90,6 +102,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     private var timeout: Timer?
     private var readTimeout: Timer?
     private var pendingRead: PendingRead?
+    private var stockReplyFramer = KeyboardPacketFramer(maximumLength: 36)
     private var observers: [NSObjectProtocol] = []
 
     private struct PendingRead {
@@ -176,18 +189,33 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         stockEvidence.record(source: "EA", kind: "accessory-snapshot")
     }
 
-    func openSession(for accessory: EAAccessory, firmwareControls: Bool = false) {
-        openSession(for: accessory, firmwareControls: firmwareControls, extensionControls: false)
-    }
-
     var canOpenExtensionEditor: Bool {
         !managementBusy && !stockEvidence.isRecording && pendingRead == nil
             && stockSweepRemaining == 0 && !extensionEditor.busy
     }
 
-    func openExtensionSession(for accessory: EAAccessory) {
-        guard StockExtensionController.physicalCommandsAllowed, canOpenExtensionEditor else { return }
-        openSession(for: accessory, firmwareControls: false, extensionControls: true)
+    func openKeyboardSession(for accessory: EAAccessory) {
+        guard canOpenExtensionEditor,
+              StockReadPolicy.allows(StockReadCommand.version.request, model: accessory.modelNumber,
+                                    firmware: accessory.firmwareRevision, hardware: accessory.hardwareRevision) else { return }
+        openSession(for: accessory)
+        identifyOnOpen = true
+    }
+
+    func openExtensionSession(for accessory: EAAccessory, capabilityReadAuthorized: Bool) {
+        guard capabilityReadAuthorized, stockVersionVerified, canOpenExtensionEditor,
+              session?.accessory?.connectionID == accessory.connectionID,
+              accessory.modelNumber == "CK-5200", accessory.hardwareRevision == "1.2.0",
+              !extensionSession, !firmwareSession, customStreamLink == nil,
+              case .open = state else { return }
+        // Keep the verified EASession and any partial OEM notification. Reopening
+        // it here drops stream state and is not needed to send a read-only HELLO.
+        extensionSession = true
+        stockVersionVerified = false
+        let framer = stockReplyFramer
+        stockReplyFramer = KeyboardPacketFramer(maximumLength: 36)
+        log("Hand off the open stock-read session to extension capability reads")
+        attachCustomFirmwareLink(extensionFramer: framer)
     }
 
     #if targetEnvironment(simulator)
@@ -207,13 +235,13 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
     #endif
 
-    private func openSession(for accessory: EAAccessory, firmwareControls: Bool, extensionControls: Bool) {
+    func openSession(for accessory: EAAccessory, firmwareControls: Bool = false) {
         guard !managementBusy, !extensionEditor.busy,
-              !((firmwareControls || extensionControls) && stockEvidence.isRecording) else { return }
+              !(firmwareControls && stockEvidence.isRecording) else { return }
         log("User tapped Open session; connection \(accessory.connectionID)")
         closeSession(reason: "Close previous session before opening")
         firmwareSession = firmwareControls
-        extensionSession = extensionControls
+        extensionSession = false
         guard accessory.isConnected,
               EAAccessoryManager.shared().connectedAccessories.contains(where: { $0.connectionID == accessory.connectionID }) else {
             fail("Accessory is no longer connected")
@@ -248,6 +276,9 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         extensionEditor.disconnect()
         extensionSession = false
         firmwareSession = false
+        identifyOnOpen = false
+        stockVersionVerified = false
+        stockReplyFramer = KeyboardPacketFramer(maximumLength: 36)
         log(reason)
         stockEvidence.record(source: "EA", kind: "session-close", fields: ["reason": reason])
         timeout?.invalidate()
@@ -365,6 +396,11 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
         MainActor.assumeIsolated { handleStream(aStream, event: eventCode) }
     }
 
+    private func readReadyInput() {
+        guard let input = session?.inputStream, input.hasBytesAvailable else { return }
+        handleStream(input, event: .hasBytesAvailable)
+    }
+
     private func handleStream(_ stream: Stream, event: Stream.Event) {
         guard let session,
               stream === session.inputStream || stream === session.outputStream else { return }
@@ -387,12 +423,22 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                     timeout = nil
                     setState(.open(id))
                     attachCustomFirmwareLink()
+                    if identifyOnOpen {
+                        identifyOnOpen = false
+                        selectedReadCommand = .version
+                        performStockRead()
+                    }
                 } else {
                     setState(.opening(id, openedStreams: openedStreams))
                 }
             }
         }
-        if event.contains(.hasBytesAvailable), let input = stream as? InputStream {
+        if event.contains(.hasBytesAvailable), let input = stream as? InputStream, input.hasBytesAvailable {
+            // Do not discard a notification prefix before its session owner
+            // has installed a receiver. onReceiverReady drains existing input.
+            if firmwareSession || extensionSession {
+                guard customStreamLink?.onFragment != nil else { return }
+            }
             var buffer = [UInt8](repeating: 0, count: StockReadCommand.maximumResponseLength + 1)
             let maxLength = pendingRead.map {
                 min(buffer.count, max(1, $0.accumulator.remainingCapacity + 1))
@@ -409,7 +455,8 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                      * 2026-10-12). */
                     customStreamLink?.handleBytes(received)
                 } else {
-                    log("Unsolicited input received \(count) bytes; payload discarded")
+                    // Keep notification boundaries across the next read request.
+                    receiveReadFragment(received)
                 }
             } else if count < 0 {
                 let error = input.streamError as NSError?
@@ -456,18 +503,14 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
     }
 
     private func receiveReadFragment(_ fragment: [UInt8]) {
-        guard var pending = pendingRead else {
-            log("Unsolicited input received \(fragment.count) bytes; payload discarded")
-            return
-        }
-        guard pending.requestOffset == pending.command.request.count else {
-            log("Unsolicited input received \(fragment.count) bytes before full request; payload discarded")
-            failRead("Input arrived before the request was fully sent")
-            return
-        }
         log("RX \(hex(fragment))")
         do {
-            if let result = try pending.accumulator.append(fragment) {
+            let ready = pendingRead.map { $0.requestOffset == $0.command.request.count } ?? false
+            guard let packet = try stockReplyFramer.append(fragment, awaitingReply: ready), var pending = pendingRead else { return }
+            let result: StockReadResult?
+            do { result = try pending.accumulator.append(packet) }
+            catch { pendingRead = pending; throw error }
+            if let result {
                 if let id = pending.evidenceID {
                     stockEvidence.finishRead(id, outcome: "validated", response: pending.accumulator.bytes)
                 }
@@ -475,6 +518,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
                 readTimeout?.invalidate()
                 readTimeout = nil
                 lastReadResult = result.summary
+                if pending.command == .version { stockVersionVerified = true }
                 readState = "Completed"
                 log("Read completed: \(result.summary)")
                 scheduleNextStockRead()
@@ -483,8 +527,7 @@ final class AccessoryInspector: NSObject, ObservableObject, StreamDelegate {
             pendingRead = pending
             readState = "Receiving \(pending.accumulator.bytes.count)/\(pending.command.expectedResponseLength) response bytes"
         } catch {
-            pendingRead = pending // Preserve the rejected reply before failure closes the sweep.
-            failRead("Invalid \(pending.command.title) response; \(error)")
+            failRead("Invalid \(pendingRead?.command.title ?? "stock") response; \(error)")
         }
     }
 

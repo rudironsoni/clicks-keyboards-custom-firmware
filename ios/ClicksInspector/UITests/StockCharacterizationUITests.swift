@@ -8,6 +8,7 @@ final class StockCharacterizationUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments.append("--capture-stock-export")
         app.launch()
+        app.buttons["advanced.open"].tap()
         app.buttons["Stock characterization and key recorder"].tap()
         let start = app.buttons["stock.start"]
         XCTAssertTrue(start.waitForExistence(timeout: 5))

@@ -11,22 +11,75 @@ struct ClicksInspectorApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
+                if let mode = confirmationTestMode {
+                    ConfirmationView(title: "Confirmation UI test",
+                        detail: "Simulator view test only. No keyboard link or firmware operation exists.",
+                        acknowledgementRequired: "Acknowledge the test warning.",
+                        eligibility: { mode == "blocked" ? "Test preflight blocked." : nil }) {}
+                } else {
+                    StockExtensionView(inspector: inspector, editor: inspector.extensionEditor)
+                }
+            }
+            .preferredColorScheme(testAppearance)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active: inspector.foreground()
+            case .background: inspector.background()
+            case .inactive: inspector.inactive()
+            @unknown default: break
+            }
+        }
+    }
+
+    private var testAppearance: ColorScheme? {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.environment["MY_CLICKS_DARK_TEST"] == "1" ? .dark : nil
+        #else
+        nil
+        #endif
+    }
+
+    private var confirmationTestMode: String? {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.environment["FIRMWARE_CONFIRMATION_UI_TEST"]
+        #else
+        nil
+        #endif
+    }
+}
+
+struct AdvancedInspectorView: View {
+    @ObservedObject var inspector: AccessoryInspector
+    @ObservedObject var custom: CustomFirmwareController
+
+    init(inspector: AccessoryInspector) {
+        self.inspector = inspector
+        self.custom = inspector.customFirmware
+    }
+
+    private var qmkEmulatorAvailable: Bool {
+        #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
+        true
+        #else
+        false
+        #endif
+    }
+
+    var body: some View {
                 List {
                     Section("Stock evidence") {
                         NavigationLink("Stock characterization and key recorder") {
                             StockCharacterizationView(inspector: inspector)
                         }
                     }
+                    if custom.hasQMKIdentity || qmkEmulatorAvailable {
                     Section("QMK RAM profiles") {
                         NavigationLink("Edit QMK keymap and phone profiles") {
                             QMKKeymapView(custom: inspector.customFirmware, inspector: inspector)
                         }
                         .accessibilityIdentifier("qmk.open")
                     }
-                    Section("Stock-derived extension") {
-                        NavigationLink("Edit three-layer RAM map and phone profiles") {
-                            StockExtensionView(inspector: inspector, editor: inspector.extensionEditor)
-                        }.accessibilityIdentifier("extension.open")
                     }
                     Section("Session") {
                         Text("Open session uses the stock read-only path. Firmware controls require a separate session.")
@@ -101,7 +154,7 @@ struct ClicksInspectorApp: App {
                         }
                     }
                 }
-                .navigationTitle("Clicks Inspector")
+                .navigationTitle("Advanced")
                 .toolbar {
                     Button("Refresh") { inspector.refresh() }
                 }
@@ -114,16 +167,6 @@ struct ClicksInspectorApp: App {
                         UIApplication.shared.isIdleTimerDisabled = false
                     }
                 }
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active: inspector.foreground()
-            case .background: inspector.background()
-            case .inactive: inspector.inactive()
-            @unknown default: break
-            }
-        }
     }
 }
 
@@ -275,33 +318,46 @@ private struct CustomFirmwareSection: View {
     }
 }
 
-private struct ConfirmationView: View {
+struct ConfirmationView: View {
     let title: String
     let detail: String
     var acknowledgementRequired: String? = nil
+    var eligibility: () -> String? = { nil }
     let confirm: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var acknowledged = false
 
     var body: some View {
+        let blockedReason = eligibility()
+        ScrollView {
         VStack(spacing: 16) {
             Text(title).font(.headline)
             Text(detail).font(.subheadline)
             if let acknowledgement = acknowledgementRequired {
                 Toggle(acknowledgement, isOn: $acknowledged)
                     .font(.caption)
+                    .accessibilityIdentifier("firmware.risk")
+            }
+            if let blockedReason {
+                Text(blockedReason)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("firmware.blockReason")
             }
             HStack {
                 Button("Cancel") { dismiss() }
                 Button("Flash", role: .destructive) {
+                    guard eligibility() == nil, acknowledgementRequired == nil || acknowledged else { return }
                     dismiss()
                     confirm()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(acknowledgementRequired != nil && !acknowledged)
+                .disabled(blockedReason != nil || acknowledgementRequired != nil && !acknowledged)
+                .accessibilityIdentifier("firmware.confirm")
             }
         }
         .padding()
+        }
     }
 }
 

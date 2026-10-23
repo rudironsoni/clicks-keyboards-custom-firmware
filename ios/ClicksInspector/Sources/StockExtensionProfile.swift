@@ -18,6 +18,7 @@ struct StockExtensionProfile: Codable, Identifiable, Equatable {
 struct StockExtensionProfiles: Codable {
     var schemaVersion = 1
     var profiles: [StockExtensionProfile] = []
+    var draft: StockExtensionProfile?
 
     static var fileURL: URL {
         let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -34,6 +35,7 @@ struct StockExtensionProfiles: Codable {
             throw StockExtensionError.invalidRecord
         }
         try profiles.forEach { try $0.validate() }
+        try draft?.validate()
     }
 
     static func load(from url: URL) throws -> Self {

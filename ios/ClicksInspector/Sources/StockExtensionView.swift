@@ -1,136 +1,302 @@
+import ExternalAccessory
 import SwiftUI
 
+/// The product home. Diagnostics remain a separate Advanced destination.
 struct StockExtensionView: View {
     @ObservedObject var inspector: AccessoryInspector
     @ObservedObject var editor: StockExtensionController
+    @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.colorScheme) private var appearance
     @State private var layer = 0
-    @State private var position: Position?
-    @State private var profileName = ""
+    @State private var position: Int?
+    @State private var keyList = false
+    @State private var connections = false
+    @State private var systemKeys = false
+    @State private var capabilityTarget: EAAccessory?
+    @State private var confirmCapabilities = false
     #if targetEnvironment(simulator)
     @State private var emulator: V122EmulatorLink?
-    @State private var hidStatus = "No emulator HID check yet."
-    @State private var emulatorControlBusy = false
+    @State private var emulatorStatus = "V122 software model. No physical keyboard."
+    @State private var controlBusy = false
     #endif
-    private struct Position: Identifiable { let id: Int }
-    private let layers = ["Base", "Symbols", "Navigation"]
-    // Names identify physical switches by their original Base legends.
-    private let legends = ["Q","U","K","Backspace","Enter","Cons A",
-                           "W","I","D","L","V","Cons B",
-                           "E","O","F","Shift","B","Cmd",
-                           "R","P","G","Z","N","Space",
-                           "T","A","H","X","M","Ctrl",
-                           "Y","S","J","C","SYM","iOS KB"]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Stock-derived extension. Three layers, 36 positions each. RAM is lost on power loss. Phone profiles are kept.")
-                    .font(.footnote)
-                Text("Physical commands are blocked. Emulator success is not physical accessory compatibility.")
-                    .font(.footnote).foregroundStyle(.orange)
-                Text(editor.status).accessibilityIdentifier("extension.status")
-                #if targetEnvironment(simulator)
-                HStack {
-                    Button("Connect V122 emulator") { connectEmulator() }
-                        .accessibilityIdentifier("extension.connect")
-                        .disabled(editor.ownsSession || editor.busy || emulatorControlBusy || !inspector.canOpenExtensionEditor)
-                    Button("Disconnect") { inspector.closeSession(reason: "Disconnect editor emulator") }
-                        .accessibilityIdentifier("extension.disconnect")
+            VStack(alignment: .leading, spacing: 12) {
+                deviceCard
+                if textSize.isAccessibilitySize {
+                    Text(synchronization).font(.headline).accessibilityIdentifier("extension.comparison")
+                    if !applyReason.isEmpty { Text(applyReason).font(.body) }
                 }
-                #endif
-                Picker("Layer", selection: $layer) {
-                    ForEach(0..<3) { Text(layers[$0]).tag($0) }
-                }.pickerStyle(.segmented).accessibilityIdentifier("extension.layer")
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 6), spacing: 6) {
-                    ForEach(0..<36) { pos in
-                        Button { position = Position(id: pos) } label: {
-                            VStack(spacing: 3) {
-                                Text(legends[pos]).font(.caption2).lineLimit(1).minimumScaleFactor(0.5)
-                                Text(editor.draft.actions[layer * 36 + pos].label).font(.caption2).lineLimit(1).minimumScaleFactor(0.5)
-                                Text("\(pos / 6),\(pos % 6)").font(.system(size: 8)).foregroundStyle(.secondary)
-                            }.frame(maxWidth: .infinity, minHeight: 48)
-                                .background(Color.accentColor.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 5))
-                        }.buttonStyle(.plain)
-                            .accessibilityLabel("\(legends[pos]) \(editor.draft.actions[layer * 36 + pos].label)")
-                            .accessibilityIdentifier("extension.cell.\(pos)")
+                if textSize.isAccessibilitySize {
+                    Text("My Keyboard").font(.title2.bold())
+                } else {
+                    HStack {
+                        Text("My Keyboard").font(.title2.bold())
+                        Spacer()
+                        Button(keyList ? "Keyboard" : "Key list", systemImage: keyList ? "keyboard" : "list.bullet") { keyList.toggle() }
+                            .accessibilityIdentifier("keyboard.viewMode")
                     }
+                }
+                layerSelector
+                Text("Draft on iPhone").font(.subheadline).foregroundStyle(.secondary)
+                keyboard
+                profile
+                DisclosureGroup("Layer behavior in this draft") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        nativeSwitch("Use native Symbols activation", bit: 2)
+                        nativeSwitch("Use native Navigation activation", bit: 4)
+                        Toggle("Enable this map when applied", isOn: $editor.enabled)
+                        Text("Custom hold, one-shot, and toggle actions take priority over native Navigation and Symbols. These choices change only your draft.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }.padding(.top, 12)
                 }.disabled(editor.busy)
-                GroupBox("Native activation") {
-                    VStack(alignment: .leading) {
-                        nativeSwitch("Native Symbols", bit: 2)
-                        nativeSwitch("Native Navigation", bit: 4)
-                        Text("Priority: custom hold, one-shot, toggle, native Navigation, native Symbols, Base. Custom activation can target Base.")
-                            .font(.footnote)
-                    }
-                }.disabled(editor.busy)
-                Toggle("Enable RAM remapping", isOn: $editor.enabled).disabled(editor.busy)
-                Text(editor.connected ? (editor.matchesRAM ? "Draft matches verified RAM." : "Draft differs from verified RAM.") : "No verified RAM map.")
-                    .accessibilityIdentifier("extension.comparison")
-                HStack {
-                    Button("Apply draft to RAM") { Task { await editor.apply() } }
-                        .disabled(!editor.canApply || emulatorControlsBusy).accessibilityIdentifier("extension.apply")
-                    Button("Use readback") { editor.useReadback() }.disabled(editor.verified == nil || editor.busy)
-                }
-                GroupBox("Named iPhone profiles") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("Profile name", text: $profileName).textFieldStyle(.roundedBorder)
-                            .accessibilityIdentifier("extension.profileName")
-                        Button("Save draft on iPhone") { editor.saveProfile(name: profileName) }
-                            .disabled(editor.busy || !editor.storageAvailable)
-                            .accessibilityIdentifier("extension.save")
-                        ForEach(editor.profiles) { profile in
-                            Button("Load \(profile.name)") { editor.loadProfile(profile) }
-                                .disabled(editor.busy).accessibilityIdentifier("extension.profile.\(profile.name)")
-                        }
-                        Text("Loading changes the draft only. Reconnect never applies a profile. After RAM loss, load a profile and press Apply.")
-                            .font(.footnote)
-                    }
-                }
-                #if targetEnvironment(simulator)
-                GroupBox("Actual V122 execution, emulator only") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Button("Check NAV+Q Esc and SYM+E Tab") {
-                            Task {
-                                if let emulator { hidStatus = await editor.verifyEmulator(emulator) }
-                            }
-                        }.disabled(!editor.canApply || emulatorControlBusy).accessibilityIdentifier("extension.hid")
-                        Text(hidStatus).font(.footnote).accessibilityIdentifier("extension.hidStatus")
-                        Button("Lose next APPLY acknowledgement") {
-                            emulatorControlBusy = true
-                            Task {
-                                defer { emulatorControlBusy = false }
-                                do { try await emulator?.control("lose-ack"); hidStatus = "Next APPLY reply will be lost." }
-                                catch { hidStatus = "\(error)" }
-                            }
-                        }.disabled(!editor.canApply || emulatorControlBusy).accessibilityIdentifier("extension.loseAck")
-                        Button("Emulate power loss") {
-                            inspector.closeSession(reason: "Emulated RAM loss")
-                            emulatorControlBusy = true
-                            Task {
-                                defer { emulatorControlBusy = false }
-                                do { try await emulator?.control("power"); hidStatus = "RAM lost. Reconnect, load a profile, then apply explicitly." }
-                                catch { hidStatus = "\(error)" }
-                            }
-                        }.disabled(editor.busy || emulatorControlBusy).accessibilityIdentifier("extension.power")
-                    }
-                }
-                #endif
+                Text(editor.status).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("extension.status")
             }.padding()
         }
-        .navigationTitle("Extension RAM editor")
-        .sheet(item: $position) { pos in
-            StockExtensionActionView(action: editor.draft.actions[layer * 36 + pos.id], title: "\(layers[layer]) / \(legends[pos.id])") { action in
-                try editor.draft.set(action, layer: layer, row: pos.id / 6, column: pos.id % 6)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("My Clicks")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button("Connection", systemImage: "cable.connector") { connections = true }
+                    .accessibilityIdentifier("keyboard.connection")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink("Advanced", destination: AdvancedInspectorView(inspector: inspector))
+                    .accessibilityIdentifier("advanced.open")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                if !textSize.isAccessibilitySize {
+                    Text(synchronization).font(.subheadline.weight(.semibold)).accessibilityIdentifier("extension.comparison")
+                    if !applyReason.isEmpty { Text(applyReason).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                }
+                if textSize.isAccessibilitySize {
+                    VStack { saveButton; applyButton }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack { saveButton; applyButton }
+                        VStack { saveButton; applyButton }
+                    }
+                }
+            }.padding().background(.regularMaterial)
+                .accessibilityElement(children: .contain).accessibilityIdentifier("keyboard.actionBar")
+        }
+        .sheet(isPresented: $connections) { connectionSheet }
+        .sheet(isPresented: $systemKeys) { systemKeySheet }
+        .sheet(isPresented: Binding(get: { position != nil }, set: { if !$0 { position = nil } })) {
+            if let pos = position {
+                KeyActionPicker(action: editor.draft.actions[layer * 36 + pos],
+                                title: "\(KeyboardPresentation.layers[layer]) · \(KeyboardPresentation.keyName(pos))") { action in
+                    try editor.draft.set(action, layer: layer, row: pos / 6, column: pos % 6)
+                }
+            }
+        }
+        .tint(accent)
+    }
+
+    private var saveButton: some View {
+        Button { editor.saveProfile(name: editor.profileName) } label: {
+            Text(textSize.isAccessibilitySize ? "Save" : "Save on iPhone").frame(maxWidth: .infinity)
+        }
+            .buttonStyle(.bordered).controlSize(.large).frame(maxWidth: .infinity, minHeight: 44)
+            .buttonBorderShape(.roundedRectangle(radius: 12))
+            .foregroundStyle(accent).accessibilityLabel("Save on iPhone")
+            .disabled(editor.busy || !editor.storageAvailable).accessibilityIdentifier("extension.save")
+    }
+    private var accent: Color {
+        appearance == .dark ? .orange : Color(red: 0.68, green: 0.28, blue: 0)
+    }
+    private var applyButton: some View {
+        Button {
+            Task { await editor.apply() }
+        } label: {
+            Text(textSize.isAccessibilitySize ? "Apply" : editor.isEmulated ? "Apply to Emulator" : "Apply to Keyboard")
+                .frame(maxWidth: .infinity)
+        }.buttonStyle(ApplyButtonStyle(accent: accent, foreground: appearance == .dark ? .black : .white))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .disabled(!editor.canApply || emulatorBusy).accessibilityIdentifier("extension.apply")
+            .accessibilityLabel(editor.isEmulated ? "Apply to Emulator" : "Apply to Keyboard")
+            .accessibilityHint(applyReason)
+    }
+    private var synchronization: String {
+        if editor.applyUncertain { return "Apply not confirmed" }
+        if editor.connected && editor.matchesRAM { return editor.isEmulated ? "Verified in emulator" : "Verified on keyboard" }
+        return "Not synchronized"
+    }
+    private var applyReason: String {
+        if editor.applyUncertain { return "Reconnect to read actual RAM. The app will not retry this apply automatically." }
+        if editor.busy { return "Waiting for the current operation to finish." }
+        if !editor.connected {
+            if inspector.stockVersionVerified || inspector.accessories.contains(where: { $0.modelNumber == "CK-5200" && $0.firmwareRevision == "1.2.2" }) {
+                return "V122 version reported. Apply needs verified extension capabilities."
+            }
+            return "Apply needs a verified programmable extension."
+        }
+        if !editor.isEmulated && !editor.ramChangesAuthorized { return "Allow RAM changes in Connection for this session. Firmware flashing stays locked." }
+        return ""
+    }
+
+    private var deviceCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if textSize.isAccessibilitySize {
+                Label(editor.isEmulated ? "CK-5200 · V122 emulator" : "CK-5200", systemImage: "keyboard").font(.headline)
+                Text(editor.connected ? "Connected" : "Offline editing").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Image(systemName: "keyboard").foregroundStyle(accent)
+                    Text(editor.isEmulated ? "CK-5200 · V122 emulator" : "CK-5200").font(.headline)
+                    Spacer()
+                    Text(editor.connected ? "Connected" : "Offline editing").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            if editor.connected {
+                Text("Programmable extension verified. Changes apply to RAM only.").font(.subheadline)
+            } else if inspector.stockVersionVerified {
+                Text("V122 identity verified. Check programmable capabilities in Connection.").font(.subheadline)
+            } else if let accessory = inspector.accessories.first(where: { $0.modelNumber == "CK-5200" }) {
+                Text("Firmware \(accessory.firmwareRevision) reported. Open Connection to verify capabilities.").font(.subheadline)
+            } else {
+                Text("Create your layout now. Your draft stays on this iPhone.").font(.subheadline)
+            }
+        }.padding().frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    @ViewBuilder private var layerSelector: some View {
+        let picker = Picker("Edit layer", selection: $layer) {
+            ForEach(0..<3) { Text(KeyboardPresentation.layers[$0]).tag($0) }
+        }.accessibilityIdentifier("extension.layer")
+        if textSize.isAccessibilitySize { picker.pickerStyle(.menu).frame(minHeight: 44) }
+        else { picker.pickerStyle(.segmented) }
+    }
+
+    @ViewBuilder private var keyboard: some View {
+        if keyList || textSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(KeyboardPresentation.rows.indices, id: \.self) { row in
+                    ForEach(KeyboardPresentation.rows[row]) { key in keyButton(key, expanded: true) }
+                }
+            }
+        } else {
+            ScrollView(.horizontal) {
+                VStack(spacing: 6) {
+                    ForEach(KeyboardPresentation.rows.indices, id: \.self) { row in
+                        HStack(spacing: 4) {
+                            ForEach(KeyboardPresentation.rows[row]) { key in keyButton(key, expanded: false) }
+                        }
+                    }
+                }.padding(8)
+            }.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+            Text("Swipe across the keyboard, or use Key list for larger controls. Native actions can depend on keyboard settings.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        Button("About the four system keys", systemImage: "info.circle") { systemKeys = true }
+            .font(.subheadline).accessibilityIdentifier("keyboard.systemKeys")
+    }
+
+    private func keyButton(_ key: KeyboardPresentation.Key, expanded: Bool) -> some View {
+        let name = key.position.map { KeyboardPresentation.actionName(editor.draft.actions[layer * 36 + $0], layer: layer, position: $0) } ?? "Routing unverified"
+        return Button {
+            if let pos = key.position { position = pos } else { systemKeys = true }
+        } label: {
+            VStack(spacing: 3) {
+                if !expanded, let symbol = ["Globe":"globe", "Clicks":"c.circle", "Shortcuts":"square.grid.3x3.fill", "Microphone":"mic", "Shift":"shift", "Delete":"delete.left", "Return":"return"][key.id] {
+                    Image(systemName: symbol).font(.callout.weight(.semibold))
+                } else { Text(key.id).font(.callout.weight(.semibold)) }
+                if !expanded && key.position == nil {
+                    Image(systemName: "questionmark").font(.caption).foregroundStyle(.secondary)
+                } else if expanded || name != key.id { Text(name).font(expanded ? .body : .caption).foregroundStyle(.secondary).lineLimit(expanded ? nil : 2) }
+            }.frame(maxWidth: expanded ? .infinity : nil, minHeight: expanded ? 52 : 66)
+                .frame(width: expanded ? nil : 44 * key.width + 4 * (key.width - 1))
+                .padding(expanded ? 8 : 0)
+                .background(Color(uiColor: .tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+        }.buttonStyle(.plain).disabled(editor.busy)
+            .accessibilityLabel("\(key.id). \(KeyboardPresentation.layers[layer]) draft action: \(name)")
+            .accessibilityHint(key.position == nil ? "Read the unverified system-key routing before editing." : "Choose a key action.")
+            .accessibilityIdentifier(key.position.map { "extension.cell.\($0)" } ?? "keyboard.cap.\(key.id)")
+    }
+
+    private var profile: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Profile").font(.headline)
+            TextField("Layout name", text: $editor.profileName).textFieldStyle(.roundedBorder).accessibilityIdentifier("extension.profileName")
+            Text(editor.profileStatus).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("extension.profileStatus")
+            if !editor.profiles.isEmpty {
+                Menu("Load a saved profile", systemImage: "folder") {
+                    ForEach(editor.profiles) { profile in
+                        Button(profile.name) { editor.loadProfile(profile) }.accessibilityIdentifier("extension.profile.\(profile.name)")
+                    }
+                }.accessibilityIdentifier("keyboard.profiles")
+            }
+        }.padding().background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+            .disabled(editor.busy)
+    }
+
+    private var systemKeySheet: some View {
+        NavigationStack {
+            List {
+                Text("The vendor photograph verifies the position of Globe, Clicks, Shortcuts, and Microphone. This keyboard's cap-to-matrix routing for those four keys is not verified. We do not guess which system action belongs to each cap.")
+                Section("Decoded switches, not confirmed cap names") {
+                    ForEach(KeyboardPresentation.unverifiedSystemPositions, id: \.self) { pos in
+                        NavigationLink(KeyboardPresentation.keyName(pos)) {
+                            KeyActionPicker(action: editor.draft.actions[layer * 36 + pos], title: KeyboardPresentation.keyName(pos)) { action in
+                                try editor.draft.set(action, layer: layer, row: pos / 6, column: pos % 6)
+                            }
+                        }
+                    }
+                }
+            }.navigationTitle("System key routing").toolbar { Button("Done") { systemKeys = false } }
         }
     }
 
-    private var emulatorControlsBusy: Bool {
-        #if targetEnvironment(simulator)
-        emulatorControlBusy
-        #else
-        false
-        #endif
+    private var connectionSheet: some View {
+        NavigationStack {
+            List {
+                Section("Programmable firmware") {
+                    NavigationLink("Install programmable extension") {
+                        ExtensionInstallerView(inspector: inspector, custom: inspector.customFirmware)
+                    }.accessibilityIdentifier("extension.installer")
+                    Text("One firmware installation enables RAM layouts. Saving or applying a layout does not install firmware.")
+                }
+                Section("Keyboard") {
+                    Text(editor.status).accessibilityIdentifier("keyboard.connectionStatus")
+                    Text("Accessory session: \(inspector.state.description)")
+                    Text("Stock identity read: \(inspector.readState)").font(.subheadline).foregroundStyle(.secondary)
+                    ForEach(inspector.accessories.filter { $0.modelNumber == "CK-5200" }, id: \.connectionID) { accessory in
+                        Button("Open CK-5200 · \(accessory.firmwareRevision)") { inspector.openKeyboardSession(for: accessory) }
+                            .disabled(!inspector.canOpenExtensionEditor)
+                        if inspector.stockVersionVerified {
+                            Text("V122 identity verified. Stock and the extension share this version reply. Check capabilities to verify programmable support.")
+                            Button("Check installed programmable extension") { capabilityTarget = accessory; confirmCapabilities = true }
+                        }
+                    }
+                    if editor.connected && !editor.isEmulated {
+                        Toggle("Allow RAM changes for this connection", isOn: $editor.ramChangesAuthorized).disabled(editor.busy)
+                        Text("This permits keymap changes only after extension identity verification. It never permits firmware flashing. Permission resets on disconnect.")
+                    }
+                    Button("Disconnect") { inspector.closeSession(reason: "User disconnected keyboard") }.accessibilityIdentifier("extension.disconnect")
+                    Button("Copy verified keyboard map into draft") { editor.useReadback() }.disabled(editor.verified == nil || editor.busy)
+                }
+                #if targetEnvironment(simulator)
+                emulatorControls
+                #endif
+            }.navigationTitle("Connection").toolbar {
+                Button("Done") {
+                    guard !inspector.customFirmware.flashInFlight else { return }
+                    connections = false
+                }
+            }
+                .confirmationDialog("Check installed extension?", isPresented: $confirmCapabilities, titleVisibility: .visible) {
+                    Button("Read extension capabilities") {
+                        if let target = capabilityTarget { inspector.openExtensionSession(for: target, capabilityReadAuthorized: true) }
+                    }
+                } message: {
+                    Text("This reads the programmable extension identity. It does not change a keymap or flash firmware. Unmodified stock V122 will be rejected.")
+                }
+        }
     }
 
     private func nativeSwitch(_ title: String, bit: UInt8) -> some View {
@@ -138,121 +304,58 @@ struct StockExtensionView: View {
             if $0 { editor.draft.nativeMask |= bit } else { editor.draft.nativeMask &= ~bit }
         }))
     }
-
+    private var emulatorBusy: Bool {
+        #if targetEnvironment(simulator)
+        controlBusy
+        #else
+        false
+        #endif
+    }
     #if targetEnvironment(simulator)
-    private func connectEmulator() {
-        guard inspector.claimExtensionEmulator() else { return }
-        let link = V122EmulatorLink()
-        emulator = link
-        Task { await editor.connect(link, emulated: true) }
+    private var emulatorControls: some View {
+        Section("Developer emulator, no physical keyboard") {
+            Button("Connect V122 emulator") {
+                guard inspector.claimExtensionEmulator() else { return }
+                let link = V122EmulatorLink(); emulator = link
+                Task { await editor.connect(link, emulated: true) }
+            }.disabled(editor.ownsSession || editor.busy || controlBusy).accessibilityIdentifier("extension.connect")
+            Text(emulatorStatus).accessibilityIdentifier("extension.hidStatus")
+            Button("Check NAV+Q Escape and SYM+E Tab") {
+                Task { if let emulator { emulatorStatus = await editor.verifyEmulator(emulator) } }
+            }.disabled(!editor.canApply || controlBusy).accessibilityIdentifier("extension.hid")
+            Button("Lose next APPLY acknowledgement") {
+                controlBusy = true
+                Task {
+                    defer { controlBusy = false }
+                    do { try await emulator?.control("lose-ack"); emulatorStatus = "Next APPLY reply will be lost." }
+                    catch { emulatorStatus = "\(error)" }
+                }
+            }.disabled(!editor.canApply || controlBusy).accessibilityIdentifier("extension.loseAck")
+            Button("Emulate power loss") {
+                inspector.closeSession(reason: "Emulated RAM loss"); controlBusy = true
+                Task {
+                    defer { controlBusy = false }
+                    do { try await emulator?.control("power"); emulatorStatus = "RAM lost. Reconnect and apply explicitly." }
+                    catch { emulatorStatus = "\(error)" }
+                }
+            }.disabled(editor.busy || controlBusy || emulator == nil).accessibilityIdentifier("extension.power")
+        }
     }
     #endif
 }
 
-private struct StockExtensionActionView: View {
-    @Environment(\.dismiss) private var dismiss
-    @State var action: StockExtensionMap.Action
-    let title: String
-    let save: (StockExtensionMap.Action) throws -> Void
-    @State private var usage = ""
-    @State private var tapUsage = ""
-    @State private var milliseconds = ""
-    @State private var error = ""
+/// Keep disabled Apply readable instead of using the prominent style's faint tint.
+private struct ApplyButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    let accent: Color
+    let foreground: Color
 
-    var body: some View {
-        NavigationStack {
-            Form {
-                Picker("Action", selection: $action.kind) {
-                    Text("Key / shortcut / activation").tag(UInt8(0))
-                    Text("Disabled").tag(UInt8(1))
-                    Text("Transparent").tag(UInt8(2))
-                    Text("OEM native action").tag(UInt8(3))
-                }.accessibilityIdentifier("extension.kind")
-                if action.kind == 0 {
-                    Picker("Activation", selection: $action.activation) {
-                        Text("None").tag(UInt8(0))
-                        Text("Tap-hold").tag(UInt8(1))
-                        Text("Hold").tag(UInt8(2))
-                        Text("Toggle").tag(UInt8(3))
-                        Text("One-shot").tag(UInt8(4))
-                    }.accessibilityIdentifier("extension.activation")
-                    if action.activation == 0 {
-                        HStack {
-                            Button("Esc") { usage = "29" }.accessibilityIdentifier("extension.esc")
-                            Button("Tab") { usage = "2b" }.accessibilityIdentifier("extension.tab")
-                        }.buttonStyle(.bordered)
-                        TextField("HID usage in hex, 00..ff", text: $usage)
-                            .accessibilityIdentifier("extension.usage")
-                        Text("00 plus a modifier creates a modifier-only key. Use a key plus modifiers for shortcuts.").font(.footnote)
-                    } else {
-                        Picker("Target layer", selection: $action.target) {
-                            Text("Base").tag(UInt8(0)); Text("Symbols").tag(UInt8(1)); Text("Navigation").tag(UInt8(2))
-                        }
-                        if action.activation == 1 {
-                            TextField("Tap HID usage in hex", text: $tapUsage)
-                            TextField("Hold threshold in milliseconds", text: $milliseconds).keyboardType(.numberPad)
-                            Text("The target layer applies while pressed. Release before the threshold without another key to send the tap key. 0 uses 200 ms. Tap output has no modifiers.")
-                        }
-                        if action.activation == 2 { Text("Select the target while pressed. Release restores the previous layer.") }
-                        if action.activation == 3 { Text("Press to select the target. Press this activator again to remove its toggle.") }
-                        if action.activation == 4 { Text("Select the target for the next ordinary key press. Expires after 1000 ms. Native gesture keys do not consume it.") }
-                    }
-                    if action.activation == 0 {
-                        ForEach(0..<4) { index in
-                            Toggle(["Ctrl", "Shift", "Alt", "Cmd"][index], isOn: Binding(get: {
-                                action.mods & (1 << index) != 0
-                            }, set: {
-                                if $0 { action.mods |= 1 << index } else { action.mods &= ~(1 << index) }
-                            }))
-                        }
-                    }
-                }
-                Text("OEM keeps the stock action. Transparent uses Base at this position, not Symbols under Navigation. Transparent on Base and Disabled send nothing.").font(.footnote)
-                Text(error).foregroundStyle(.red)
-                Button("Save position") { commit() }.accessibilityIdentifier("extension.savePosition")
-            }.navigationTitle(title)
-                .toolbar { Button("Cancel") { dismiss() } }
-                .onAppear {
-                    usage = String(action.usage, radix: 16)
-                    tapUsage = String(action.tapUsage, radix: 16)
-                    milliseconds = String(action.tapMilliseconds)
-                }
-        }
-    }
-
-    private func commit() {
-        do {
-            var next = StockExtensionMap.Action(kind: action.kind)
-            if next.kind == 0 {
-                next.mods = action.activation == 0 ? action.mods : 0
-                next.activation = action.activation
-                if next.activation == 0 {
-                    guard let value = UInt16(usage, radix: 16), value <= 255 else { throw StockExtensionError.invalidRecord }
-                    next.usage = value
-                } else {
-                    next.target = action.target
-                    if next.activation == 1 {
-                        guard let tap = UInt16(tapUsage, radix: 16), tap <= 255,
-                              let delay = UInt16(milliseconds) else { throw StockExtensionError.invalidRecord }
-                        next.tapUsage = tap
-                        next.tapMilliseconds = delay
-                    }
-                }
-            }
-            try save(next)
-            dismiss()
-        } catch { self.error = "Invalid action. Use HID 00..ff and a threshold from 0 to 65535." }
-    }
-}
-
-extension StockExtensionMap.Action {
-    var label: String {
-        if kind == 3 { return "OEM" }
-        if kind == 2 { return "Transparent" }
-        if kind == 1 { return "Disabled" }
-        if activation != 0 { return "\(["", "Tap-hold", "Hold", "Toggle", "One-shot"][Int(activation)]) L\(target)" }
-        let key = usage == 0x29 ? "Esc" : usage == 0x2b ? "Tab" : String(format: "%02x", usage)
-        let modifiers = (0..<4).filter { mods & (1 << $0) != 0 }.map { ["Ctrl", "Shift", "Alt", "Cmd"][$0] }
-        return (modifiers + [key]).joined(separator: "+")
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? foreground : Color.primary)
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .frame(minHeight: 44)
+            .background(isEnabled ? accent : Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12))
+            .opacity(configuration.isPressed ? 0.75 : 1)
     }
 }

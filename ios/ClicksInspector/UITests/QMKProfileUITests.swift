@@ -6,6 +6,10 @@ final class QMKProfileUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["QMK_PROFILE_TEST_ID"] = UUID().uuidString
         app.launch()
+        app.buttons["advanced.open"].tap()
+        guard app.buttons["qmk.open"].waitForExistence(timeout: 3) else {
+            throw XCTSkip("QMKKeymap simulator configuration is required")
+        }
         app.buttons["qmk.open"].tap()
         guard app.buttons["qmk.connect"].waitForExistence(timeout: 3) else {
             throw XCTSkip("QMKKeymap simulator configuration is required")
@@ -37,6 +41,7 @@ final class QMKProfileUITests: XCTestCase {
         // Relaunch proves that the actual phone JSON file survives app termination.
         app.terminate()
         app.launch()
+        app.buttons["advanced.open"].tap()
         app.buttons["qmk.open"].tap()
         app.buttons["qmk.connect"].tap()
         waitForLabel(app.staticTexts["qmk.connection"], contains: "All 144")

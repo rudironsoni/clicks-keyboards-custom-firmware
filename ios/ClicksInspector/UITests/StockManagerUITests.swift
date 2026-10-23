@@ -5,6 +5,7 @@ final class StockManagerUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
+        app.buttons["advanced.open"].tap()
         let prepare = app.buttons["stockManager.prepare"]
         for _ in 0..<5 {
             if prepare.exists && prepare.isHittable { break }

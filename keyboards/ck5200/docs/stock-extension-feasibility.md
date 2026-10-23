@@ -1,7 +1,8 @@
 # CK-5200 stock-extension feasibility: interception and storage
 
-Status: **OFFLINE RESEARCH. No patched image is authorized for installation;
-the R3 recovery gate is unchanged and separate.** First increment of the
+Status: **The extension installer is enabled only in the explicit
+ExtensionInstaller app configuration, at Rudi's 2026-10-23 request.
+No agent-executed keyboard flash is authorized or performed. R3 remains unmet.** First increment of the
 "Programmable Stock Extension Feasibility" milestone (Rudi's 2026-10-21
 direction), covering interception (milestone deliverable 1). Compiled from
 the V122 disassembly (image SHA-256
@@ -14,7 +15,7 @@ The companion baseline documents are the
 arbitrary remapping; the open question is whether a stock-derived extension
 can, while preserving OEM behavior.
 
-**Current evidence: section 15.** Rudi accepted `9113dab` only as an
+**Current evidence: section 18.** Rudi accepted `9113dab` only as an
 offline correctness-and-build milestone. The OEM executable integration
 milestone remains open. Earlier measurements below describe that build.
 
@@ -748,7 +749,10 @@ must refer to the exact new commit, not these local results.
 
 ## 15. Live editor software integration
 
-Status: **local software verification passes. Hosted verification is pending.**
+Status at `cf99619`: **local software verification passed, but hosted editor verification failed before Simulator tests.**
+In iOS run `39858956521`, the main `verify` job passed. The `extension-editor`
+job failed with missing `build/stock_extension/symbols.txt`. The following
+section describes that revision. Section 16 records the correction.
 This increment does not change the extension image or authorize physical commands.
 `1cbb07a` remains the accepted offline baseline. Its iOS CI is green, not pending.
 
@@ -865,3 +869,345 @@ accepted as a replacement image. The extension BIN still has SHA-256
 real interrupt latency and SysTick coalescing, keyboard-flash persistence, and
 R3 independent recovery. Simulator success closes none of these gates.
 M4 stays closed. The vendor inquiry remains unsent. No keyboard write occurred.
+
+## 16. My Clicks product UX and separate RAM consent
+
+Status: **local editor workflow and screenshot review passed. Hosted verification is not yet run for these changes.**
+No firmware source or image change is part of this increment. No physical
+keyboard command, firmware installation, or stock settings write ran.
+
+The app opens into My Clicks, not the inspector menu. Advanced contains stock
+evidence, diagnostics, firmware controls, and QMK tools. QMK tools appear only
+for verified QMK identity or its explicit Simulator fixture.
+
+The main screen separates device identity, the phone draft, named profiles,
+and RAM synchronization. Save on iPhone and Apply stay in a bottom action bar.
+Offline editing and saving never require a keyboard. Draft changes persist in
+the existing versioned `ExtensionProfiles.json` file. Older profile libraries
+remain readable. Invalid or unknown files are preserved. Reconnect never applies.
+Native-mode switches explicitly describe the draft, not live hardware settings.
+
+The action picker has searchable Keys, Navigation, Modifiers, Shortcuts, Layers,
+and Native actions. It uses names instead of hex. Raw usages remain available
+under Advanced. Modifier actions encode modifier bits, not keyboard usage slots.
+The existing hold/toggle/one-shot/tap-hold engine contract is unchanged.
+
+### Geometry evidence and its limit
+
+The four cap rows, the Return position and width, and the bottom control order
+follow the [vendor iPhone 15 product page](https://www.clicks.tech/en/products/clicks-for-iphone-15).
+The inspected [key photograph](https://cdn.prod.website-files.com/66f575e72f06b9820f448d43/6721436d833799ec8c4f7210_Artboard%203.avif)
+has SHA-256 `4b1bbb2c00da09d78e5a4a116e7c274d40d0e080bf075f095037e1a9519a2bce`.
+The photo is reference evidence only, not a shipped app asset.
+
+The photo proves geometry, not this unit's electrical routing. Letter and
+ordinary-control routing use the V122 decode. Globe, Clicks, Shortcuts, and
+Microphone are not assigned guessed matrix positions. The UI marks them
+"Routing unverified" and exposes the four remaining decoded switches as
+System action A/B/C and Native Control. The switches at positions 5, 11, 29,
+and 35 remain editable without claiming which printed cap each belongs to.
+All 36 decoded positions are represented once. Physical cap attribution
+still needs independent evidence. Emulator success cannot establish it.
+
+Keyboard buttons retain at least 44-point widths rather than shrinking text
+to fit ten columns on a phone. The keyboard can scroll horizontally. Key list
+provides full-width controls and is automatic at accessibility text sizes.
+Labels use native fonts, meaningful VoiceOver names, and system colors for
+light/dark mode. No 8-point coordinates appear on the main keyboard.
+
+### Configuration policy is not flash policy
+
+| Operation | Policy |
+| --- | --- |
+| Edit, autosave a draft, save/load profiles | Offline, no device required |
+| Open an eligible stock keyboard | Exact known identity, automatic authorized version getter |
+| Read extension capabilities | Explicit confirmation after eligible stock identity verification |
+| Apply extension RAM map | Strict CKX1 handshake/readback plus separate per-session RAM consent |
+| Apply arbitrary mappings to unmodified V122 | Unsupported, capability identity fails before any mutation |
+| Firmware flash | Existing independent firmware controller and recovery gates, unchanged |
+
+Capability reads do not grant RAM-write permission. RAM consent does not grant
+flash permission. Session loss revokes RAM consent. No physical query or RAM
+write is authorized for the agent by this implementation task.
+
+### CI correction
+
+The macOS editor job now runs `bash stock_extension/build_extension_image.sh`
+before `python3 stock_extension/assurance/run.py`. This supplies the ELF, BIN,
+source manifest, and `symbols.txt` before the hash-bound emulator executes.
+The build and assurance sequence passes locally from a clean output directory.
+The previous outputs were preserved, not deleted. All 20 assurance cases pass
+and the extension image retains SHA-256
+`2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132`.
+
+The updated UI workflow exercises the new action catalog and main screen,
+offline save, explicit apply, exact NAV+Q Escape and SYM+E Tab reports,
+lost-ack recovery, relaunch and manual reapply after emulated RAM loss.
+It also captures dark mode with accessibility text sizes. Hosted success
+requires a new authorized publication and successful editor job, not an app
+installation or the previous main iOS job alone.
+
+Local acceptance evidence: `ios/ClicksInspector/build/my-clicks-ux-06/`.
+The complete editor/ownership workflow passed. All 11 screenshots were
+inspected, including real dark mode and maximum accessibility text size.
+The action bar remains below one third of the screen height. Save and disabled
+Apply remain readable. Status text scrolls at accessibility sizes, and the
+keyboard becomes a full-width key list. Earlier passing tests did not hide
+the rejected footer, tint, and search defects from screenshot review.
+Existing recorder, stock-manager, and QMK UI workflows also passed under
+Advanced. Their result bundles are under `my-clicks-ux-05/`; a clean
+stock-manager repeat is under `my-clicks-ux-06/`. All three recorder source
+exports exactly match their UI captures (`recorder-source-comparison.log`).
+One earlier run retained a Simulator SpringBoard crash, not an app crash.
+The stock-manager repeat passed without that attachment.
+
+## 17. Explicit extension installer, 2026-10-23
+
+Rudi requested an enabled installer with stronger checks and an explicit list
+of weak evidence. This authorizes implementing and enabling the user-operated
+flow, not an agent-executed physical flash. It does not establish R3 recovery,
+authorize arbitrary firmware, reopen M4, or replace the pinned QMK gate.
+
+### Entry and authorization
+
+In the `ExtensionInstaller` configuration, use Connection, then
+Install programmable extension. Default Debug/Release remain firmware-write
+disabled. The installer configuration cannot install official stock or QMK
+images. `StockFlashTrial` retains its separate stock-only permission.
+
+The installer reuses `CustomFirmwareController` and its existing transaction,
+reply parser, partial-write transport, durable journal, and audit log. There
+is no second updater. Opening its screen or connection never stages or flashes.
+The final confirmation requires a risk acknowledgement tied to the current
+session generation. A new session invalidates that confirmation. A fresh exact
+V122 version response is required immediately before A1.
+
+The target must report CK-5200, hardware `1.2.0`, firmware `1.2.2`, and the
+exact demonstrated stock version payload. The app must be active, the phone
+must be charging/full or have at least 50% battery, and thermal state must be
+nominal/fair. Staging checks these conditions again. The app prevents idle
+sleep and disables normal navigation/dismissal during a transfer. These
+controls cannot prevent force quit, cable removal, or power loss.
+
+### Exact artifact and transfer
+
+`Resources/ck5200_extension.bin` contains the unchanged 27,058-byte accepted
+executable, SHA-256
+`2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132`.
+Preparation validates that exact size/hash and the original reset/vector checks.
+The client adds 78 `FF` bytes, producing a 27,136-byte transfer, SHA-256
+`438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2`.
+This fills the application allocation without changing executable bytes and
+avoids an unwritten final-page tail. It does not prove the OEM copy operation.
+The per-frame boundary permits only this artifact in the installer build.
+CI compares the bundled executable against the reproducible firmware build.
+
+The transfer uses 848 ordered 32-byte data frames. The existing A1 maximum,
+exact advancing A2 offsets, exact A3 committed size, single-operation guard,
+session-generation guard, staging-only abort, and fail-closed audit remain.
+Repeated install submissions return without changing the active transaction.
+The journal records the actual padded transfer hash/size before A3. Lost or
+invalid replies stop the operation. A lost A3 reply never triggers a retry or
+A0. A reboot request and session closure never become a success claim.
+An existing extension-install record blocks another flash in this flow.
+Post-install verification still requires reconnect, stock identity, and an
+explicit extension capability/map read. No layout applies automatically.
+
+### Local verification and limits
+
+- The existing scripted updater harness checks the exact padded transfer,
+  consent, stale consent, damaged image, fresh identity, and lost A3 reply.
+- The existing production-C staging harness exercises the full-area extension
+  transfer and interruption cases. Its stock identity and installer copy are
+  explicitly modeled. It is not original V122 updater or OEM installer proof.
+- `extension-installer-ux-02/` contains a passing full editor/ownership workflow
+  in the enabled configuration and 12 screenshots. The new installer screen
+  loads the pinned artifact and stays disabled offline.
+- `extension-installer-assurance/padded-runtime-report.json` records 15 runs
+  of the exact padded image in genuine V122 execution. HID packets and coverage
+  match the accepted unpadded executable. The original 20-case assurance report
+  and unchanged firmware sources remain the baseline.
+- Default diagnostics and M4 stock-only checks remain in `test.sh`. Signed and
+  unsigned iPhone builds use normal Apple tools. Hosted CI requires publication.
+
+The full Swift suite passed in `extension-installer-swift-verified-02.log`. This
+includes ten production-C extension staging/fault cases. Those cases stop at
+staging/reboot and never use the stock-only installer copy model to claim an
+extension installation. All 37 Python tests and readiness checks also pass.
+The held-staging duplicate-submit regression passes. The installer connection
+permits only exact identity reads and the authorized transaction, not other stock getters.
+The signed `ExtensionInstaller` build is installed on Rudi's iPhone 15 Pro Max,
+bundle `com.rudironsoni.clicks-inspector`, version `0.2.0`, build `4`. Its signature,
+pinned resource, and extension-only compilation flag were checked. No agent app
+launch, physical keyboard command, or firmware flash ran. No changes were published.
+Spoken VoiceOver behavior and a physical firmware install were not tested.
+
+### Physical identity failure and thermal wording correction
+
+Rudi's phone reported `Expected at most 8 bytes, got 9`. Read-only retrieval
+of the existing app audit found `010008020300012001` and `000008020300012001`.
+The audit contained rejected identity fragments, not update commands. No commit
+journal was present. These are fragments with bytes before the version header,
+not evidence that the version reply should be length nine.
+
+The stream receiver previously discarded bytes before a request/receiver was
+ready and passed each read directly to a single-reply accumulator. The fix
+retains frame boundaries before requests, skips only recognized complete OEM
+notifications, and keeps exact reply length/type/command/status checks. One
+bounded parser now serves stock reads, firmware replies, and extension replies.
+It never skips unknown bytes to search for a plausible reply. Input is not
+consumed before the session receiver is installed. [INFERENCE] The observed
+prefixes are notification tails. The missing preceding headers prevent proving
+that interpretation from the old audit alone. A physical retry is still needed.
+
+The message telling the user to cool the phone was not a temperature reading.
+The installer now displays the exact iOS thermal-pressure category and updates
+on battery/thermal notifications. Serious, critical, and unknown states still
+block installation. Preflight logging records reported state, not temperature.
+The full Swift suite, stock-receiver/ownership app tests, editor UI workflow,
+and signed iPhone build pass. `stream-framing-fix-ux/` contains the new power
+status screenshot. No agent-executed keyboard query or physical flash ran.
+
+### Confirmation eligibility correction
+
+Rudi subsequently reached confirmation with acknowledgement on but Flash
+disabled. The UI gave no reason. The presentation used a Boolean and a separate
+optional session value, then passed a Boolean eligibility snapshot to the sheet.
+It now presents a session item directly and evaluates eligibility through a live
+callback. The callback runs again before the confirmation action. A changed
+session or failed preflight displays its reason. This does not bypass any
+controller identity, power, image, consent, or transaction check.
+
+The full Swift suite and the complete editor/ownership workflow passed in
+`confirmation-fix-swift.log` and `confirmation-fix-ux/`. The latter includes
+two view-only Simulator tests of the real confirmation component: acknowledgement
+enables Flash for eligible state, and blocked state remains disabled with a
+reason. No keyboard link exists in that fixture. Host tests separately check
+session-item eligibility. A fresh read-only phone audit confirmed no update
+transaction or commit journal before reinstalling. The signed fix is installed.
+No agent-executed keyboard query or flash ran. Physical retry remains unverified.
+
+**Low-confidence points, not closed by these tests:**
+
+1. The OEM boot-stage copy routine, destination preservation, and interrupted
+   commit/copy recovery are not observed. Independent recovery remains unproven.
+2. Stock staging exposes no demonstrated end-to-end image hash/readback. Exact
+   acknowledgements prove offsets and sizes, not byte integrity in keyboard flash.
+3. Full startup, EP0 enumeration, real iAP2 authentication, interrupt timing,
+   and electrical/power behavior are not proven by the bounded emulator.
+4. Four system-cap routes remain unverified. This affects key attribution,
+   not the transport checks. RAM layouts still need manual reapply after power loss.
+
+No percentage for physical anti-brick confidence is supported by this evidence.
+
+## 18. First user-run extension update and capability check
+
+Rudi executed one physical extension update on 2026-10-23. The agent did not
+send keyboard commands. Read-only retrieval of the phone's existing audit and
+journal is preserved under `ios/ClicksInspector/build/post-install-evidence-01/`.
+`analysis.json` verifies the captured client TX bytes and acknowledgements.
+
+Verified from that capture:
+
+- One A1 advertised `0x6A00` bytes.
+- All 848 A2 frames have sequential offsets and exact advancing acknowledgements.
+- Reconstructed client TX is 27,136 bytes, SHA-256
+  `438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2`.
+- A3 acknowledged `0x6A00`. A0 acknowledged an empty payload.
+- The durable journal remains `sentRebootPending`, with reboot requested and
+  the exact transfer hash/size. No second transaction appears in the audit.
+
+These observations do not prove destination flash contents, execution of the
+OEM copy routine, or execution of the extension. Rudi's subsequent screenshot
+shows successful stock-version reading but a failed capability check. The
+extension deliberately keeps the V122 version reply, so this does not establish
+whether unmodified stock or the extension runs. The old audit lacks the actual
+0x94 capability reply. Its framing-error message was not a valid stock diagnosis.
+
+The app correction transfers the already verified EASession and its partial
+frame state directly to the extension reader. It no longer disconnects and
+reopens just to check capabilities. The existing strict capability identity,
+nonce, generation, map, and separate RAM-consent checks remain. Short negative
+0x94 replies report rejection status. Other malformed replies remain unverified
+instead of being labeled stock. Exact extension requests, complete replies, and
+framing failures append `extension.*` events to `StockUpdateAudit.jsonl`.
+Normal OEM key notifications are not logged by this diagnostic hook.
+
+Full Swift tests and genuine V122 protocol integration pass. The seeded-framer
+test proves that a partial OEM notification survives ownership transfer. The
+complete editor/ownership UI workflow passes under `post-install-fix-ux-02/`.
+No firmware source or image changed. Before app replacement, a fresh capture
+confirmed the same single transaction and no recent firmware command. The
+signed app is installed. The journal before/after replacement matches byte-for-byte
+in `post-install-evidence-02/` and `post-install-evidence-03/`.
+
+### Captured capability rejection and offline install-path trace
+
+Rudi completed two capability reads in the diagnostic app. Preserve
+`ios/ClicksInspector/build/post-install-capability-evidence-01/` without changes.
+
+| Request | Complete reply |
+| --- | --- |
+| `0c940100547becbf00000000` | `080294ff00000000` |
+| `0c940100a60a007000000000` | `080294ff00000000` |
+
+Both requests contain protocol 1, HELLO operation 0, and a different nonzero
+nonce. Both replies reject command `0x94` with status `ff`. This is not a
+parser failure. The app closes the session after the capability check fails.
+The running firmware does not expose the expected extension capabilities.
+The closed session therefore does not by itself show a physical disconnect.
+
+Read-only offline checks reconfirmed one update transaction, 848 sequential
+chunks and acknowledgements, and the exact padded transfer hash. The journal
+matches `post-install-evidence-01/StockUpdate.json` byte-for-byte. Evidence hashes:
+
+| File in `post-install-capability-evidence-01/` | SHA-256 |
+| --- | --- |
+| `StockUpdate.json` | `0d777832ab53b8e9b795a03c18521a1252a73e65004efbf49b2bca49b615192c` |
+| `StockUpdateAudit.jsonl` | `2fbb76fe44654192d4dd17d10096d20b3c28fcf508a5e273f21ce1fd6f42b215` |
+
+The offline trace used `.stock/audit/v122.dis`. All 6,655 encoded words in its
+instruction/data listings match the pinned V122 binary. Relevant linked addresses:
+
+| Address | Verified application behavior |
+| --- | --- |
+| `0x2208–0x2218` | Companion callback passes context `0x200000AC` to dispatcher `0x3216`. |
+| `0x328A–0x32AC`, `0x37DC` | Unknown-command branch constructs `[08,02,command,FF,00,00,00,00]`, exactly matching the captured `0x94` replies. |
+| `0x38FE–0x390C` | A3 passes the four-byte image length to the partial-page writer at staging marker address `0x08008A00`. |
+| `0x3954–0x396C` | A0 sets bit 1 at context+0 and constructs `[04,02,A0,00]`. It does not copy application flash. |
+| `0x3BB4–0x3BB8`, `0x2386–0x238E` | Main loop repeatedly calls `0x39FA` with that same context. |
+| `0x39FA–0x3A1C` | Bit 0 saves the config record first and returns. The next loop can process the retained reset bit. No extra host command is required. |
+| `0x3A20–0x3A32` | Bit 1 writes `0xBEEF0080` to PFIC register `0xE000E048` and spins. |
+
+The retained OEM Android driver `p002a1.s.j` also ends with A1/A2/A3/A0.
+Its `Reboot` state sends `[02,A0]` and declares success from the transport write
+result. It does not read the A0 acknowledgement or verify the installed image.
+This corrects the earlier shorthand that OEM success required an A0 ACK.
+No additional host installation step is demonstrated by either retained path.
+
+The actual client TX equals the bundled 27,058-byte extension plus 78 `FF`
+bytes. Decoding its instruction at `0x2218` confirms a call to
+`ck_extension_command` at `0x715C`, matching `symbols.txt`. The handler in
+`ck5200_extension_shim.c` handles `0x94` directly. Its replies have at least
+12 bytes and do not use status `ff`.
+
+[INFERENCE] The observed requests reached an OEM command path instead of that
+extension handler. This is not proof that all application flash stayed stock.
+It also does not distinguish a failed copy, a partial copy, or another inactive-hook
+condition. None of those causes is established by the captured acknowledgements.
+
+The unknown boundary remains after the PFIC reset request. The stock application
+files do not contain boot-stage bytes `[0x0000,0x2000)`. No trusted staging hash,
+marker readback, destination readback, or copier execution trace is available.
+Application acceptance of `0x6A00` does not establish boot-stage acceptance of
+that length or image. Changing padding without that evidence would test a guess.
+See [the existing OEM transition analysis](../../../research_notes/CK5200%20USB%20recovery%20feasibility/memory-ownership-and-oem-transition.md#23-device-side-control-flow-and-the-exact-unknown-boundary).
+
+**Stop physical checks and update attempts.** Do not request another capability
+read to reproduce this rejection. Do not reflash, reset, power-cycle as a test,
+or clear/conclude the update journal. The next requirement is trusted evidence
+for the missing boot-stage and flash state, not another UI or firmware change.
+Rudi excludes contacting Clicks. Further investigation must use retained artifacts
+and offline execution unless he separately authorizes another route.
+No physical keyboard command, app replacement, or publication ran during the
+preceding offline trace. That trace changed no firmware, app code, or saved evidence.

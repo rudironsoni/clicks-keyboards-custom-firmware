@@ -1,30 +1,104 @@
 import CryptoKit
 import Foundation
 import OSLog
+#if canImport(UIKit)
+import UIKit
+#endif
 
-/// Read-only identity and official stock image preparation on iOS.
-/// Host tests exercise stock, QM and RS transactions with physical writes disabled.
+/// Identity, RAM maps, and image-pinned update transactions.
 @MainActor
 final class CustomFirmwareController: ObservableObject {
-    // No default iOS configuration can enable writes, including the legacy flag.
-    // Two deliberate paths exist:
-    //  - macOS host executables compiled for offline tests
-    //    (STOCK_MANAGER_OFFLINE_TESTING), which never run on a device;
-    //  - the dedicated M4 "StockFlashTrial" build configuration
-    //    (STOCK_FLASH_TRIAL), the ONLY iOS configuration that may physically
-    //    write, and only the authentic V122 stock image. See
-    //    keyboards/ck5200/docs/m4-stock-flash-trial.md for the authorization
-    //    record and the abort rules.
+    // Default builds remain write-disabled. Two explicit iOS configurations
+    // authorize separate pinned images, never arbitrary files or QMK firmware.
     #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
     static let diagnosticsOnly = false
     static let stockUpdatesEnabled = true
     #elseif STOCK_FLASH_TRIAL
     static let diagnosticsOnly = false
     static let stockUpdatesEnabled = true
+    #elseif EXTENSION_INSTALLER
+    static let diagnosticsOnly = false
+    static let stockUpdatesEnabled = false
     #else
     static let diagnosticsOnly = true
     static let stockUpdatesEnabled = false
     #endif
+
+    #if EXTENSION_INSTALLER
+    static let extensionUpdatesEnabled = true
+    #else
+    static let extensionUpdatesEnabled = false
+    #endif
+    private static var firmwareUpdatesEnabled: Bool { stockUpdatesEnabled || extensionUpdatesEnabled }
+
+    var installationSessionID: Int { sessionGeneration }
+
+    /// No cached consent survives a session change. UI confirmation captures
+    /// this session ID, and flash checks it again before starting.
+    var extensionInstallBlockReason: String? {
+        guard Self.extensionUpdatesEnabled else { return "Use the ExtensionInstaller app configuration to install." }
+        guard !journalUnreadable else { return "The saved update record is unreadable. Installation is blocked." }
+        guard pendingUpdate == nil else { return "A previous update record exists. Review it under Advanced before another attempt." }
+        guard !flashInFlight, !keymapOperationRunning, !selfTestRunning else { return "Wait for the current operation to finish." }
+        guard link != nil, !sessionNeedsReconnect, stockMode == .stock,
+              lastVersionPayload == CustomKeyboardCommand.stockVersionPayload,
+              connectedTarget == ConnectedTarget(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0") else {
+            return "Open an installer connection to CK-5200 firmware 1.2.2, hardware 1.2.0."
+        }
+        return Self.extensionPowerBlockReason
+    }
+
+    private static var extensionPowerBlockReason: String? {
+        #if canImport(UIKit)
+        guard UIApplication.shared.applicationState == .active else { return "Keep the app in the foreground." }
+        if !UIDevice.current.isBatteryMonitoringEnabled { UIDevice.current.isBatteryMonitoringEnabled = true }
+        let device = UIDevice.current
+        guard device.batteryState == .charging || device.batteryState == .full || device.batteryLevel >= 0.5 else {
+            return "Charge the iPhone to at least 50%, or connect it to power. Keep keyboard power stable."
+        }
+        return thermalBlockReason(ProcessInfo.processInfo.thermalState)
+        #else
+        return nil
+        #endif
+    }
+
+    static func thermalPressureName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: "nominal"
+        case .fair: "fair"
+        case .serious: "serious"
+        case .critical: "critical"
+        @unknown default: "unknown (\(state.rawValue))"
+        }
+    }
+
+    static func thermalBlockReason(_ state: ProcessInfo.ThermalState) -> String? {
+        guard state != .nominal && state != .fair else { return nil }
+        return "iOS reports \(thermalPressureName(state)) thermal pressure. Installation is paused. This is not a surface temperature reading."
+    }
+
+    var extensionPowerStatus: String {
+        #if canImport(UIKit)
+        if !UIDevice.current.isBatteryMonitoringEnabled { UIDevice.current.isBatteryMonitoringEnabled = true }
+        let device = UIDevice.current
+        let level = device.batteryLevel < 0 ? "unknown" : "\(Int((device.batteryLevel * 100).rounded()))%"
+        let powered = device.batteryState == .charging || device.batteryState == .full
+        return "Battery: \(level), \(powered ? "external power" : "battery power"). iOS thermal pressure: \(Self.thermalPressureName(ProcessInfo.processInfo.thermalState))."
+        #else
+        return "Host test. No physical iPhone power or thermal reading."
+        #endif
+    }
+
+    func recordInstallationPreflight() {
+        logUpdateAudit("preflight", detail: extensionPowerStatus)
+    }
+
+    func recordExtensionDiagnostic(_ event: String, bytes: [UInt8], detail: String?) {
+        logUpdateAudit("extension.\(event)", command: 0x94,
+                       request: event == "request" ? bytes : nil,
+                       reply: event == "reply" || event == "invalidFragment" ? bytes : nil,
+                       detail: detail)
+    }
 
     #if STOCK_FLASH_TRIAL
     /// True only in the dedicated M4 trial configuration. Drives the visible
@@ -46,7 +120,7 @@ final class CustomFirmwareController: ObservableObject {
     static let stockManagerEnabled = false
     #endif
 
-    @Published private(set) var preparedStock: PreparedStockImage?
+    @Published private(set) var preparedStock: PreparedFirmwareImage?
     @Published private(set) var stockPreparation = "Official image has not been checked."
     @Published private(set) var stockMode: StockFirmwareMode?
     @Published private(set) var stockObservation = "No post-update observation. Installation is unproven."
@@ -58,7 +132,7 @@ final class CustomFirmwareController: ObservableObject {
 
     func prepareStock(_ bytes: [UInt8]) {
         do {
-            preparedStock = try PreparedStockImage(bytes)
+            preparedStock = try PreparedFirmwareImage(bytes)
             stockPreparation = "Verified official CK-5200 V122: 18,648 bytes, SHA-256 \(preparedStock!.sha256). "
                 + (Self.stockFlashTrial
                    ? "Trial build: installation is enabled after the risk acknowledgement."
@@ -88,10 +162,13 @@ final class CustomFirmwareController: ObservableObject {
         }
         let command = request[1]
         if (0xa0...0xa3).contains(command) {
-            guard Self.stockUpdatesEnabled, !Self.diagnosticsOnly, let transaction,
+            guard Self.firmwareUpdatesEnabled, !Self.diagnosticsOnly, let transaction,
                   transaction.target == target, transaction.generation == sessionGeneration,
                   transaction.source == stockMode, transaction.request == request,
-                  transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256 else {
+                  (transaction.image.artifact == .stock
+                   ? Self.stockUpdatesEnabled && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256
+                   : Self.extensionUpdatesEnabled && transaction.source == .stock
+                        && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256) else {
                 throw CustomKeyboardError.diagnosticsOnly
             }
             return
@@ -115,6 +192,12 @@ final class CustomFirmwareController: ObservableObject {
         }
         if Self.keymapBuildEnabled, request == CustomKeyboardCommand.versionRequest,
            target.model == "CK-5200", target.hardwareRevision == "1.2.0" {
+            return
+        }
+        if Self.extensionUpdatesEnabled {
+            guard request == CustomKeyboardCommand.versionRequest,
+                  target.model == "CK-5200", target.firmwareRevision == "1.2.2", target.hardwareRevision == "1.2.0",
+                  !flashInFlight || transaction?.step == .begin else { throw CustomKeyboardError.diagnosticsOnly }
             return
         }
         if Self.stockManagerEnabled {
@@ -191,7 +274,7 @@ final class CustomFirmwareController: ObservableObject {
 
     private static let pendingUpdateKey = "ck5200.pendingUpdate"
     private static var journalURL: URL {
-        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
+        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
         if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
             return URL(fileURLWithPath: path)
         }
@@ -217,7 +300,7 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private static var updateAuditURL: URL {
-        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
+        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
         if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
             return URL(fileURLWithPath: path).deletingLastPathComponent()
                 .appendingPathComponent("StockUpdateAudit.jsonl")
@@ -306,6 +389,7 @@ final class CustomFirmwareController: ObservableObject {
     private let logger = Logger(subsystem: "com.rudironsoni.clicks-inspector", category: "custom")
     private var link: KeyboardPacketLink?
     private var exchange: CustomKeyboardExchange?
+    private var replyFramer = KeyboardPacketFramer(maximumLength: 15)
     private var continuation: CheckedContinuation<[UInt8], Error>?
     private var timeoutTask: Task<Void, Never>?
     private var rebootTask: Task<Void, Never>?
@@ -359,7 +443,7 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     /// Host-test hook: clear the persisted unresolved-update record.
-    #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL) && os(macOS)
+    #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
     static func resetPendingUpdateForTesting() {
         UserDefaults.standard.removeObject(forKey: pendingUpdateKey)
         try? FileManager.default.removeItem(at: journalURL)
@@ -501,6 +585,7 @@ final class CustomFirmwareController: ObservableObject {
         keymapTask = nil
         transaction = nil
         dispatchPermit = nil
+        replyFramer = KeyboardPacketFramer(maximumLength: 15)
         stockMode = nil
         lastVersionPayload = nil
         flashInFlight = false
@@ -649,7 +734,9 @@ final class CustomFirmwareController: ObservableObject {
                 if Self.keymapBuildEnabled && hasQMKIdentity {
                     identified = .customFirmware("Custom QMK firmware detected")
                 } else if payload == CustomKeyboardCommand.stockVersionPayload {
-                    identified = .stockFirmware(Self.stockFlashTrial
+                    identified = .stockFirmware(Self.extensionUpdatesEnabled
+                        ? "Stock V122 detected. The programmable extension installer is available."
+                        : Self.stockFlashTrial
                         ? "Stock V122 detected. Trial build: installation is enabled below."
                         : "Stock V122 detected. Physical installation is disabled in this configuration.")
                 } else if stockMode == .rescue {
@@ -853,12 +940,19 @@ final class CustomFirmwareController: ObservableObject {
         }
     }
 
-    /// Host-only stock transaction. Every iOS build refuses physical writes.
-    /// Exact CK-5200 hardware, recognized stock/QM/RS identity and V122 hash required.
-    func flash(image: [UInt8], rebootToInstall: Bool) {
-        guard Self.stockUpdatesEnabled else {
+    /// One updater for both explicitly enabled, hash-pinned artifacts.
+    /// The extension additionally needs current-session consent and fresh V122 identity.
+    func flash(image rawImage: [UInt8], rebootToInstall: Bool,
+               artifact: PreparedFirmwareImage.Artifact = .stock, authorizedSession: Int? = nil) {
+        guard artifact == .stock ? Self.stockUpdatesEnabled : Self.extensionUpdatesEnabled else {
             fail(CustomKeyboardError.diagnosticsOnly.description)
             return
+        }
+        // A duplicate request must not fail or cancel the active exchange.
+        guard !flashInFlight else { return }
+        if artifact == .programmable {
+            guard authorizedSession == sessionGeneration else { fail("Confirm installation for this connection first."); return }
+            if let reason = extensionInstallBlockReason { fail(reason); return }
         }
         guard link != nil else {
             fail("No connection; cannot flash")
@@ -874,7 +968,6 @@ final class CustomFirmwareController: ObservableObject {
         }
         /* Synchronous single-operation guard, before any Task is created:
          * two rapid submissions cannot both pass (review 2026-10-12). */
-        guard !flashInFlight else { return }
         flashInFlight = true
 
         /* Target identity: flashing requires the connected keyboard to be
@@ -895,14 +988,15 @@ final class CustomFirmwareController: ObservableObject {
             fail("Unrecognized firmware identity; refusing to flash.")
             return
         }
-        let prepared: PreparedStockImage
+        let prepared: PreparedFirmwareImage
         do {
-            prepared = try PreparedStockImage(image)
+            prepared = try PreparedFirmwareImage(rawImage, artifact: artifact)
         } catch {
             flashInFlight = false
-            fail("Image refused: only the bundled stock V122 artifact is accepted. \(error)")
+            fail("Image refused: only the bundled \(artifact == .stock ? "stock V122" : "programmable extension") artifact is accepted. \(error)")
             return
         }
+        let image = prepared.bytes
         let imageSHA256 = prepared.sha256
         let generation = sessionGeneration
         transaction = StockFirmwareTransaction(image: prepared, source: mode, target: target, generation: generation)
@@ -920,6 +1014,13 @@ final class CustomFirmwareController: ObservableObject {
             }
             do {
                 try requireTransaction(generation)
+                if artifact == .programmable {
+                    let fresh = try await perform(.version())
+                    try requireTransaction(generation)
+                    guard fresh == CustomKeyboardCommand.stockVersionPayload else {
+                        throw CustomKeyboardError.invalidImage("Stock identity changed before staging. No update was started.")
+                    }
+                }
                 flashingProgress = 0
                 let beginReply = try await perform(.beginUpdate(size: image.count))
                 try requireTransaction(generation)
@@ -1038,6 +1139,8 @@ final class CustomFirmwareController: ObservableObject {
               let transaction, transaction.generation == generation else {
             throw CustomKeyboardError.transportUnavailable
         }
+        if transaction.image.artifact == .programmable, pendingUpdate == nil,
+           let reason = Self.extensionPowerBlockReason { throw CustomKeyboardError.invalidImage(reason) }
     }
 
     /// Abort an in-flight STAGING transfer (A1/A2). Once A3 has been
@@ -1048,14 +1151,14 @@ final class CustomFirmwareController: ObservableObject {
     /// Staging writes only touch the keyboard's scratch area
     /// `[0x8A00,0xF500)`, so an abandoned staging session is harmless.
     func requestStagingAbort() {
-        guard Self.stockUpdatesEnabled, flashInFlight, pendingUpdate == nil else { return }
+        guard Self.firmwareUpdatesEnabled, flashInFlight, pendingUpdate == nil else { return }
         logUpdateAudit("abortRequested", detail: "staging-only abort; no commit was requested")
         operationTask?.cancel()
     }
 
     /// True while an A1/A2 staging transfer can still be safely abandoned.
     var stagingAbortAvailable: Bool {
-        Self.stockUpdatesEnabled && flashInFlight && pendingUpdate == nil
+        Self.firmwareUpdatesEnabled && flashInFlight && pendingUpdate == nil
     }
 
     /// Session closure is an observation, not evidence of installer execution.
@@ -1136,10 +1239,12 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func receive(_ fragment: [UInt8]) {
-        guard var current = exchange else { return }
-        guard let pendingContinuation = continuation else { return }
         do {
-            if let payload = try current.accumulator.append(fragment) {
+            guard let packet = try replyFramer.append(fragment, awaitingReply: exchange != nil) else { return }
+            guard var current = exchange, let pendingContinuation = continuation else {
+                throw CustomKeyboardError.invalidStreamFrame
+            }
+            if let payload = try current.accumulator.append(packet) {
                 timeoutTask?.cancel()
                 timeoutTask = nil
                 exchange = nil
