@@ -41,7 +41,7 @@ final class StockExtensionUITests: XCTestCase {
         reveal(app.buttons["installer.review"], app)
         XCTAssertFalse(app.buttons["installer.review"].isEnabled, "Offline installation must not be armed")
         capture(app, "my-clicks-extension-installer-offline")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.navigationBars["Extension installer"].buttons["Connection"].tap()
         closeConnection(app)
         app.segmentedControls["extension.layer"].buttons["Navigation"].tap()
         edit(0, action: "Escape", app)
