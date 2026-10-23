@@ -25,7 +25,7 @@ static bool finish_cb(uint32_t size, uint32_t *committed) {
 static void reboot_cb(void) { ++reboot_count; }
 
 int main(void) {
-    ck5200_update_ops_t ops = {begin_cb, write_cb, finish_cb, reboot_cb};
+    ck5200_update_ops_t ops = {begin_cb, write_cb, finish_cb, reboot_cb, NULL};
     uint8_t response[8];
 
     const uint8_t a1[] = {0x06,0xa1,0x00,0x00,0x00,0x20};
@@ -41,12 +41,13 @@ int main(void) {
     assert(ck5200_update_handle(a3, sizeof(a3), response, &ops) == 8);
     assert(memcmp(response, (uint8_t[]){0x08,0x02,0xa3,0,0,0,0,0x20}, 8) == 0);
     const uint8_t a0[] = {0x02,0xa0};
-    assert(ck5200_update_handle(a0, sizeof(a0), response, &ops) == 0);
-    assert(reboot_count == 1);
+    assert(ck5200_update_handle(a0, sizeof(a0), response, &ops) == 4);
+    assert(memcmp(response, (uint8_t[]){4,2,0xa0,0}, 4) == 0);
+    assert(reboot_count == 0); /* Transport completion, not parsing, may reset. */
 
     assert(ck5200_update_handle(a2, sizeof(a2), response, &ops) == 8);
     assert(memcmp(response, (uint8_t[]){0x08,0x02,0xa2,1,0,0,0,0x20}, 8) == 0);
-    assert(next_offset == 32 && reboot_count == 1);
+    assert(next_offset == 32 && reboot_count == 0);
 
     puts("ok");
     return 0;

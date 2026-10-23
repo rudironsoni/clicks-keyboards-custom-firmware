@@ -305,8 +305,10 @@ static bool staging_finish(uint32_t size, uint32_t *committed_size) {
     return true;
 }
 
+static bool staging_reboot_allowed(void) { return !stock_only || stock_committed; }
+
 static void staging_reboot(void) {
-    if (stock_only && !stock_committed) return;
+    if (!staging_reboot_allowed()) return;
 #ifdef CK5200_STAGING_HOST_TEST
     ++staging_host_reboots;
     return;
@@ -321,4 +323,5 @@ const ck5200_update_ops_t ck5200_staging_ops = {
     .write = staging_write,
     .finish = staging_finish,
     .reboot = staging_reboot,
+    .reboot_allowed = staging_reboot_allowed,
 };

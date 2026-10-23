@@ -15,6 +15,22 @@ RAM_BASE = 0x20000000
 RAM_LIMIT = 0x20005000
 
 
+def validate_flash_access(disassembly: str) -> None:
+    """Compiler-specific tripwire, not a proof of arbitrary C memory safety.
+
+    The pinned build inlines the flash SDK in staging_write_page. SystemInit
+    only sets flash latency. Any other flash-controller reference needs review.
+    """
+    function = ""
+    for line in disassembly.splitlines():
+        match = re.match(r"^[0-9a-f]+ <([^>]+)>:", line)
+        if match:
+            function = match.group(1)
+        if re.search(r"\blui\s+\w+,\s*0x40022\b", line):
+            if function != "SystemInit" and not re.fullmatch(r"staging_write_page(?:\.part\.\d+)?", function):
+                raise ValueError(f"unexpected flash-controller access in {function}")
+
+
 def _reset_target(instruction: int) -> int:
     if instruction & 0x7F != 0x6F:
         raise ValueError(f"first instruction is not a JAL reset jump: 0x{instruction:08x}")
@@ -116,6 +132,28 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
     if any(name not in sections for name in required_sections):
         raise ValueError("ELF is missing a required firmware section")
 
+    # Fail closed on new allocated sections or executable RAM. Empty linker
+    # placeholders (e.g. .fini) carry flags but occupy no storage.
+    allowed = {".init": ("PROGBITS", "AX"), ".vector": ("PROGBITS", "AX"),
+               ".text": ("PROGBITS", "AX"), ".data": ("PROGBITS", "WA"),
+               ".bss": ("NOBITS", "WA"), ".noinit": ("NOBITS", "WA"),
+               "._user_heap_stack": ("NOBITS", "WA")}
+    for name, kind, address, size, flags in section_rows:
+        start, length = int(address, 16), int(size, 16)
+        if "A" not in flags or not length:
+            continue
+        if name not in allowed or (kind, flags) != allowed[name]:
+            raise ValueError(f"unexpected allocated section or flags: {name} {kind} {flags}")
+        low, high = (APP_BASE, APP_LIMIT) if "X" in flags else (RAM_BASE, RAM_LIMIT)
+        if not low <= start < start + length <= high:
+            raise ValueError(f"ELF section {name} is outside its permitted region")
+
+    for name in symbols:
+        if name.startswith("FLASH_") and name != "FLASH_IRQHandler":
+            raise ValueError(f"unexpected linked flash SDK function: {name}")
+        if "wear_leveling" in name or "eeprom_driver_erase" in name:
+            raise ValueError(f"unexpected persistent EEPROM function: {name}")
+
     required_symbols = (
         "_start", "handle_reset", "_vector_base", "_data_lma", "_data_vma",
         "_edata", "_sbss", "_ebss", "_eusrstack", "_estack",
@@ -197,6 +235,10 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
     if file_size != data_size or memory_size != bss_end - data_vma:
         raise ValueError("ELF data load segment does not match startup sizes")
     for _offset, vma, lma, file_size, memory_size in load_segments:
+        if file_size > memory_size:
+            raise ValueError("ELF load segment file size exceeds memory size")
+        if file_size and not APP_BASE <= lma < lma + file_size <= min(APP_LIMIT, image_end):
+            raise ValueError("ELF load segment overlaps installer or exceeds application flash")
         if APP_BASE <= vma < APP_LIMIT:
             if vma + memory_size > APP_LIMIT or lma != vma:
                 raise ValueError("ELF flash load segment exceeds application flash")
@@ -213,6 +255,8 @@ def validate_elf(elf: pathlib.Path, data: bytes, reset: int) -> None:
         _run(_tool("objcopy"), "-O", "binary", str(elf), str(binary_from_elf))
         if binary_from_elf.read_bytes() != data:
             raise ValueError("binary does not match the ELF loadable image")
+
+    validate_flash_access(_run(_tool("objdump"), "-d", str(elf)))
 
 
 def main() -> int:
