@@ -25,6 +25,13 @@ run StockExtensionProtocolTests Sources/StockExtensionProtocol.swift Sources/Sto
 run StockExtensionEditorTests Sources/StockExtensionProtocol.swift Sources/StockExtensionTransport.swift Sources/CustomKeyboardProtocol.swift Sources/StockExtensionProfile.swift Sources/StockExtensionController.swift Sources/V122EmulatorLink.swift Sources/KeyboardPresentation.swift Sources/KeycodeNames.swift Sources/FactoryLayout.swift
 run ck5200_layout_check "${COMMON[@]}"
 run ck5200_stream_check -D STOCK_MANAGER_OFFLINE_TESTING "${COMMON[@]}" "${CONTROLLER[@]}" Sources/StreamLink.swift
+CK="$ROOT/../../keyboards/ck5200"
+python3 "$CK/tools/stock_extension_patch.py" "$ROOT/Resources/iKeyboard_CK-5200_V122_120.bin" \
+    "$BUILD/bootloader-reader.bin" "$BUILD/bootloader-reader.json" --bootloader-reader
+xcrun swiftc -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" \
+    Tests/BootloaderDumpTests.swift -o "$BUILD/bootloader-dump"
+"$BUILD/bootloader-dump" "$CK/build/stock_extension/assurance/runner" \
+    "$BUILD/bootloader-reader.bin" "$ROOT/Resources/iKeyboard_CK-5200_V122_120.bin" "$BUILD/bootloader-evidence"
 echo "RUN DiagnosticsOnlyTests (default build)"
 xcrun swiftc -D DIAGNOSTICS_BOUNDARY_TEST -module-cache-path "$BUILD/cache" "${COMMON[@]}" "${CONTROLLER[@]}" Tests/DiagnosticsOnlyTests.swift -o "$BUILD/diagnostics"
 "$BUILD/diagnostics" Resources/iKeyboard_CK-5200_V122_120.bin

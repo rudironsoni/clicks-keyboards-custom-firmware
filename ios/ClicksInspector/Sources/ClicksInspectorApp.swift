@@ -89,6 +89,20 @@ struct AdvancedInspectorView: View {
                         Button("Close session") { inspector.closeSession() }
                     }
                     CustomFirmwareSection(inspector: inspector)
+                    Section("Boot region extraction") {
+                        Text("Requires the stock-sized boot reader patch. Reads the reserved first 8 KiB twice. Original stock firmware will reject the request.")
+                        Button("Read and compare boot region") {
+                            Task { await custom.dumpBootloader() }
+                        }
+                        .disabled(custom.lastVersionPayload != CustomKeyboardCommand.stockVersionPayload
+                                  || custom.phaseIsBusy || custom.bootloaderDumpRunning)
+                        .accessibilityIdentifier("bootloader.read")
+                        if let url = custom.bootloaderDumpURL {
+                            Text("SHA-256: \(custom.bootloaderDumpSHA256)").font(.caption).textSelection(.enabled)
+                            ShareLink("Export boot region (.bin)", item: url)
+                                .accessibilityIdentifier("bootloader.export")
+                        }
+                    }
                     if inspector.customFirmware.phaseIsCustomFirmware {
                         KeyTestSection()
                         SelfTestSection(inspector: inspector)
@@ -183,7 +197,13 @@ private struct CustomFirmwareSection: View {
 
     private enum Confirmation: Identifiable {
         case restoreStock([UInt8])
-        var id: String { "restore-stock" }
+        case bootloaderReader([UInt8], Int)
+        var id: String {
+            switch self {
+            case .restoreStock: "restore-stock"
+            case .bootloaderReader: "bootloader-reader"
+            }
+        }
     }
 
     init(inspector: AccessoryInspector) {
@@ -206,10 +226,22 @@ private struct CustomFirmwareSection: View {
             }
             .accessibilityIdentifier("stockManager.prepare")
             Text(custom.stockPreparation).accessibilityIdentifier("stockManager.preparation")
+            if CustomFirmwareController.extensionUpdatesEnabled {
+                if let url = Bundle.main.url(forResource: "ck5200_bootloader_reader", withExtension: "bin"),
+                   let data = try? Data(contentsOf: url) {
+                    Button("Review boot reader installation", role: .destructive) {
+                        confirmation = .bootloaderReader([UInt8](data), custom.installationSessionID)
+                    }
+                    .disabled(custom.extensionInstallBlockReason != nil)
+                    .accessibilityIdentifier("bootloader.install")
+                }
+            }
             Text("Stock to stock: functioning updater required. QM/RS to stock: functioning authenticated application service required. Unbootable to stock: R3 unmet.")
                 .font(.caption)
             Text(CustomFirmwareController.stockFlashTrial
                  ? "Trial configuration active: installation is enabled below, only after the explicit risk acknowledgement and the reviewed procedure."
+                 : CustomFirmwareController.extensionUpdatesEnabled
+                 ? "The pinned boot reader and extension require current-session confirmation before installation."
                  : "Default configurations physically disable installation. The dedicated M4 StockFlashTrial configuration is required for the authorized trial.")
                 .font(.caption)
             switch custom.phase {
@@ -285,6 +317,10 @@ private struct CustomFirmwareSection: View {
         .sheet(item: $confirmation) { confirmation in
             let (title, detail, acknowledgement): (String, String, String?) = {
                 switch confirmation {
+                case .bootloaderReader:
+                    ("Install boot reader",
+                     "Replace the application with the pinned 18,648-byte stock-derived reader. Then reconnect and read the boot region under Advanced. Installation and hardware read access remain unverified.",
+                     "I accept that this writes application flash and can leave the keyboard unusable. Recovery is not proven.")
                 case .restoreStock(let image):
                     if CustomFirmwareController.stockFlashTrial {
                         ("Re-flash stock firmware (M4 trial)",
@@ -298,8 +334,17 @@ private struct CustomFirmwareSection: View {
                 }
             }()
             ConfirmationView(title: title, detail: detail,
-                              acknowledgementRequired: acknowledgement) {
+                              acknowledgementRequired: acknowledgement,
+                              eligibility: {
+                                  if case .bootloaderReader(_, let session) = confirmation {
+                                      return ExtensionInstallConfirmation(id: session).blockReason(
+                                          currentSession: custom.installationSessionID, preflight: custom.extensionInstallBlockReason)
+                                  }
+                                  return nil
+                              }) {
                 switch confirmation {
+                case .bootloaderReader(let image, let session):
+                    custom.flash(image: image, rebootToInstall: true, artifact: .bootloaderReader, authorizedSession: session)
                 case .restoreStock(let image):
                     custom.flash(image: image, rebootToInstall: true)
                 }

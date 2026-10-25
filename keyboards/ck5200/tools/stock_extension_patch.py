@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 
 BASE = 0x2000
@@ -103,6 +104,8 @@ def main() -> int:
     parser.add_argument("--command-target", type=lambda s: int(s, 0))
     parser.add_argument("--usb-reset-target", type=lambda s: int(s, 0))
     parser.add_argument("--pwm-target", type=lambda s: int(s, 0))
+    parser.add_argument("--bootloader-reader", action="store_true",
+                        help="replace only the stock checksum handler with a bounded read command")
     args = parser.parse_args()
 
     data = args.image.read_bytes()
@@ -110,6 +113,33 @@ def main() -> int:
     # from a patched artifact whose per-site words are verified instead.
     if not args.reverse:
         check_image(data)
+    if args.bootloader_reader:
+        if args.reverse or any((args.startup_target, args.tick_target, args.layer_target,
+                args.companion_target, args.hid_target, args.command_target, args.usb_reset_target, args.pwm_target)):
+            parser.error("bootloader reader cannot be combined with extension hooks or reversal")
+        root = pathlib.Path(__file__).resolve().parents[1]
+        toolchain = sorted(root.glob(".toolchains/xpack-riscv-none-elf-gcc-*/bin"))[0]
+        source = root / "stock_extension/ck5200_bootloader_reader.S"
+        elf = args.out.with_suffix(".elf")
+        binary = args.out.with_suffix(".reader.bin")
+        subprocess.run([str(toolchain / "riscv-none-elf-gcc"), "-march=rv32imac_zicsr",
+            "-mabi=ilp32", "-mno-relax", "-nostdlib", "-Wl,--no-relax,-Ttext=0x335e,-e,bootloader_reader",
+            str(source), "-o", str(elf)], check=True)
+        subprocess.run([str(toolchain / "riscv-none-elf-objcopy"), "-O", "binary", str(elf), str(binary)], check=True)
+        reader = binary.read_bytes()
+        if len(reader) > 0xA4 or len(reader) % 2:
+            raise ValueError(f"reader does not fit stock handler: {len(reader)} bytes")
+        result = data[:0x135E] + reader + b"\x01\x00" * ((0xA4-len(reader))//2) + data[0x1402:]
+        assert len(result) == len(data) == 18648
+        args.out.write_bytes(result)
+        manifest = {"mode": "bootloader-reader", "source_sha256": IMAGE_SHA256,
+            "result_sha256": hashlib.sha256(result).hexdigest(), "image_bytes":len(result),
+            "reader_bytes":len(reader), "replaced_linked_range":[0x335E,0x3402],
+            "read_range":[0x08000000,0x08002000], "source_sha256_assembly":hashlib.sha256(source.read_bytes()).hexdigest(),
+            "authorization":"Offline artifact. Installation and hardware read access are unverified."}
+        args.manifest.write_text(json.dumps(manifest,indent=2)+"\n")
+        print(json.dumps(manifest,indent=2))
+        return 0
     direction = "reverse" if args.reverse else "patch"
     targets = (args.startup_target, args.tick_target, args.layer_target,
                args.companion_target, args.hid_target, args.command_target, args.usb_reset_target, args.pwm_target)

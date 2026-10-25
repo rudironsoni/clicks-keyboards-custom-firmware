@@ -14,16 +14,20 @@ struct ExtensionInstallConfirmation: Identifiable {
 
 /// Artifact approval is separate from permission to write a physical keyboard.
 struct PreparedFirmwareImage {
-    enum Artifact { case stock, programmable }
+    enum Artifact { case stock, programmable, bootloaderReader }
     let artifact: Artifact
     let bytes: [UInt8]
     let sha256: String
 
     init(_ bytes: [UInt8], artifact: Artifact = .stock) throws {
         let hash = SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
-        let expectedSize = artifact == .stock ? 18_648 : 27_058
-        let expectedHash = artifact == .stock ? CustomKeyboardImageAuthorization.authorizedStockSHA256
-            : CustomKeyboardImageAuthorization.authorizedExtensionSHA256
+        let expectedSize = artifact == .programmable ? 27_058 : 18_648
+        let expectedHash: String
+        switch artifact {
+        case .stock: expectedHash = CustomKeyboardImageAuthorization.authorizedStockSHA256
+        case .programmable: expectedHash = CustomKeyboardImageAuthorization.authorizedExtensionSHA256
+        case .bootloaderReader: expectedHash = CustomKeyboardImageAuthorization.authorizedBootloaderReaderSHA256
+        }
         guard bytes.count == expectedSize, hash == expectedHash else {
             throw CustomKeyboardError.invalidImage("The image does not match the pinned \(artifact) artifact")
         }
@@ -34,7 +38,7 @@ struct PreparedFirmwareImage {
         self.bytes = artifact == .programmable
             ? bytes + Array(repeating: 0xff, count: CustomKeyboardCommand.maximumImageSize - bytes.count) : bytes
         sha256 = SHA256.hash(data: Data(self.bytes)).map { String(format: "%02x", $0) }.joined()
-        guard sha256 == (artifact == .stock ? expectedHash : CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256) else {
+        guard sha256 == (artifact == .programmable ? CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256 : expectedHash) else {
             throw CustomKeyboardError.invalidImage("The transfer image hash does not match")
         }
         try CustomKeyboardImageValidation.validate(image: self.bytes)

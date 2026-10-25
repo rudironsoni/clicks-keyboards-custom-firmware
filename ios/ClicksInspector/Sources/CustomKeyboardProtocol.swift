@@ -120,11 +120,12 @@ struct KeyboardInfo: Equatable {
 ///
 /// Image approval is separate from permission to send a physical update.
 /// StockFlashTrial accepts only official V122. ExtensionInstaller accepts only
-/// the pinned stock-derived extension. No configuration authorizes QMK images.
+/// the pinned stock-derived extension or boot reader. No configuration authorizes QMK images.
 enum CustomKeyboardImageAuthorization {
     static let authorizedStockSHA256 = "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
     static let authorizedExtensionSHA256 = "2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132"
     static let authorizedExtensionTransferSHA256 = "438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2"
+    static let authorizedBootloaderReaderSHA256 = "7084a2b3b4ccae594ebaef6d83b0e3ff897e5a96dc49c292222363f9e8dc3e3d"
 }
 
 /// Structural validation of a CK-5200 application image, the same checks
@@ -266,6 +267,12 @@ struct CustomKeyboardExchange {
 
     static func version() -> CustomKeyboardExchange {
         CustomKeyboardExchange(request: CustomKeyboardCommand.versionRequest, command: 0x03, expectedLength: 8)
+    }
+
+    static func bootloaderRead(offset: Int) -> CustomKeyboardExchange {
+        precondition(offset >= 0 && offset <= 0x1FF0 && offset % 16 == 0)
+        return CustomKeyboardExchange(request: [7, 8, 0x52, 0x44, UInt8(offset >> 8), UInt8(offset & 255), 16],
+                                      command: 8, expectedLength: 25)
     }
 
     static func info() -> CustomKeyboardExchange {

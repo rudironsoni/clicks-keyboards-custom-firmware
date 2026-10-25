@@ -39,7 +39,7 @@ final class CustomFirmwareController: ObservableObject {
         guard Self.extensionUpdatesEnabled else { return "Use the ExtensionInstaller app configuration to install." }
         guard !journalUnreadable else { return "The saved update record is unreadable. Installation is blocked." }
         guard pendingUpdate == nil else { return "A previous update record exists. Review it under Advanced before another attempt." }
-        guard !flashInFlight, !keymapOperationRunning, !selfTestRunning else { return "Wait for the current operation to finish." }
+        guard !flashInFlight, !keymapOperationRunning, !selfTestRunning, !bootloaderDumpRunning else { return "Wait for the current operation to finish." }
         guard link != nil, !sessionNeedsReconnect, stockMode == .stock,
               lastVersionPayload == CustomKeyboardCommand.stockVersionPayload,
               connectedTarget == ConnectedTarget(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0") else {
@@ -128,6 +128,10 @@ final class CustomFirmwareController: ObservableObject {
     private var dispatchPermit: [UInt8]?
     private var sessionGeneration = 0
     private var sessionNeedsReconnect = false
+    @Published private(set) var bootloaderDumpURL: URL?
+    @Published private(set) var bootloaderDumpSHA256 = ""
+    @Published private(set) var bootloaderDumpRunning = false
+    private var bootloaderReadOffset = 0
     private var operationTask: Task<Void, Never>?
 
     func prepareStock(_ bytes: [UInt8]) {
@@ -161,6 +165,13 @@ final class CustomFirmwareController: ObservableObject {
             throw CustomKeyboardError.transportUnavailable
         }
         let command = request[1]
+        if bootloaderDumpRunning {
+            guard target.model == "CK-5200", target.firmwareRevision == "1.2.2", target.hardwareRevision == "1.2.0",
+                  request == CustomKeyboardExchange.bootloaderRead(offset: bootloaderReadOffset).request else {
+                throw CustomKeyboardError.diagnosticsOnly
+            }
+            return
+        }
         if (0xa0...0xa3).contains(command) {
             guard Self.firmwareUpdatesEnabled, !Self.diagnosticsOnly, let transaction,
                   transaction.target == target, transaction.generation == sessionGeneration,
@@ -168,7 +179,9 @@ final class CustomFirmwareController: ObservableObject {
                   (transaction.image.artifact == .stock
                    ? Self.stockUpdatesEnabled && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256
                    : Self.extensionUpdatesEnabled && transaction.source == .stock
-                        && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256) else {
+                        && transaction.image.sha256 == (transaction.image.artifact == .programmable
+                            ? CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256
+                            : CustomKeyboardImageAuthorization.authorizedBootloaderReaderSHA256)) else {
                 throw CustomKeyboardError.diagnosticsOnly
             }
             return
@@ -389,7 +402,7 @@ final class CustomFirmwareController: ObservableObject {
     private let logger = Logger(subsystem: "com.rudironsoni.clicks-inspector", category: "custom")
     private var link: KeyboardPacketLink?
     private var exchange: CustomKeyboardExchange?
-    private var replyFramer = KeyboardPacketFramer(maximumLength: 15)
+    private var replyFramer = KeyboardPacketFramer(maximumLength: 25)
     private var continuation: CheckedContinuation<[UInt8], Error>?
     private var timeoutTask: Task<Void, Never>?
     private var rebootTask: Task<Void, Never>?
@@ -588,7 +601,7 @@ final class CustomFirmwareController: ObservableObject {
         keymapTask = nil
         transaction = nil
         dispatchPermit = nil
-        replyFramer = KeyboardPacketFramer(maximumLength: 15)
+        replyFramer = KeyboardPacketFramer(maximumLength: 25)
         stockMode = nil
         lastVersionPayload = nil
         flashInFlight = false
@@ -714,9 +727,59 @@ final class CustomFirmwareController: ObservableObject {
         identify()
     }
 
+    func dumpBootloader(in directory: URL? = nil) async {
+        guard link != nil, !flashInFlight, !keymapOperationRunning,
+              !selfTestRunning, !bootloaderDumpRunning, !sessionNeedsReconnect,
+              connectedTarget == ConnectedTarget(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0"),
+              lastVersionPayload == CustomKeyboardCommand.stockVersionPayload else { return }
+        logger.info("user requested two-pass boot-region extraction")
+        bootloaderDumpRunning = true
+        bootloaderDumpURL = nil
+        bootloaderDumpSHA256 = ""
+        defer { bootloaderDumpRunning = false }
+        do {
+            var image = [UInt8]()
+            for pass in 0..<2 {
+                for offset in stride(from: 0, to: 0x2000, by: 16) {
+                    bootloaderReadOffset = offset
+                    phase = .busy("Reading boot region, pass \(pass + 1)/2, \(offset)/8192 bytes")
+                    let payload = try await perform(.bootloaderRead(offset: offset))
+                    guard payload.count == 21,
+                          Array(payload.prefix(5)) == [0x52, 0x44, UInt8(offset >> 8), UInt8(offset & 255), 16] else {
+                        throw CustomKeyboardError.invalidImage("Boot reader identity or offset mismatch. Reconnect before retrying.")
+                    }
+                    let chunk = Array(payload.dropFirst(5))
+                    if pass == 0 { image += chunk }
+                    else if Array(image[offset..<offset+16]) != chunk {
+                        throw CustomKeyboardError.invalidImage("Boot region changed between reads at offset \(offset). No dump exported.")
+                    }
+                    logger.debug("boot-region pass \(pass + 1) offset \(offset) received 16 bytes")
+                }
+            }
+            guard image.count == 8192, !image.allSatisfy({ $0 == 0 }), !image.allSatisfy({ $0 == 255 }) else {
+                throw CustomKeyboardError.invalidImage("Boot region is blank or unreadable. No dump exported.")
+            }
+            let data = Data(image)
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let output = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("BootloaderDumps", isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let url = output.appendingPathComponent("CK-5200-boot-region-\(digest).bin")
+            try data.write(to: url, options: .atomic)
+            bootloaderDumpSHA256 = digest
+            bootloaderDumpURL = url
+            phase = .stockFirmware("Export ready. Two reads matched for all 8,192 reserved flash bytes. Bootloader contents still need analysis.")
+            logger.info("boot-region extraction complete, 8192 bytes, two passes matched")
+        } catch {
+            logger.error("boot-region extraction failed: \(String(describing: error), privacy: .public)")
+            invalidateSession(with: error)
+            fail("Boot extraction failed: \(error). The reader patch must be running; original stock firmware cannot return this dump.")
+        }
+    }
+
     func identify() {
         guard link != nil, exchange == nil, !flashInFlight, !keymapOperationRunning,
-              !selfTestRunning, !sessionNeedsReconnect else { return }
+              !selfTestRunning, !bootloaderDumpRunning, !sessionNeedsReconnect else { return }
         phase = .identifying
         keymapIsVerified = false
         plannedWrites = 0
@@ -953,7 +1016,7 @@ final class CustomFirmwareController: ObservableObject {
         }
         // A duplicate request must not fail or cancel the active exchange.
         guard !flashInFlight else { return }
-        if artifact == .programmable {
+        if artifact != .stock {
             guard authorizedSession == sessionGeneration else { fail("Confirm installation for this connection first."); return }
             if let reason = extensionInstallBlockReason { fail(reason); return }
         }
@@ -1017,7 +1080,7 @@ final class CustomFirmwareController: ObservableObject {
             }
             do {
                 try requireTransaction(generation)
-                if artifact == .programmable {
+                if artifact != .stock {
                     let fresh = try await perform(.version())
                     try requireTransaction(generation)
                     guard fresh == CustomKeyboardCommand.stockVersionPayload else {
@@ -1142,7 +1205,7 @@ final class CustomFirmwareController: ObservableObject {
               let transaction, transaction.generation == generation else {
             throw CustomKeyboardError.transportUnavailable
         }
-        if transaction.image.artifact == .programmable, pendingUpdate == nil,
+        if transaction.image.artifact != .stock, pendingUpdate == nil,
            let reason = Self.extensionPowerBlockReason { throw CustomKeyboardError.invalidImage(reason) }
     }
 

@@ -211,6 +211,15 @@ def main():
                                           ROOT / "assurance/upstream.patch"]},
               "cases": []}
     try:
+        flash_replies = []
+        for mode in ("flash-write-probe", "flash-protected-probe"):
+            path = OUT / f"{mode}.trace.jsonl"
+            command([OUT / "runner", stock, path, mode],
+                    env={**os.environ, "UBSAN_OPTIONS": "halt_on_error=1"})
+            events = [json.loads(line) for line in path.read_text().splitlines()]
+            flash_replies.append([e["hex"] for e in events if e["event"] == "stock-update-reply"])
+            report["cases"].append({"name": mode, **events[-1]})
+        assert flash_replies[0] == flash_replies[1], "protection changed stock acknowledgements"
         extension = OUT.parent / "ck5200_extension.bin"
         mutant = OUT / "no-timer-hook.bin"
         changed = bytearray(extension.read_bytes())

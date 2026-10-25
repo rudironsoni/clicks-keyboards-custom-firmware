@@ -36,6 +36,12 @@ static uint32_t min_sp = 0x20005000;
 static FILE *trace;
 static uint32_t remap_address, keymap_address;
 static bool startup_probe, receive_probe, corrupt_callback;
+static bool bootloader_server;
+static struct {
+    bool active, protected;
+    uint32_t control, address, page[64];
+    unsigned erases, programs, status_reads;
+} flash_probe;
 
 static void fail(const char *why, uint32_t value)
 {
@@ -88,6 +94,11 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
         preview_writes++;
     }
     if (n != 1 && n != 2 && n != 4) fail("unsupported width", n);
+    if (bootloader_server && !write && inside(a, n, 0x08000000, 0x08002000)) return;
+    if (flash_probe.active && (inside(a, n, 0x08008A00, 0x08010000)
+            || (n == 4 && (a == 0x40022004 || a == 0x40022024
+                || a == 0x4002200C || a == 0x40022010 || a == 0x40022014))))
+        return;
     if (inside(a, n, CHG_RAM_BASE, CHG_RAM_BASE + CHG_RAM_SIZE)) {
         if (write && pc < 0x6900 && a >= 0x200006B4 && a < 0x20002000
             && !(pc >= 0x2160 && pc < 0x2208)
@@ -119,6 +130,54 @@ void gate_access(ChgMachine *m, uint32_t a, int n, bool write, uint32_t v)
 bool gate_bus(ChgMachine *m, uint32_t a, int n, bool write, uint32_t *v)
 {
     (void)n;
+    if (bootloader_server && !write && inside(a, n, 0x08000000, 0x08002000)) {
+        *v = 0;
+        memcpy(v, m->flash + (a - CHG_FLASH_ALIAS), n);
+        return true;
+    }
+    if (flash_probe.active && inside(a, n, 0x08008A00, 0x08010000)) {
+        if (write) {
+            if (n != 4 || (a & 3) || !(flash_probe.control & 0x10000))
+                fail("unexpected flash buffer load", a);
+            flash_probe.page[(a & 255) / 4] = *v;
+        } else {
+            *v = 0;
+            memcpy(v, m->flash + (a - CHG_FLASH_ALIAS), n);
+        }
+        return true;
+    }
+    if (flash_probe.active && inside(a, n, 0x40022000, 0x40022028)) {
+        if (a == 0x4002200C && !write) {
+            *v = flash_probe.protected ? 0x10 : 0;
+            flash_probe.status_reads++;
+        } else if (a == 0x40022014) {
+            if (write) flash_probe.address = *v; else *v = flash_probe.address;
+        } else if (a == 0x40022010 && !write) {
+            *v = flash_probe.control;
+        } else if (a == 0x40022010) {
+            flash_probe.control = *v;
+            if (*v & 0x80000) memset(flash_probe.page, 0xFF, sizeof flash_probe.page);
+            if (*v & 0x40) {
+                unsigned off = flash_probe.address - CHG_FLASH_ALIAS;
+                if (!inside(flash_probe.address, 256, 0x08008A00, 0x08010000) || (off & 255))
+                    fail("flash page outside staging area", flash_probe.address);
+                if (*v & 0x20000) {
+                    flash_probe.erases++;
+                    if (!flash_probe.protected) memset(m->flash + off, 0xFF, 256);
+                } else if (*v & 0x10000) {
+                    flash_probe.programs++;
+                    if (!flash_probe.protected)
+                        for (unsigned i = 0; i < 256; i++)
+                            m->flash[off + i] &= ((uint8_t *)flash_probe.page)[i];
+                } else fail("unknown flash operation", *v);
+            }
+            flash_probe.control &= ~(0x40u | 0x40000u | 0x80000u);
+        } else if (!write || (a != 0x40022004 && a != 0x40022024)
+                   || (*v != 0x45670123 && *v != 0xCDEF89AB)) {
+            fail("unexpected flash register access", a);
+        }
+        return true;
+    }
     if (a == 0x40010400 || a == 0x40010404 || a == 0x40010408 || a == 0x4001040C) {
         unsigned i = (a - 0x40010400) / 4;
         if (write) exti[i] = *v; else *v = exti[i];
@@ -320,7 +379,7 @@ static void consume_ep3(void)
     memcpy(&len, usb_regs + 0x2C, 2);
     if (!(usb_regs[0x2E] & 3) && len) {
         bytes_event("EP3-host-consume", 0x20000294, len);
-        if (len <= sizeof(command_reply) && machine.ram[0x296] == 0x94) {
+        if (len <= sizeof(command_reply) && (bootloader_server || machine.ram[0x296] == 0x94)) {
             memcpy(command_reply, machine.ram + 0x294, len);
             command_reply_len = len;
         }
@@ -645,7 +704,11 @@ int main(int argc, char **argv)
     bool layers = argc == 6 && !strncmp(argv[5], "layers-", 7);
     bool native_active = argc == 6 && (!strcmp(argv[5], "native-active") || compatibility || mixed || layers);
     startup_probe = argc == 4 && !strcmp(argv[3], "startup-probe");
-    receive_probe = argc == 4 && (!strcmp(argv[3], "receive-probe") || !strcmp(argv[3], "receive-corrupt-callback"));
+    bootloader_server = argc == 4 && !strcmp(argv[3], "bootloader-server");
+    flash_probe.active = argc == 4 && (!strcmp(argv[3], "flash-write-probe")
+        || !strcmp(argv[3], "flash-protected-probe"));
+    flash_probe.protected = flash_probe.active && !strcmp(argv[3], "flash-protected-probe");
+    receive_probe = bootloader_server || (argc == 4 && (!strcmp(argv[3], "receive-probe") || !strcmp(argv[3], "receive-corrupt-callback")));
     corrupt_callback = receive_probe && !strcmp(argv[3], "receive-corrupt-callback");
     if (argc == 6 && !strcmp(argv[5], "delayed-host")) host_period = 17;
     real_irq = (argc == 6 && !strcmp(argv[5], "real-irq"))
@@ -683,6 +746,47 @@ int main(int argc, char **argv)
     /* Stop-before-SystemInit leaves extension init's call frame active.
      * Restore SP for the separately bounded scanner entry fixture. */
     machine.cpu.x[2] = 0x20005000;
+    if (bootloader_server)
+        for (unsigned i = 0; i < 0x2000; i++) machine.flash[i] = (i * 73) ^ (i >> 5) ^ 0xA7;
+    if (flash_probe.active) {
+        /* Functional model: operations complete immediately. Protection rejects
+         * all erase/program operations with WRPRTERR set and BUSY clear. */
+        memset(machine.flash + 0x8A00, 0xFF, 0x7600);
+        for (unsigned frame = 0; frame < 10; frame++) {
+            uint8_t *request = machine.ram + 0x2400;
+            unsigned offset = frame ? (frame - 1) * 32 : 0;
+            memset(request, 0, 38);
+            request[0] = frame && frame < 9 ? 38 : 6;
+            request[1] = frame == 0 ? 0xA1 : frame == 9 ? 0xA3 : 0xA2;
+            unsigned value = frame == 0 || frame == 9 ? 256 : offset;
+            request[2] = value >> 24; request[3] = value >> 16;
+            request[4] = value >> 8; request[5] = value;
+            if (frame && frame < 9)
+                for (unsigned i = 0; i < 32; i++) request[6 + i] = (offset + i) ^ 0x5A;
+            machine.cpu.x[12] = request[0];
+            call(0x3216, 0x200000AC, 0x20002400);
+            bytes_event("stock-update-reply", 0x200001B8, 8);
+            if (memcmp(machine.ram + 0x1B8, (uint8_t[]){8, 2, request[1], 0}, 4))
+                fail("stock update did not acknowledge", request[1]);
+        }
+        unsigned matches = 0;
+        for (unsigned i = 0; i < 256; i++)
+            matches += machine.flash[0x8A04 + i] == (uint8_t)(i ^ 0x5A);
+        uint32_t marker;
+        memcpy(&marker, machine.flash + 0x8A00, 4);
+        if (flash_probe.protected)
+            for (unsigned i = 0x8A00; i < 0x8C00; i++)
+                if (machine.flash[i] != 0xFF) fail("protected flash changed", i);
+        if ((!flash_probe.protected && (marker != 256 || matches != 256))
+            || (flash_probe.protected && marker != 0xFFFFFFFFu)
+            || flash_probe.erases != 3 || flash_probe.programs != 3 || !flash_probe.status_reads)
+            fail("flash model outcome mismatch", marker);
+        fprintf(trace, "{\"event\":\"flash-probe-summary\",\"protected\":%s,\"marker\":%u,\"matching_payload_bytes\":%u,\"erase_attempts\":%u,\"program_attempts\":%u,\"status_reads\":%u}\n",
+                flash_probe.protected ? "true" : "false", marker, matches,
+                flash_probe.erases, flash_probe.programs, flash_probe.status_reads);
+        fclose(trace);
+        return 0;
+    }
     machine.ram[0x444] = 1; /* Synthetic configured host, not enumeration. */
     if (real_irq) {
         if (machine.cpu.mtvec != 0x2007 || machine.cpu.intsyscr != 3)
