@@ -34,6 +34,9 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
     case updateRejected(at: String, status: UInt8)
     case timedOut
     case invalidImage(String)
+    case invalidProfile
+    case readbackMismatch
+    case ramWritesNotAllowed
 
     var description: String {
         switch self {
@@ -61,6 +64,12 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
             "The keyboard did not answer in time"
         case .invalidImage(let reason):
             "Firmware image rejected: \(reason)"
+        case .invalidProfile:
+            "Profile must have a name, schema version 1, and four 6x6 CK-5200 layers"
+        case .readbackMismatch:
+            "Keyboard readback does not match the requested layout"
+        case .ramWritesNotAllowed:
+            "Read the keyboard layout and enable RAM writes for this session first"
         }
     }
 }

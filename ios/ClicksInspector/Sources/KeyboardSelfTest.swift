@@ -39,8 +39,8 @@ enum KeyboardSelfTest {
         .identify,
         .readInfo,
         .verifyKeymap,
-        // Round-trip on the spare crossing (2,3): write a distinctive
-        // keycode, read it back, restore to KC_NO.
+        // Round-trip on Left Shift (2,3): write a distinctive keycode,
+        // read it back, then restore the original value (factory KC_LSFT).
         .roundTrip(layer: 0, row: 2, column: 3, keycode: 0x0014),
     ]
 
