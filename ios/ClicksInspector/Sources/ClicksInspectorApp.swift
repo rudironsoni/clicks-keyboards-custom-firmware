@@ -17,6 +17,12 @@ struct ClicksInspectorApp: App {
                             StockCharacterizationView(inspector: inspector)
                         }
                     }
+                    Section("QMK RAM profiles") {
+                        NavigationLink("Edit QMK keymap and phone profiles") {
+                            QMKKeymapView(custom: inspector.customFirmware)
+                        }
+                        .accessibilityIdentifier("qmk.open")
+                    }
                     Section("Session") {
                         Text("Open session uses the stock read-only path. Firmware controls require a separate session.")
                         Text(inspector.state.description)
@@ -25,6 +31,11 @@ struct ClicksInspectorApp: App {
                         Button("Close session") { inspector.closeSession() }
                     }
                     CustomFirmwareSection(inspector: inspector)
+                    if inspector.customFirmware.phaseIsCustomFirmware {
+                        KeyTestSection()
+                        SelfTestSection(inspector: inspector)
+                        LayoutPreviewSection(inspector: inspector)
+                    }
                     Section("Read-only stock query") {
                         Picker("Command", selection: $inspector.selectedReadCommand) {
                             ForEach(StockReadPolicy.demonstrated) { command in
@@ -161,7 +172,7 @@ private struct CustomFirmwareSection: View {
             }
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware
-            if sessionReady, !custom.phaseIsBusy {
+            if sessionReady, !custom.phaseIsBusy, CustomFirmwareController.stockUpdatesEnabled {
                 // The stock re-flash is authorized ONLY for a connected
                 // keyboard that identifies as the expected STOCK unit
                 // (review 2026-10-13, P1): the controller's gate requires
@@ -240,9 +251,11 @@ private struct ConfirmationView: View {
 }
 
 /// Layer-by-layer keymap editor for the custom firmware.
-private struct KeymapSection: View {
+private struct QMKKeymapView: View {
     @ObservedObject var custom: CustomFirmwareController
     @State private var editingCell: Cell?
+    @State private var profileName = ""
+    @FocusState private var profileNameFocused: Bool
 
     private struct Cell: Identifiable {
         let row: Int
@@ -250,14 +263,68 @@ private struct KeymapSection: View {
         var id: String { "\(row)-\(column)" }
     }
 
-    init(inspector: AccessoryInspector) {
-        self.custom = inspector.customFirmware
-    }
-
     var body: some View {
-        Section("Keymap (custom firmware)") {
-            switch custom.phase {
-            case .customFirmware:
+        List {
+            Section("Connection and permission") {
+                if !CustomFirmwareController.keymapBuildEnabled {
+                    Text("This build is diagnostics-only for keymaps. Use the QMKKeymap configuration to edit RAM.")
+                }
+                Text("Only CK-5200 hardware 1.2.0 with QM 00 01 identity can use custom commands.")
+                #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
+                Text("SIMULATOR: software keyboard fixture. This does not test USB or a physical keyboard.")
+                    .font(.caption)
+                Button("Connect simulated QMK keyboard") { connectSimulation() }
+                    .accessibilityIdentifier("qmk.connect")
+                    .disabled(custom.keymapOperationRunning)
+                Button("Simulate power loss and reconnect") { connectSimulation() }
+                    .accessibilityIdentifier("qmk.reconnect")
+                    .disabled(custom.keymapOperationRunning)
+                #endif
+                Toggle("Allow RAM writes for this session", isOn: $custom.ramWritesAllowed)
+                    .accessibilityIdentifier("qmk.permission")
+                    .disabled(!custom.hasQMKIdentity || !custom.keymapIsVerified || custom.keymapOperationRunning)
+                Text(custom.keymapIsVerified ? "All 144 keys read from keyboard RAM" : "Open a firmware-control session to read the keyboard.")
+                    .accessibilityIdentifier("qmk.connection")
+                if custom.keymapOperationRunning {
+                    ProgressView("Verified \(custom.verifiedWrites)/\(custom.plannedWrites) writes")
+                }
+                Text(custom.profileMessage).accessibilityIdentifier("qmk.status")
+                if case .failed(let message) = custom.phase { Text(message) }
+            }
+            Section("Phone profiles") {
+                TextField("Profile name", text: $profileName)
+                    .accessibilityIdentifier("qmk.profileName")
+                    .focused($profileNameFocused)
+                    .submitLabel(.done)
+                    .onSubmit { profileNameFocused = false }
+                Button("Save current layout on iPhone") {
+                    custom.saveProfile(name: profileName)
+                }
+                .accessibilityIdentifier("qmk.save")
+                .disabled(!custom.keymapIsVerified || custom.keymapOperationRunning || profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                ForEach(custom.profiles) { profile in
+                    Button {
+                        custom.selectProfile(profile.id)
+                    } label: {
+                        Label(profile.name, systemImage: custom.desiredProfile?.id == profile.id ? "checkmark.circle.fill" : "circle")
+                    }
+                    .disabled(custom.keymapOperationRunning)
+                }
+                if let profile = custom.desiredProfile {
+                    Text("Desired profile: \(profile.name). Version \(profile.schemaVersion), \(profile.layers) layers, \(profile.rows)x\(profile.columns).")
+                    if custom.keymapIsVerified {
+                        Text(custom.needsReapply ? "Keyboard RAM differs. Reapply only when you choose." : "Keyboard RAM matches the saved profile.")
+                            .accessibilityIdentifier("qmk.comparison")
+                    }
+                    Button("Reapply saved profile to RAM") { custom.applyDesiredProfile() }
+                        .accessibilityIdentifier("qmk.reapply")
+                        .disabled(!custom.canEditKeymap || !custom.needsReapply)
+                }
+                Text("Profiles are stored in QMKProfiles.json on this iPhone. RAM changes disappear when the keyboard loses power. Reconnect reads all layers and never applies a profile automatically.")
+                    .font(.caption)
+            }
+            if custom.keymapIsVerified {
+                Section("Keymap (keyboard RAM)") {
                 Picker("Layer", selection: Binding(
                     get: { custom.selectedLayer },
                     set: { custom.selectLayer($0) }
@@ -266,6 +333,8 @@ private struct KeymapSection: View {
                         Text("Layer \(layer)").tag(layer)
                     }
                 }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("qmk.layer")
                 ForEach(0..<max(custom.rows, 1), id: \.self) { row in
                     HStack(spacing: 8) {
                         ForEach(0..<max(custom.columns, 1), id: \.self) { column in
@@ -283,22 +352,31 @@ private struct KeymapSection: View {
                                 .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityIdentifier("qmk.cell.\(row).\(column)")
+                            .disabled(!custom.canEditKeymap)
                         }
                     }
                 }
-                Button("Reset keymap to factory") { custom.resetKeymap() }
-                Text("Custom X035 keymap edits are runtime-only and lost on power loss. Diagnostics builds block all writes.")
-                    .font(.caption)
-            case .idle, .identifying, .stockFirmware, .busy, .failed, .updateUnverified:
-                Text("Keymap editing is available when the custom QMK firmware is connected.")
-                    .font(.caption)
+                Button("Restore factory layout in RAM") { custom.resetKeymap() }
+                    .accessibilityIdentifier("qmk.restore")
+                    .disabled(!custom.canEditKeymap)
+                Text("Restore sends runtime command 0x93 and reads all 144 keys. It keeps your phone profiles.").font(.caption)
+                }
             }
         }
+        .navigationTitle("QMK RAM profiles")
         .sheet(item: $editingCell) { cell in
             KeymapCellEditor(custom: custom, layer: custom.selectedLayer,
                              row: cell.row, column: cell.column)
         }
     }
+
+    #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
+    private func connectSimulation() {
+        custom.connectedTarget = .init(model: "CK-5200", firmwareRevision: "QMK", hardwareRevision: "1.2.0")
+        custom.attach(SimulatedQMKLink())
+    }
+    #endif
 }
 
 private struct KeymapCellEditor: View {
@@ -310,22 +388,24 @@ private struct KeymapCellEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     private static let presets: [(String, UInt16)] = [
-        ("A", 0x04), ("0", 0x1e), ("Space", 0x2c), ("Enter", 0x28),
+        ("A", 0x04), ("0", 0x27), ("Space", 0x2c), ("Enter", 0x28),
         ("Bksp", 0x2a), ("Tab", 0x2b),
         ("Left Shift", 0xe1), ("Left Ctrl", 0xe0), ("Left Cmd", 0xe3),
         ("Up", 0x52), ("Down", 0x51), ("Left", 0x50), ("Right", 0x4f),
-        ("MO(1)", 0x5121), ("MO(2)", 0x5122), ("MO(3)", 0x5123),
+        ("MO(1)", 0x5221), ("MO(2)", 0x5222), ("MO(3)", 0x5223),
         ("OSL(1)", 0x5281),
-        ("iOS-KB (Eject)", 0x5da3),
-        ("Trans/none", 0x0000),
+        ("iOS-KB (Eject)", 0x7e42),
+        ("Transparent", 0x0001), ("No key", 0x0000),
     ]
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 16) {
             Text("Layer \(layer), row \(row), column \(column)").font(.headline)
             Text("Current: \(custom.keycode(layer: layer, row: row, column: column).map { String(format: "%04x", $0) } ?? "----")")
                 .font(.caption.monospaced())
             TextField("Keycode hex, e.g. 0021", text: $hexInput)
+                .accessibilityIdentifier("qmk.hex")
                 .textFieldStyle(.roundedBorder)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.characters)
@@ -336,6 +416,7 @@ private struct KeymapCellEditor: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("qmk.applyKey")
             .disabled(UInt16(hexInput, radix: 16) == nil)
             Divider()
             ForEach(Self.presets, id: \.1) { name, keycode in
@@ -346,6 +427,7 @@ private struct KeymapCellEditor: View {
             }
         }
         .padding()
+        }
     }
 }
 

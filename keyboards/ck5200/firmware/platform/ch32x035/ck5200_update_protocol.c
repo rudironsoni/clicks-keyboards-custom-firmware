@@ -37,8 +37,12 @@ size_t ck5200_update_handle(
     switch (command) {
         case 0xA0:
             if (request_len != 2 || !ops->reboot) return 0;
-            ops->reboot();
-            return 0;
+            if (ops->reboot_allowed && !ops->reboot_allowed()) return 0;
+            response[0] = 4;
+            response[1] = 2;
+            response[2] = command;
+            response[3] = 0;
+            return 4;
 
         case 0xA1: {
             if (request_len != 6 || !ops->begin) return 0;

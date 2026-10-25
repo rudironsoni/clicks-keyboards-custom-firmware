@@ -8,17 +8,20 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock diagnostics baseline | COMPLETE, accepted for the observed identity, stock getters, mixed-key recording, exports, and session reopening |
 | Comprehensive physical CK-5200 characterization | UNVERIFIED beyond the recorded observations; remaining gaps do not block the diagnostics baseline |
 | M2 application-level rescue | COMPLETE, accepted at `ee45b6b` after independent review as a software-only secondary mechanism. Not installed or physically verified. See [acceptance and evidence](application-rescue.md#acceptance). Does not satisfy R3. |
+| M3 first usable QMK release | Three software deliverables implemented and independently reviewed; firmware, Swift/C integration and simulator CI passed at the [recorded revisions](m3-verification.md). Candidate: 26,496 bytes, 640 bytes headroom. No physical boot or compatibility claim. |
+| M3 spare hardware path | [Procedure prepared](m3-spare-bring-up.md); no matching spare acquired or verified by this task. Restoration route not established. No physical operations authorized. |
 | R3 iPhone-only independent recovery | UNMET. USB-C/BLE-host adapter research is conceptual only. No proven rescue from an unbootable application. [Investigation](../../../reports/CK5200%20USB%20recovery%20feasibility.md). |
 | Custom firmware flashing | NO-GO, no custom image authorized |
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
+| QMKKeymap iOS configuration | Separate RAM-keymap permission, limited to exact CK-5200 hardware 1.2.0 and QM 00 01 identity, with explicit per-session write consent. A0–A3 remain blocked. No physical use authorized by M3. |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
-| M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
+| M3 verified stock firmware manager | Implemented on `main`; physical firmware updates remain disabled. [Readiness, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
-M1, M2, and M3 are closed within their recorded scopes. The current priority is evidence-first R3 research and offline modeling.
-The completed QMK/keymap work stays on its separate unmerged PRs.
+The stock manager and QMK RAM-keymap editor use separate build configurations.
+M1, M2, and M3 are closed within their recorded scopes. R3 remains unmet.
 Rudi has ruled out buying another keyboard. No spare purchase or physical installation is part of this milestone.
 
 The custom target is CH32X035. Custom keymap storage is transient RAM and loses edits on power loss.

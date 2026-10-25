@@ -13,6 +13,7 @@ spec.loader.exec_module(m)
 
 @pytest.mark.parametrize("fault", [
     None, "missing", "initialized", "oversized", "bss-overlap", "stack-overlap", "section-overlap",
+    "executable-ram", "writable-code", "installer-overlap", "flash-overflow", "new-code",
 ])
 def test_rescue_noinit_contract(tmp_path, fault):
     image = (ROOT / "build/ck5200_qmk.bin").read_bytes()
@@ -42,6 +43,16 @@ def test_rescue_noinit_contract(tmp_path, fault):
         struct.pack_into("<I", elf, noinit + 12, m.RAM_LIMIT - 4)
     elif fault == "section-overlap":
         struct.pack_into("<I", elf, sections["._user_heap_stack"] + 12, address + 4)
+    elif fault == "executable-ram":
+        struct.pack_into("<I", elf, sections[".data"] + 8, 7)
+    elif fault == "writable-code":
+        struct.pack_into("<I", elf, sections[".text"] + 8, 7)
+    elif fault == "installer-overlap":
+        struct.pack_into("<I", elf, sections[".text"] + 12, m.APP_BASE - 4)
+    elif fault == "flash-overflow":
+        struct.pack_into("<I", elf, sections[".text"] + 20, m.MAX_IMAGE_SIZE)
+    elif fault == "new-code":
+        struct.pack_into("<I", elf, sections[".comment"] + 8, 6)
     path = tmp_path / "firmware.elf"
     path.write_bytes(elf)
     reset = m.validate_binary(image)
@@ -50,3 +61,12 @@ def test_rescue_noinit_contract(tmp_path, fault):
     else:
         with pytest.raises(ValueError, match="section|rescue request"):
             m.validate_elf(path, image, reset)
+
+
+def test_overflow_and_flash_writer_tripwires():
+    image = (ROOT / "build/ck5200_qmk.bin").read_bytes()
+    with pytest.raises(ValueError, match="image too large"):
+        m.validate_binary(image.ljust(m.MAX_IMAGE_SIZE + 1, b"\xff"))
+    m.validate_flash_access("00004c00 <staging_write_page.part.0>:\n 4c18: 400227b7 lui a5,0x40022")
+    with pytest.raises(ValueError, match="unexpected flash-controller access in keyboard_task"):
+        m.validate_flash_access("00004c00 <keyboard_task>:\n 4c18: 400227b7 lui a5,0x40022")

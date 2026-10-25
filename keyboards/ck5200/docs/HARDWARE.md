@@ -23,9 +23,9 @@ The resulting application interval is `[0x00002000, 0x00008A00)`. Flash physical
 
 [CORRECTION] A 64 KiB application-flash description is not a complete backup boundary. The [CH32V203 datasheet, table 2-1 note 1](https://cdn-learn.adafruit.com/assets/assets/000/131/418/original/CH32V203DS0.PDF?1721655401=) distinguishes the fast program area from additional flash, with 224 KiB combined. Confirm the actual part and cover its additional storage before calling a dump complete. See [RECOVERY.md](RECOVERY.md).
 
-The inherited matrix scanner uses PA0..PA5 as pull-down inputs and PB0..PB5 as selected-high outputs. The earlier agent attributed this to stock analysis, but it did not supply a capture or annotated derivation. Treat the pin map, physical key map, scan delay, diode direction, and rollover behavior as **UNVERIFIED** until checked. Do not add a guessed normal keymap.
+The scanner uses PA0..PA5 as pull-down inputs and PB0..PB5 as selected-high outputs. The [M3 stock-address audit](m3-first-boot.md#boot-and-transport-inspection) now records the V122 scanner and initialization instructions supporting that electrical indexing, and [all 36 decoded crossings](m3-first-boot.md#all-36-electrical-crossings). Physical cap-to-crossing assignments, scan timing, diode direction, and hardware rollover remain **UNVERIFIED**. The new decode does not turn historical typing observations into physical matrix confirmation.
 
-The build uses WCH D6 startup, 144 MHz HSI, and TinyUSB USBFS. Compilation checks API compatibility only. Hardware clock accuracy, interrupt nesting, scan timing, and USB operation still require board evidence and runtime tests.
+[CORRECTION] The current CH32X035 build uses the pinned X035 startup, 48 MHz HSI, and TinyUSB USBFS. The old D6/144 MHz statement described the superseded port. Host tests and compilation do not establish physical clock accuracy, interrupt timing, USB enumeration, or iPhone compatibility.
 
 ## Reproduce the static checks
 

@@ -12,14 +12,13 @@ The presumed installer region is not a proven immutable recovery service. A patc
 HTTPS inspection is stopped. The stock URL was already known. No phone settings changed, and the vendor inquiry remains unsent.
 M2 [application-level rescue](keyboards/ck5200/docs/application-rescue.md) is COMPLETE, accepted by Rudi at `ee45b6bbb2b544f19d44c036099c4af2c5aa7156` after independent review.
 Acceptance covers the software-only secondary mechanism, not physical compatibility, iPhone-operated restoration, or recovery from an unbootable application.
-M3 verified stock firmware manager is closed for software scope in this R3 investigation.
-Its historical delivery branch was `feat/verified-stock-firmware-manager`, based on `main` at `246f2b8`.
-Tested revision `a7cf3f7` passed iOS CI `38883669172` and firmware CI `38883668796`. Both independent reviews are clear.
-Unsigned app archives and hashes are published in the readiness report. Physical writes remain disabled in every iOS build.
+M3's three software deliverables are implemented and independently reviewed: frozen QMK candidate, iPhone RAM-keymap profiles, and spare-only bring-up procedure.
+See [passing CI, artifact hashes and screenshots](keyboards/ck5200/docs/m3-verification.md), [first-boot evidence](keyboards/ck5200/docs/m3-first-boot.md) and [spare procedure](keyboards/ck5200/docs/m3-spare-bring-up.md).
+Stop after these deliverables and independent review. Acquisition and any physical work require a separate decision; R3 remains unmet.
+
+The stock firmware manager is on `main`. Physical firmware updates remain disabled in every iOS build.
 See [stock manager readiness](keyboards/ck5200/docs/stock-manager-readiness.md) for implementation, verification and remaining limits.
-The QMK/keymap/spare-procedure PRs #1, #2 and #3 remain separate and unmerged. Rudi has ruled out buying a second keyboard.
-R3 remains unmet. The current task is evidence-first research and offline models on `feat/r3-usb-c-recovery-study`, based on `d981763`.
-No physical experiment or hardware implementation may start without a separate decision.
+Rudi has ruled out buying a second keyboard. No physical experiment or new milestone may start without a separate decision.
 
 - Comprehensive physical characterization remains UNVERIFIED beyond the recorded observations. Baseline collection is closed.
 - R3 independent recovery is UNMET. The Mac dispatcher depends on a running application and is not independent rescue.

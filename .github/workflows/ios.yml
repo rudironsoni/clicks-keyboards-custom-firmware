@@ -27,7 +27,7 @@ permissions:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,7 +72,16 @@ jobs:
           xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
             -scheme ClicksInspector -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+      - name: Build release diagnostics and QMK RAM iPhone configurations
+        run: |
+          set -o pipefail
+          for CONFIG in Release QMKKeymap; do
+            xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+              -scheme ClicksInspector -configuration "$CONFIG" \
+              -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+              2>&1 | tee "evidence/iphone-$CONFIG-build.log"
+          done
       - name: Test recording, export, and deletion in Simulator
         run: |
           set -o pipefail
@@ -82,6 +91,16 @@ jobs:
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
              CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
+      - name: Test QMK editing, durable profiles, reconnect, and runtime factory restore
+        run: |
+          set -o pipefail
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration QMKKeymap \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:ClicksInspectorUITests/QMKProfileUITests \
+            -parallel-testing-enabled NO -resultBundlePath evidence/qmk-ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/qmk-ui-tests.log
       - name: Build and package the write-disabled stock manager
         run: |
           set -o pipefail
@@ -105,6 +124,12 @@ jobs:
               "evidence/ClicksInspector-StockFirmwareManager-$SDK.zip"
           done
           shasum -a 256 evidence/ClicksInspector-StockFirmwareManager-*.zip > evidence/app-SHA256SUMS
+      - name: Export simulator screenshots
+        if: always()
+        run: |
+          if [ -d evidence/qmk-ui-tests.xcresult ]; then
+            xcrun xcresulttool export attachments --path evidence/qmk-ui-tests.xcresult --output-path evidence/qmk-screenshots
+          fi
       - name: Publish complete verification logs
         if: always()
         uses: actions/upload-artifact@v4

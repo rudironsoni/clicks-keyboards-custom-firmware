@@ -17,11 +17,37 @@ struct StockPhysicalKey: Codable, Identifiable {
 }
 
 extension FactoryLayout {
-    /// Static decode candidates, not confirmed cap-to-matrix mappings. Keep custom
-    /// QMK adaptations (LT/OSL/consumer Eject) out of stock behavior descriptions.
+    /// Immutable historical M1 v1 catalogue from 246f2b8. These arrays and labels
+    /// preserve the meaning of accepted captures when coverage is regenerated.
+    /// The Q conflict and unmapped Shift statements below are historical, not
+    /// current matrix claims. Current M3 firmware uses FactoryLayout's own arrays.
     static let stockPhysicalKeys: [StockPhysicalKey] = {
+        let layer0: [UInt16] = [
+            0x0004, 0x0018, 0x000e, 0x002a, 0x0028, 0x5da1,
+            0x001a, 0x000c, 0x0007, 0x000f, 0x0019, 0x5da2,
+            0x0008, 0x0012, 0x0009, 0x0000, 0x0005, 0xe3,
+            0x0015, 0x0013, 0x000a, 0x001d, 0x0011, 0x002c,
+            0x0017, 0x0004, 0x000b, 0x001b, 0x0010, 0xe0,
+            0x001c, 0x0016, 0x420d, 0x0006, 0x5281, 0x5da3,
+        ]
+        let layer1: [UInt16] = [
+            0x001e, 0x0024, 0x0034, 0x0001, 0x0001, 0x0001,
+            0x001f, 0x0025, 0x0033, 0x0034, 0x0038, 0x0001,
+            0x0020, 0x0026, 0x0033, 0x0000, 0x001e, 0x0001,
+            0x0021, 0x0027, 0x0026, 0x0001, 0x0036, 0x0001,
+            0x0022, 0x002d, 0x0027, 0x0024, 0x0037, 0x0001,
+            0x0023, 0x0038, 0x0001, 0x001f, 0x0001, 0x0001,
+        ]
+        let layer2: [UInt16] = [
+            0x0001, 0x0001, 0x0051, 0x0001, 0x0001, 0x0001,
+            0x0052, 0x0052, 0x004f, 0x004f, 0x0001, 0x0001,
+            0x0001, 0x0001, 0x0001, 0x0000, 0x0001, 0x0001,
+            0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
+            0x0001, 0x0050, 0x0001, 0x0001, 0x0001, 0x0001,
+            0x0001, 0x0051, 0x0001, 0x0001, 0x0001, 0x0001,
+        ]
         var keys = layer0.indices.compactMap { index -> StockPhysicalKey? in
-            guard layer0[index] != 0 else { return nil } // r2c3 is the spare, not a key.
+            guard layer0[index] != 0 else { return nil } // Historical v1 omits r2c3.
             let row = index / 6, col = index % 6
             var base = KeycodeNames.name(for: layer0[index])
             var label = base
