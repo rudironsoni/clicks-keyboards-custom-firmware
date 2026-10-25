@@ -45,7 +45,9 @@ final class QMKProfileUITests: XCTestCase {
         reveal(app.switches["qmk.permission"], in: app)
         XCTAssertEqual(app.switches["qmk.permission"].value as? String, "0")
         let reapply = app.buttons["qmk.reapply"]
+        reveal(reapply, in: app)
         XCTAssertFalse(reapply.isEnabled)
+        reveal(app.switches["qmk.permission"], in: app)
         app.switches["qmk.permission"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         reveal(reapply, in: app)
         reapply.tap()
@@ -68,6 +70,7 @@ final class QMKProfileUITests: XCTestCase {
         reveal(reconnect, in: app)
         reconnect.tap()
         waitForLabel(app.staticTexts["qmk.connection"], contains: "All 144")
+        reveal(app.switches["qmk.permission"], in: app)
         XCTAssertEqual(app.switches["qmk.permission"].value as? String, "0")
         reveal(app.staticTexts["qmk.comparison"], in: app)
         waitForLabel(app.staticTexts["qmk.comparison"], contains: "differs")

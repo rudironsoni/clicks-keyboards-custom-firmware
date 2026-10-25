@@ -15,10 +15,13 @@ This file owns the current readiness and authorization status. Other guides must
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
 | QMKKeymap iOS configuration | Separate RAM-keymap permission, limited to exact CK-5200 hardware 1.2.0 and QM 00 01 identity, with explicit per-session write consent. A0–A3 remain blocked. No physical use authorized by M3. |
-| AuthorizedStockUpdate configuration | Retained stock-only implementation for a later separately authorized milestone; not an M1 install configuration |
+| StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
+| M3 verified stock firmware manager | Implemented on `main`; physical firmware updates remain disabled. [Readiness, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
+The stock manager and QMK RAM-keymap editor use separate build configurations.
+Rudi has ruled out buying another keyboard. No spare purchase or physical installation is part of this milestone.
 
 The custom target is CH32X035. Custom keymap storage is transient RAM and loses edits on power loss.
 No flash-backed EEPROM partition is demonstrated. Preserve presumed installer `0x0000–0x1FFF`, application `0x2000–0x89FF`,

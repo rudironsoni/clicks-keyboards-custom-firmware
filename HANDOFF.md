@@ -16,11 +16,15 @@ M3's three software deliverables are implemented and independently reviewed: fro
 See [passing CI, artifact hashes and screenshots](keyboards/ck5200/docs/m3-verification.md), [first-boot evidence](keyboards/ck5200/docs/m3-first-boot.md) and [spare procedure](keyboards/ck5200/docs/m3-spare-bring-up.md).
 Stop after these deliverables and independent review. Acquisition and any physical work require a separate decision; R3 remains unmet.
 
+The stock firmware manager is on `main`. Physical firmware updates remain disabled in every iOS build.
+See [stock manager readiness](keyboards/ck5200/docs/stock-manager-readiness.md) for implementation, verification and remaining limits.
+Rudi has ruled out buying a second keyboard. No physical experiment or new milestone may start without a separate decision.
+
 - Comprehensive physical characterization remains UNVERIFIED beyond the recorded observations. Baseline collection is closed.
 - R3 independent recovery is UNMET. The Mac dispatcher depends on a running application and is not independent rescue.
 - No custom image is authorized. No keyboard firmware write, reset, ISP operation, or protection change is authorized for M1.
 - Default Debug and Release iOS builds are diagnostics-only at the controller boundary.
-- The separately gated stock-update implementation is retained for later authorization, not for this baseline.
+- Every iOS configuration blocks physical updates, including `AuthorizedStockUpdate` and `StockFirmwareManager`.
 - Preserve presumed installer `0x0000–0x1FFF`, application `0x2000–0x89FF`, staging `0x8A00+`, and upper reserved flash.
 - Custom CH32X035 keymap storage is transient RAM. No flash-backed persistence is established.
 

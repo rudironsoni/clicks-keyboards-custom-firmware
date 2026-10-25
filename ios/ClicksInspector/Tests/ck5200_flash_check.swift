@@ -169,6 +169,7 @@ final class ScriptedDeviceLink: KeyboardPacketLink {
         case 0xa0:
             guard bytes.count == 2 else { protocolErrors.append("A0 length"); return }
             a0Seen = true
+            reply([0x04, 0x02, 0xa0, 0x00])
             if closeOnA0 {
                 closed = true
                 /* The reboot kills the session; synchronous, like a real
@@ -297,8 +298,8 @@ struct FlashCheck {
         do {
             let link = ScriptedDeviceLink(image: stockImage)
             let controller = makeController(link: link, target: nil)
-            await waitUntil("identify reports stock firmware (no-target run)", timeout: 5) {
-                if case .stockFirmware = controller.phase { return true }
+            await waitUntil("identity fails before sending (no-target run)", timeout: 5) {
+                if case .failed = controller.phase { return true }
                 return false
             }
             controller.flash(image: stockImage, rebootToInstall: true)
@@ -309,8 +310,8 @@ struct FlashCheck {
             let wrongTarget = CustomFirmwareController.ConnectedTarget(
                 model: "CK-9999", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0")
             let controller = makeController(link: link, target: wrongTarget)
-            await waitUntil("identify reports stock firmware (wrong-model run)", timeout: 5) {
-                if case .stockFirmware = controller.phase { return true }
+            await waitUntil("identity fails before sending (wrong-model run)", timeout: 5) {
+                if case .failed = controller.phase { return true }
                 return false
             }
             controller.flash(image: stockImage, rebootToInstall: true)
@@ -321,8 +322,8 @@ struct FlashCheck {
             let wrongHw = CustomFirmwareController.ConnectedTarget(
                 model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "9.9.9")
             let controller = makeController(link: link, target: wrongHw)
-            await waitUntil("identify reports stock firmware (wrong-hardware run)", timeout: 5) {
-                if case .stockFirmware = controller.phase { return true }
+            await waitUntil("identity fails before sending (wrong-hardware run)", timeout: 5) {
+                if case .failed = controller.phase { return true }
                 return false
             }
             controller.flash(image: stockImage, rebootToInstall: true)
@@ -377,9 +378,9 @@ struct FlashCheck {
             if case .updateUnverified = controller.phase { expect(true, "a second flash is refused while the update is unresolved") }
             else { expect(false, "a second flash is refused while the update is unresolved") }
 
-            /* Explicit reconciliation clears it. */
+            /* Manual acknowledgement cannot erase installation uncertainty. */
             controller.markPendingUpdateVerified()
-            expect(controller.pendingUpdate == nil, "explicit reconciliation clears the record")
+            expect(controller.pendingUpdate != nil, "manual verification cannot clear the record")
         }
 
         /* S5: reentrancy: two rapid submissions must start exactly one
@@ -394,6 +395,7 @@ struct FlashCheck {
             controller.flash(image: stockImage, rebootToInstall: true)
             controller.flash(image: stockImage, rebootToInstall: true)
             expect(link.a1Count <= 1, "double submission starts at most one A1 (got \(link.a1Count))")
+            controller.detach()
         }
 
         /* S6: A1's advertised maximum is enforced (review 2026-10-12). */
@@ -495,11 +497,11 @@ struct FlashCheck {
             expect(relaunched.pendingUpdate?.outcome == .commitUnknown,
                    "the record survives relaunch")
             relaunched.markPendingUpdateVerified()
-            expect(relaunched.pendingUpdate == nil, "explicit reconciliation clears the relaunch record")
+            expect(relaunched.pendingUpdate != nil, "manual verification preserves the relaunch record")
         }
 
-        /* S10: one dropped A1 reply triggers exactly one retry and still
-         * completes; A1 is safe to resend (it re-inits staging). */
+        /* S10: no in-session retry after a lost A1 reply. The protocol has no
+         * transaction IDs; reconnect before another explicit attempt. */
         do {
             let link = ScriptedDeviceLink(image: stockImage)
             let controller = makeController(link: link)
@@ -509,12 +511,12 @@ struct FlashCheck {
             }
             link.dropNextReplies = 1 /* armed after identify: hits the A1 reply */
             controller.flash(image: stockImage, rebootToInstall: true)
-            await waitUntil("retry run completes after a dropped A1 reply", timeout: 20) {
-                if case .updateUnverified = controller.phase { return link.a0Seen }
+            await waitUntil("dropped A1 reply stops the transaction", timeout: 5) {
+                if case .failed = controller.phase { return true }
                 return false
             }
-            expect(link.a1Count == 2, "the dropped A1 reply caused exactly one A1 retry (got \(link.a1Count))")
-            expect(link.stagingVerified, "retry run staged the stock image correctly")
+            expect(link.a1Count == 1, "the dropped A1 reply is not retried")
+            expect(link.a2Count == 0 && !link.a0Seen, "no later write or reboot follows the timeout")
             controller.markPendingUpdateVerified()
         }
 
@@ -596,7 +598,7 @@ struct FlashCheck {
                 return false
             }
             if case .updateUnverified(let message) = controller.phase {
-                expect(message.contains("staged"), "the state explains the staged-not-installed outcome")
+                expect(message.contains("unproven"), "the state does not assert installation")
             }
             controller.markPendingUpdateVerified()
         }
@@ -647,7 +649,7 @@ struct FlashCheck {
                 expect(false, "a second update is refused until the disconnected-A3 record is reconciled")
             }
             relaunched.markPendingUpdateVerified()
-            expect(relaunched.pendingUpdate == nil, "explicit reconciliation clears the disconnected-A3 record")
+            expect(relaunched.pendingUpdate != nil, "manual verification preserves the disconnected-A3 record")
         }
 
         /* S16 (P0, review 2026-10-13): the A3 acknowledgment is malformed.
