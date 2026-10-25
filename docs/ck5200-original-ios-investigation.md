@@ -1,6 +1,6 @@
 # Original Clicks iOS investigation
 
-Checked: 2026-10-23. Primary executable SHA-256:
+Checked: 2026-10-25. Primary executable SHA-256:
 `d56a59180adad89542107924edc1cc046507f6b11730f912f2855a8c408f5c6b`.
 All addresses below are linked virtual addresses in this executable.
 This is static instruction analysis and a behavioral reconstruction, **not
@@ -171,7 +171,7 @@ This is not proof that no unreachable or runtime-generated route could exist.
 | `blr x25` at `0x1001810D8` / `0x100181254`, download `blr x24` at `0x10017BB10` / `blr x28` at `0x10017BBA8` | Traced argument construction, class metadata access, JSONDecoder setup, captured closures and callback bodies. Full statically linked Alamofire dynamic dispatch and OS URLSession scheduling were not executed. | HTTP framework behavior is modeled as file/error delivery. It does not replace the directly traced raw Data-to-worker path. |
 | Published setting access `0x1000E6EB0` | Traced both return URL constants and indirect Combine getter. Indirect Swift symbolic type/name resolution was attempted. One parser variant timed out and was discarded. Exact setting UI/storage semantics remain unresolved. | Both manifest choices converge on the same EAF encoder. No recovery semantics are inferred from the setting. |
 | Full Swift/ObjC async runtime and stream races | Function-starts, selectors, closure captures and continuation targets were inspected. The device-target iOS Mach-O cannot execute as a macOS process or as a Simulator-target binary. Executing its OS frameworks would require a compatible iOS runtime/device environment not available within these constraints. | Behavioral tests are reconstruction, not original-app execution. Race timing, cancellation during framework download and every OS error ordering remain UNVERIFIED. |
-| `Assets.car` and arbitrary encoded blobs | All archive members were hashed and classified. No filename, recognized compressed member or traced updater reference identifies a loader. Asset-container internals and arbitrary encrypted/encoded payloads were not exhaustively decoded. | Scoped negative finding only. No matching OEM boot-stage bytes were recovered. |
+| `Assets.car` and arbitrary encoded blobs | The 2026-10-25 audit below resolves all 511 main-catalog data assets as WebP images. The widget catalog has no data assets. Arbitrary hidden encodings remain outside this check. | No loader data asset was identified. This does not prove that arbitrary encoded payloads cannot exist. |
 | High-level UI completion outside inspected EAF callbacks | Worker, result return, discovery, manual source routing and teardown were traced. Not every SwiftUI rendering specialization or analytics callback was decompiled. | No claim that every app function is reconstructed. No unexamined UI rendering is treated as evidence for installation or recovery. |
 
 These limits prevent a claim of complete original-app execution. They do not
@@ -209,3 +209,108 @@ note understated existing direct iOS evidence. The older stock-manager record
 already contained correct wrapper/constants evidence. This investigation adds
 the helper data flow, response framing, lifecycle and complete four-command
 reconstruction. It does not convert vendor success into installation proof.
+
+## Software-only follow-up, 2026-10-25
+
+The software investigation remains open. Missing boot-stage bytes do not prove
+that hardware access is required. These checks ran without commands to the
+keyboard. They establish bounded findings, not universal software exhaustion.
+
+### Public releases and archives
+
+All three public catalogs returned HTTP 200 with JSON request headers.
+
+| Catalog on `https://xinyi1.clicks.tech/` | Bytes | Entries | Exact CK-5200 entries | SHA-256 |
+| --- | ---: | ---: | ---: | --- |
+| `firmwares.json` | 12,006 | 52 | 6 | `e1b84cad26d872c8560a221518c28e3d162d4daa6bf92f801722a4a0fa133633` |
+| `firmwares-p.json` | 827 | 4 | 0 | `6f274fbcd315bdadee59fce6f4eae407ac8ef1619429618f031fb19b872a3bd0` |
+| `firmwares-a.json` | 881 | 4 | 0 | `a2e36f833da12af5f755e44fe7cf5dff62fe28508aac141d957635e7a2699c82` |
+
+The six CK-5200 versions are V114, V115, V116, V117, V121, and V122.
+Their catalog hashes match the retained application images. No catalog entry
+identifies a loader, factory image, recovery image, or complete flash dump.
+This finding does not exclude unpublished vendor files.
+
+The selector at `0x1000E6E48`, including the published-setting branch at
+`0x1000E6EB0`, selects between the two existing URL constants at
+`0x1005FF7B0` and `0x1005FF7E0`. The unresolved setting does not supply a
+third URL in this function.
+
+The archive search queried all 32 Common Crawl indexes dated 2024 through
+October 2026 for `xinyi1.clicks.tech/*`. Every index returned no captures after
+retries. The final query for `CC-MAIN-2025-43` used `matchType=domain`.
+The all-time Wayback CDX query for this host, filtered to HTTP 200 and collapsed
+by URL, returned `[]`. These results cover this host and these query scopes.
+They do not establish absence from every archive or alternate host.
+
+### Compiled assets and app shortcuts
+
+The main `Assets.car` is 69,069,192 bytes, SHA-256
+`86a3c51c405ba43060fced11d51da5eb1148c0cf7b69fa4b6fdcaec806b7c106`.
+`/usr/bin/assetutil --info` reports 511 data assets. All 511 match complete
+RIFF WebP payloads by metadata length and rendition hash. The hash covers the
+224-byte CoreUI header followed by the complete payload. The metadata field
+named `SHA1Digest` contains the 64-digit SHA-256 value for these renditions.
+Every parsed RIFF chunk is `ALPH`, `VP8 `, or `VP8X`. No unmatched data asset,
+length mismatch, or invalid chunk bound remains in this check.
+
+The widget `Assets.car` is 41,592 bytes, SHA-256
+`2f3c20bf08e16583204d46a29922751f946926f02e81a352cc16aec86ba0913b`.
+Its ten metadata rows contain no data assets. These checks close the ordinary
+embedded data-asset lead. They do not test hidden encodings inside images.
+
+Swift field records identify `NumberRowShortcutSlot` with `slot` and `action`.
+The action enum contains `esc`, `volumeUp`, `volumeDown`, `mute`, `playPause`,
+`nextTrack`, `previousTrack`, `pageUp`, `pageDown`, and `empty`.
+`NumberRowShortcutsView` uses the BLE PowerKeyboard service. No general CK-5200
+keymap editor was identified through this view. The earlier CK/EAF source
+dispatch remains the relevant update route.
+
+The main app plist does not declare `UIFileSharingEnabled`,
+`LSSupportsOpeningDocumentsInPlace`, or `CFBundleDocumentTypes`.
+It therefore does not advertise a Files export route for its downloaded image.
+The phone's actual app container was not inspected.
+
+### Stock USB and packet-parser paths
+
+The following addresses belong to V122 firmware, not the iOS executable.
+The image SHA-256 is
+`8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8`.
+The retained disassembly is `keyboards/ck5200/.stock/audit/v122.dis`.
+
+| Path | Instruction evidence | Bounded result |
+| --- | --- | --- |
+| USB vendor request | Callback `0x3CBC` returns immediately. | No vendor readout command in this callback. |
+| HID class requests | Class callback `0x3C58` dispatches interface 2. `GET_REPORT` at `0x4300` and `SET_REPORT` at `0x4326` load callbacks initialized to zero at `0x3D46` through `0x3D4A`. | No active report handler was identified. |
+| HID descriptor | The 97 bytes at `0x6580` contain six Input items, two LED Output items, no Feature items, and no report IDs. | No advertised Feature-report configuration channel. |
+| Descriptor reads | Router `0x4582` selects predefined descriptors. `0x45D2` through `0x4600` clamp reply lengths. String getter `0x3A78` bounds indices to 0 through 5. | No host-selected memory address in these getters. |
+| Serial string | `0x2276` through `0x227A` load the fixed word at `0x0800F600`. | Fixed serial data, not an arbitrary read address. |
+| Link parser | `0x5BEC` through `0x5F18` trust some declared lengths beyond the actual input. | Unchecked reads exist. No arbitrary write or code execution was demonstrated. |
+| Link copy | `0x5E50` through `0x5E88` cap the copy at 32 bytes into an internally initialized buffer. Pointer setup is at `0x6230` through `0x6236`. | This copy does not reach the pending callback at link offset `0x84`. |
+| Command `08` | `0x3362` through `0x3368` enforce lengths 5 through 19. Request-dependent stores fit the local frame allocated at `0x3222`. | No saved control data overwrite through this bounded copy. |
+
+The parser audit does not prove that unchecked reads are harmless.
+Indirect effects through authentication or protocol state remain unverified.
+No malformed packet was sent to the keyboard.
+
+The generic WCH IAP example is a different protocol. Its `iap.h` uses application
+base `0x08005000` and commands `80` through `84`. Its verify operation compares
+flash with supplied bytes and does not return flash contents. This SDK source
+does not establish the protocol of the installed CK-5200 boot stage.
+
+### Remaining software proof
+
+No working stock key-editing or extension-installation route follows from these
+new checks. The next runtime evidence is an original stock-app update trace.
+The installed boot stage below offset `0x2000` is still unavailable.
+Complete startup emulation remains blocked by unmodeled peripherals.
+Neither gap authorizes device writes or establishes a hardware-only conclusion.
+
+Private audit outputs for this session are under
+`/private/tmp/ck5200-software-routes-20261025/`.
+`asset-data-verification.json` records all rendition matches.
+`archive-search-summary.json` records the final archive responses.
+`release-format-checks.json` records the tested checksum hypotheses.
+`software-route-evidence.json` records the route summary and open gaps.
+These local outputs contain no firmware payload publication and are not
+required to interpret the instruction addresses and scoped results above.
