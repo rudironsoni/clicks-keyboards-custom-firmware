@@ -314,3 +314,26 @@ Private audit outputs for this session are under
 `software-route-evidence.json` records the route summary and open gaps.
 These local outputs contain no firmware payload publication and are not
 required to interpret the instruction addresses and scoped results above.
+
+### Stock-app runtime access follow-up
+
+Read-only `devicectl` queries on the paired iPhone identify the installed app as
+`com.clickscompanion.app`, version `3.0.2`, build `3`. The app is running.
+Its metadata reports `Developer App = false` and `Container Accessible = false`.
+Adding `--require-container-access` returns no matching app. This rules out
+direct log-file retrieval through the available developer-container service.
+Version equality alone does not establish executable byte identity on the phone.
+
+The original executable contains a local log viewer. `AboutView` field metadata
+at `0x10072103C` includes `_showLogViewer`. `CKLogViewer` field metadata at
+`0x100723604` includes `_logFiles`, `_selectedLogFile`, and `_logContent`.
+Function `0x1000FA41C` enumerates registered loggers, selects `DDFileLogger`,
+and calls `sortedLogFilePaths`. Function `0x1000FA8DC` reads the selected file
+as UTF-8 with Foundation `String(contentsOfFile:encoding:)`.
+The opening gesture, release file-logger registration, and EAF packet-byte
+coverage remain unverified. A compiled log viewer is not a captured trace.
+
+The local Console automation attempt stopped at Cua Driver's missing Screen
+Recording permission. The temporary driver was stopped without changing that
+permission. No Console trace, debug attachment, app relaunch, firmware update,
+or reset occurred. The installed app's runtime update flow remains unverified.
