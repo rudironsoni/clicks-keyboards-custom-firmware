@@ -79,8 +79,10 @@ custom flashing remains no-go.
 Local verification status for this change: **blocked before Xcode execution**.
 The required machine check could not run because `xcode-offload` and
 `external-ssd-root` are missing from the required PATH. The Xcode wrappers are
-also absent from `~/.local/bin`. No new simulator screenshots or passing Xcode
-results are claimed until that machine setup is restored and the checks run.
+also absent from `~/.local/bin`. Hosted macOS CI supplied passing builds, Swift/C
+tests, simulator workflows and screenshots instead. See the [M3 verification
+record](../../keyboards/ck5200/docs/m3-verification.md) for exact tested revisions,
+CI links, downloaded artifacts and evidence limits.
 
 ## Build and install
 
