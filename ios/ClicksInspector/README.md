@@ -13,7 +13,7 @@ The characterization screen adds user-started three-pass reads, native keyboard-
 It sends no settings, reset, update, or unknown-command requests.
 
 **Debug and Release are diagnostics-only.** The controller permits only the exact demonstrated stock getters on the known identity, including through legacy firmware controls. A0/A1/A2/A3, settings, and reset commands are refused.
-The `AuthorizedStockUpdate` build configuration retains the stock-only update path for a later separately authorized milestone. Do not install that configuration for M1. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
+`StockFirmwareManager` and the legacy `AuthorizedStockUpdate` configuration also block all physical writes. They permit only the exact identity query in the firmware controller. Only macOS host tests compiled with `STOCK_MANAGER_OFFLINE_TESTING` can run update transactions. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
 Apple manages the accessory session and authentication. Opening a session does not prove memory access or recovery.
 
 ## M3 QMK RAM profiles
@@ -147,21 +147,19 @@ Apple's [External Accessory framework](https://developer.apple.com/documentation
 
 A simulator can validate the interface and empty state. It cannot validate this physical USB-C accessory, iAP session acceptance, flash readback, or recovery. A successful stock query proves only the selected field is readable through this session. No full firmware dump is available from the implemented commands.
 
-## New capabilities, 2026-10-10
+## Verified stock firmware manager, 2026-10-16
 
-The app bundles both images, but the full product lifecycle is not yet authorized or verified:
+- **Prepare official V122** checks the bundled 18,648-byte image, exact SHA-256 and image structure without opening an accessory session. The app package excludes the QMK image.
+- **Offline installation workflows** cover stock-to-stock and authenticated QM/RS-to-stock. The controller admits only the next exact pinned-image packet for the current session. Stock identity is `01 20 01 22`; custom modes are `QM 00 01` and `RS 00 01`. Exact model `CK-5200` and hardware `1.2.0` are required.
+- **Physical installation** stays disabled in every iOS configuration. There is no UI, build flag or consent switch that authorizes it. A separate implementation decision and explicit authorization are required.
+- **Outcome journal** is written atomically before A3 and retained across reconnect/relaunch. Missing or invalid responses stop the session and discard queued output. A same-version response or manual acknowledgement cannot clear the record. An unreadable journal blocks later installation.
+- **Stock key recorder** remains available with the accepted M1 definitions. The QMKKeymap configuration provides the separate RAM-keymap editor and phone profiles.
 
-- **Flash custom firmware**: DISABLED in this build (2026-10-12): no CH32X035 image has been authorized. The bundled QMK image targets CH32X035 but stays unauthorized; the controller refuses any image that is not the authorized stock artifact, and the buttons and the import path are removed until a separately reviewed image exists.
-- **Stock update implementation**: retained behind `AuthorizedStockUpdate`; default builds refuse it before any firmware packet. Restoring stock from custom firmware remains unauthorized and unverified.
-- **Self-test, custom mode only**: reads identity and keymaps, then temporarily remaps Left Shift at (2,3) and restores its original value. This is not part of stock characterization.
-- **Stock key recorder**: focused UIKit text input plus `UIPress`/`UIKey` and `GCKeyboard` callbacks. Visible text proves that iOS delivered text, not that all HID behavior is correct.
-- **Layout preview**: the keymap displayed as a grid with readable key names (not raw hex), color-coded by key type (layer keys blue, modifiers orange, consumer purple, transparent gray).
-- **Keymap editor**: now shows both the readable name and the hex value per cell, with an expanded preset list including arrows and the iOS keyboard toggle.
-- **Post-flash state**: after A0 the session dies with the reboot. The app never claims installation success: it enters an `updateUnverified` state that survives reconnects and relaunches, refuses any further flashing, and clears only when you explicitly mark the update verified after the keyboard demonstrably works. A lost final-step reply is reported as commit-unknown, never as "nothing was written" (the outcome genuinely cannot be distinguished through this protocol).
+See [stock manager readiness](../../keyboards/ck5200/docs/stock-manager-readiness.md) for protocol comparison, tests, artifacts and limits. Application-level rescue is not recovery from an unbootable application.
 
 ## Run the focused host checks
 
-Run the Swift checks and checkpoint benchmark, including the recorder, diagnostics boundary, and retained stock-update simulations:
+Run the Swift checks and checkpoint benchmark, including the recorder, diagnostics boundary, stock-update simulations and production Swift/C integration. The C bridge requires clean pinned QMK and SHA-256 checkouts from `keyboards/ck5200/scripts/bootstrap.sh`:
 
 ```sh
 bash ios/ClicksInspector/test.sh
@@ -192,16 +190,7 @@ xcrun swiftc -module-cache-path /tmp/ck5200-swift-cache \
   -o /tmp/ck5200-stock-read-tests && /tmp/ck5200-stock-read-tests
 ```
 
-## Updating the bundled custom firmware
-
-The bundled `Resources/ck5200_qmk.bin` is the current build output from `keyboards/ck5200/build/ck5200_qmk.bin`. After rebuilding the firmware, refresh the app's copy:
-
-```sh
-cp keyboards/ck5200/build/ck5200_qmk.bin ios/ClicksInspector/Resources/ck5200_qmk.bin
-shasum -a 256 keyboards/ck5200/build/ck5200_qmk.bin ios/ClicksInspector/Resources/ck5200_qmk.bin
-```
-
-Then regenerate the Xcode project (`xcodegen generate`) and rebuild the app.
+`Resources/ck5200_qmk.bin` remains a negative authorization fixture for host tests. It is excluded from app resources and is not an install candidate for this milestone.
 
 ## Run the focused read-parser checks
 

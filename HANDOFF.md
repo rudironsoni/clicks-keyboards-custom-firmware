@@ -12,13 +12,18 @@ The presumed installer region is not a proven immutable recovery service. A patc
 HTTPS inspection is stopped. The stock URL was already known. No phone settings changed, and the vendor inquiry remains unsent.
 M2 [application-level rescue](keyboards/ck5200/docs/application-rescue.md) is COMPLETE, accepted by Rudi at `ee45b6bbb2b544f19d44c036099c4af2c5aa7156` after independent review.
 Acceptance covers the software-only secondary mechanism, not physical compatibility, iPhone-operated restoration, or recovery from an unbootable application.
-R3 remains the next architectural priority, but no new milestone, investigation, or physical experiment may start without a separate decision.
+M3 verified stock firmware manager is software-ready for human review on `feat/verified-stock-firmware-manager`, based on `main` at `246f2b8`.
+Tested revision `a7cf3f7` passed iOS CI `38883669172` and firmware CI `38883668796`. Both independent reviews are clear.
+Unsigned app archives and hashes are published in the readiness report. Physical writes remain disabled in every iOS build.
+See [stock manager readiness](keyboards/ck5200/docs/stock-manager-readiness.md) for implementation, verification and remaining limits.
+The QMK/keymap/spare-procedure PRs #1, #2 and #3 remain separate and unmerged. Rudi has ruled out buying a second keyboard.
+R3 remains unmet. No physical experiment or new milestone may start without a separate decision.
 
 - Comprehensive physical characterization remains UNVERIFIED beyond the recorded observations. Baseline collection is closed.
 - R3 independent recovery is UNMET. The Mac dispatcher depends on a running application and is not independent rescue.
 - No custom image is authorized. No keyboard firmware write, reset, ISP operation, or protection change is authorized for M1.
 - Default Debug and Release iOS builds are diagnostics-only at the controller boundary.
-- The separately gated stock-update implementation is retained for later authorization, not for this baseline.
+- Every iOS configuration blocks physical updates, including `AuthorizedStockUpdate` and `StockFirmwareManager`.
 - Preserve presumed installer `0x0000–0x1FFF`, application `0x2000–0x89FF`, staging `0x8A00+`, and upper reserved flash.
 - Custom CH32X035 keymap storage is transient RAM. No flash-backed persistence is established.
 

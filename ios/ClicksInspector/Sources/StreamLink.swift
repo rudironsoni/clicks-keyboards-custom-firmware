@@ -43,7 +43,10 @@ final class StreamLink: KeyboardPacketLink {
 
     /// Host-side stop. Drops buffered bytes; never notifies `onClosed`.
     func close() {
+        lost = true
         outbox.removeAll()
+        onFragment = nil
+        onClosed = nil
     }
 
     /// Session loss (stream error, end-of-stream, backgrounding, accessory

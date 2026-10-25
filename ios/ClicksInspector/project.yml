@@ -4,6 +4,7 @@ configs:
   Release: release
   AuthorizedStockUpdate: release
   QMKKeymap: debug
+  StockFirmwareManager: release
 options:
   minimumXcodeGenVersion: 2.46.0
   deploymentTarget:
@@ -16,6 +17,8 @@ targets:
       - Sources
       - path: Resources
         buildPhase: resources
+        excludes:
+          - ck5200_qmk.bin
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rudironsoni.clicks-inspector
@@ -29,7 +32,9 @@ targets:
         CURRENT_PROJECT_VERSION: "4"
       configs:
         AuthorizedStockUpdate:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_UPDATE_AUTHORIZED"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FIRMWARE_MANAGER"
+        StockFirmwareManager:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) STOCK_FIRMWARE_MANAGER"
         QMKKeymap:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) QMK_RAM_KEYMAP"
           SWIFT_OBJC_BRIDGING_HEADER: "Tests/QMKBridge.h"
@@ -79,6 +84,14 @@ targets:
     dependencies:
       - target: ClicksInspector
 schemes:
+  StockFirmwareManager:
+    build:
+      targets:
+        ClicksInspector: all
+    test:
+      config: StockFirmwareManager
+      targets:
+        - ClicksInspectorUITests
   ClicksInspector:
     build:
       targets:
