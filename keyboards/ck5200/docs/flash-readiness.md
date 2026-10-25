@@ -51,8 +51,10 @@ The completed runtime and binary assurance does not establish installation
 readiness. The [current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18)
 ranks the missing OEM entry, iPhone transport, and preservation evidence.
 The exact reviewed QMK image places instructions in `[0x68D8,0x6900)`, whose
-original contents remain unknown and protected. Safe installation of that
-image is therefore unverified, even though it fits the application allocation.
+original contents and OEM ownership remain unknown. The earlier protected
+classification was a conservative model policy, not a recovered OEM reservation.
+See the [2026-10-19 correction](installation-feasibility-2026-10-19.md).
+Installer acceptance and recovery still require their own evidence.
 External adapters and replacement-loader installation do not meet the current
 constraints. R3 remains UNMET. Physical flashing remains NO-GO.
 
