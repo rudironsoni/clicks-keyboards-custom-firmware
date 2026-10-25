@@ -10,7 +10,7 @@ This file owns the current readiness and authorization status. Other guides must
 | M2 application-level rescue | COMPLETE, accepted at `ee45b6b` after independent review as a software-only secondary mechanism. Not installed or physically verified. See [acceptance and evidence](application-rescue.md#acceptance). Does not satisfy R3. |
 | M3 first usable QMK release | Three software deliverables implemented and independently reviewed; firmware, Swift/C integration and simulator CI passed at the [recorded revisions](m3-verification.md). Candidate: 26,496 bytes, 640 bytes headroom. No physical boot or compatibility claim. |
 | M3 spare hardware path | [Procedure prepared](m3-spare-bring-up.md); no matching spare acquired or verified by this task. Restoration route not established. No physical operations authorized. |
-| R3 iPhone-only independent recovery | UNMET, installer unread; no proven rescue from an unbootable application |
+| R3 iPhone-only independent recovery | UNMET. USB-C/BLE-host adapter research is conceptual only. No proven rescue from an unbootable application. [Investigation](../../../reports/CK5200%20USB%20recovery%20feasibility.md). |
 | Custom firmware flashing | NO-GO, no custom image authorized |
 | M1 stock firmware writes and resets | Disabled; not authorized for this stage |
 | Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
@@ -21,6 +21,7 @@ This file owns the current readiness and authorization status. Other guides must
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
 The stock manager and QMK RAM-keymap editor use separate build configurations.
+M1, M2, and M3 are closed within their recorded scopes. R3 remains unmet.
 Rudi has ruled out buying another keyboard. No spare purchase or physical installation is part of this milestone.
 
 The custom target is CH32X035. Custom keymap storage is transient RAM and loses edits on power loss.
@@ -36,6 +37,28 @@ The [2026-10-15 decision](adr/0001-independent-iphone-recovery.md) retains NO-GO
 The missing evidence is an independent boot service with iPhone transport, validated stock restoration, preservation, and interruption safety.
 Installer readback could help but would not satisfy these requirements by itself.
 See [iPhone transport limits](iphone-recovery-transport.md) for the separate public-API constraint.
+
+## R3 investigation status, 2026-10-16
+
+**2026-10-17 follow-up:** outcome 2, exact vendor dependency. No preservation-safe factory-ISP sequence is established.
+The [focused report](../../../reports/CK5200%20USB%20recovery%20feasibility.md#2026-10-17-follow-up-outcome-2-exact-vendor-dependency) separates PROGRAM addressing, selective ERASE, and the unknown destination tail.
+The technical inquiry is ready but unsent. This evidence update changes no authorization.
+
+The [USB recovery feasibility report](../../../reports/CK5200%20USB%20recovery%20feasibility.md) extends the existing ADR with a conceptual BLE-controlled USB host adapter.
+The adapter could avoid the direct iPhone raw-USB API limit. It does not resolve keyboard entry or preservation.
+PC17-high power-up entry is documented at chip level. Connector routing, VDD timing, loader identity, and protection remain unverified.
+System FLASH is mutable, not immutable ROM. The inspected client programs from zero, and no safe selective factory erase is established.
+The stock image's final page has 40 unknown bytes that must survive. Full interruption recovery remains unproven.
+
+**R3 remains UNMET. Custom flashing remains NO-GO.** This file remains the sole readiness authority.
+Current work permits research and offline models only. No physical experiment, device command, reboot, probe, opening, ISP, unlock, purchase, or hardware build is authorized.
+The next evidence step is model-matched documentation. The vendor query remains unsent.
+The [offline lab](../recovery_lab/README.md) passed 10 unit tests on local rerun. Its default CLI returned expected exit 2 (blocked), and its hypothetical CLI returned 0.
+The hypothetical result requires a stronger tail-preserving erase contract and the original in-memory journal. No such factory operation or durable journal is implemented.
+The model provides no OEM normal-boot or physical recovery proof. A3/A7 protocols are not implemented.
+Both scoped independent agent reviews are closed. The final ISP/lab review closed all four findings with no actionable blockers.
+The electrical review found no P1/P2 blockers for conceptual scope. [Review summary and verification limits](../../../research_notes/CK5200%20USB%20recovery%20feasibility/review.md).
+This closes review of the investigation, not R3 or physical recovery authorization.
 
 Baseline collection is closed. Use the five recorded sessions as the stock diagnostics reference.
 Further physical characterization requires a specific need in a separately scoped task, not completion of every catalog trial.
