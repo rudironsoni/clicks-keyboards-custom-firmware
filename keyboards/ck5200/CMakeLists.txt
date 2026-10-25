@@ -45,13 +45,31 @@ set(QMK_INCLUDE_DIRS
     "${QMK_DIR}/lib/fnv"
 )
 
+# Keep the pinned TinyUSB checkout unchanged; patch only a build-directory copy.
+set(CK5200_USBFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/tinyusb")
+file(MAKE_DIRECTORY "${CK5200_USBFS_DIR}")
+configure_file("${TINYUSB_DIR}/src/portable/wch/dcd_ch32_usbfs.c"
+               "${CK5200_USBFS_DIR}/dcd_ch32_usbfs.c" COPYONLY)
+configure_file("${TINYUSB_DIR}/src/portable/wch/ch32_usbfs_reg.h"
+               "${CK5200_USBFS_DIR}/ch32_usbfs_reg.h" COPYONLY)
+configure_file(firmware/usb/tinyusb.patch "${CK5200_USBFS_DIR}/tinyusb.patch" COPYONLY)
+find_program(CK5200_PATCH_EXECUTABLE patch REQUIRED)
+execute_process(COMMAND "${CK5200_PATCH_EXECUTABLE}" --batch --fuzz=0 -p1 -i tinyusb.patch
+                WORKING_DIRECTORY "${CK5200_USBFS_DIR}"
+                RESULT_VARIABLE CK5200_USBFS_PATCH_RESULT
+                OUTPUT_VARIABLE CK5200_USBFS_PATCH_OUTPUT
+                ERROR_VARIABLE CK5200_USBFS_PATCH_ERROR)
+if(NOT CK5200_USBFS_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR "TinyUSB patch failed: ${CK5200_USBFS_PATCH_OUTPUT}${CK5200_USBFS_PATCH_ERROR}")
+endif()
+
 set(TINYUSB_SOURCES
     "${TINYUSB_DIR}/src/tusb.c"
     "${TINYUSB_DIR}/src/common/tusb_fifo.c"
     "${TINYUSB_DIR}/src/device/usbd.c"
     "${TINYUSB_DIR}/src/class/hid/hid_device.c"
     "${TINYUSB_DIR}/src/class/vendor/vendor_device.c"
-    "${TINYUSB_DIR}/src/portable/wch/dcd_ch32_usbfs.c"
+    "${CK5200_USBFS_DIR}/dcd_ch32_usbfs.c"
 )
 
 set(WCH_SOURCES

@@ -4,7 +4,7 @@ Parses the flashed keymap (firmware/keyboard/keymaps/diagnostic/keymap.c)
 and asserts every electrical crossing on every layer against the
 36-crossing table decoded from the stock V122 image (stock
 0x2a54..0x3010; the corrected decode with stock addresses lives in
-docs/m3-first-boot.md. The partial letter extraction is available with
+docs/qmk-delivery-evidence.md. The partial letter extraction is available with
 tools/stock_audit/extract_keymap.py). This closes the gap where a typo
 in the keymap would ship silently: the dispatcher tests never looked at
 the keymap contents.

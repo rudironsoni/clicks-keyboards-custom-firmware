@@ -1,10 +1,100 @@
 #include <stdint.h>
+#include "ck5200_watchdog.h"
+#ifndef CK5200_WATCHDOG_HOST_TEST
 #include "ch32x035.h"
 #include "ch32x035_rcc.h"
 #include "ch32x035_gpio.h"
 #include "timer.h"
+#endif
 
 volatile uint32_t timer_count = 0;
+static uint32_t watchdog_last_tick;
+static uint8_t watchdog_progress;
+
+#ifndef CK5200_WATCHDOG_HOST_TEST
+/* Reset body follows pinned WCH startup_ch32x035.S V1.0.1, copyright 2021
+ * Nanjing Qinheng Microelectronics Co., Ltd.; for WCH MCUs. Replace its
+ * weak handle_reset and arm before data/BSS and SystemInit. _einit is the
+ * vector start because linker.ld places .vector immediately after .init. */
+__asm__(
+    ".pushsection .text.handle_reset,\"ax\",@progbits\n"
+    ".global handle_reset\n"
+    ".align 1\n"
+    "handle_reset:\n"
+    "li t0, 0x40003000\n"
+    "li t1, 0x5555\n"
+    "sw t1, 0(t0)\n"
+    "li t1, 3\n"
+    "sw t1, 4(t0)\n"
+    "li t1, 4000\n"
+    "sw t1, 8(t0)\n"
+    "li t1, 0xCCCC\n"
+    "sw t1, 0(t0)\n"
+    "3:\n"
+    "lw t2, 12(t0)\n"
+    "andi t2, t2, 3\n"
+    "bnez t2, 3b\n"
+    "li t1, 0xAAAA\n"
+    "sw t1, 0(t0)\n"
+    ".option push\n"
+    ".option norelax\n"
+    "la gp, __global_pointer$\n"
+    ".option pop\n"
+    "1:\n"
+    "la sp, _eusrstack\n"
+    "2:\n"
+    "la a0, _data_lma\n"
+    "la a1, _data_vma\n"
+    "la a2, _edata\n"
+    "bgeu a1, a2, 2f\n"
+    "1:\n"
+    "lw t0, (a0)\n"
+    "sw t0, (a1)\n"
+    "addi a0, a0, 4\n"
+    "addi a1, a1, 4\n"
+    "bltu a1, a2, 1b\n"
+    "2:\n"
+    "la a0, _sbss\n"
+    "la a1, _ebss\n"
+    "bgeu a0, a1, 2f\n"
+    "1:\n"
+    "sw zero, (a0)\n"
+    "addi a0, a0, 4\n"
+    "bltu a0, a1, 1b\n"
+    "2:\n"
+    "li t0, 0x1f\n"
+    "csrw 0xbc0, t0\n"
+    "li t0, 0x3\n"
+    "csrw 0x804, t0\n"
+    "li t0, 0x88\n"
+    "csrw mstatus, t0\n"
+    "la t0, _einit\n"
+    "ori t0, t0, 3\n"
+    "csrw mtvec, t0\n"
+    "jal SystemInit\n"
+    "la t0, main\n"
+    "csrw mepc, t0\n"
+    "mret\n"
+    ".popsection\n"
+);
+#endif
+
+void ck5200_watchdog_note_scan(void) { watchdog_progress |= 1u; }
+void ck5200_watchdog_note_transport(void) { watchdog_progress |= 2u; }
+void ck5200_watchdog_begin(void) { watchdog_progress = 0; }
+
+void ck5200_watchdog_finish(bool rescue) {
+    const uint8_t progress = watchdog_progress;
+    watchdog_progress = 0;
+    const uint32_t tick = timer_count;
+    if ((progress & (rescue ? 2u : 3u)) == (rescue ? 2u : 3u) &&
+        tick != watchdog_last_tick) {
+        IWDG->CTLR = 0xAAAAu;
+        watchdog_last_tick = tick;
+    }
+}
+
+#ifndef CK5200_WATCHDOG_HOST_TEST
 
 __attribute__((interrupt)) void SysTick_Handler(void) {
     SysTick->SR = 0;
@@ -93,3 +183,4 @@ void bootloader_jump(void) {
     NVIC_SystemReset();
     for (;;) {}
 }
+#endif

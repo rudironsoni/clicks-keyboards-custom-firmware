@@ -13,7 +13,7 @@ The characterization screen adds user-started three-pass reads, native keyboard-
 It sends no settings, reset, update, or unknown-command requests.
 
 **Debug and Release are diagnostics-only.** The controller permits only the exact demonstrated stock getters on the known identity, including through legacy firmware controls. A0/A1/A2/A3, settings, and reset commands are refused.
-`StockFirmwareManager` and the legacy `AuthorizedStockUpdate` configuration also block all physical writes. They permit only the exact identity query in the firmware controller. Only macOS host tests compiled with `STOCK_MANAGER_OFFLINE_TESTING` can run update transactions. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
+`StockFirmwareManager` and the legacy `AuthorizedStockUpdate` configuration also block all physical writes. They permit only the exact identity query in the firmware controller. The dedicated `StockFlashTrial` and `ExtensionInstaller` configurations retain separate image-pinned update gates. They are not enabled in these diagnostics builds. [Current readiness](../../keyboards/ck5200/docs/flash-readiness.md).
 Apple manages the accessory session and authentication. Opening a session does not prove memory access or recovery.
 
 ## M3 QMK RAM profiles
@@ -153,7 +153,7 @@ A simulator can validate the interface and empty state. It cannot validate this 
 
 - **Prepare official V122** checks the bundled 18,648-byte image, exact SHA-256 and image structure without opening an accessory session. The app package excludes the QMK image.
 - **Offline installation workflows** cover stock-to-stock and authenticated QM/RS-to-stock. The controller admits only the next exact pinned-image packet for the current session. Stock identity is `01 20 01 22`; custom modes are `QM 00 01` and `RS 00 01`. Exact model `CK-5200` and hardware `1.2.0` are required.
-- **Physical installation** stays disabled in every iOS configuration. There is no UI, build flag or consent switch that authorizes it. A separate implementation decision and explicit authorization are required.
+- **Physical installation** stays disabled in Debug, Release, StockFirmwareManager and AuthorizedStockUpdate. StockFlashTrial and ExtensionInstaller use their separate image-pinned gates and require explicit physical authorization. A successful transfer does not prove installation or independent recovery.
 - **Outcome journal** is written atomically before A3 and retained across reconnect/relaunch. Missing or invalid responses stop the session and discard queued output. A same-version response or manual acknowledgement cannot clear the record. An unreadable journal blocks later installation.
 - **Stock key recorder** remains available with the accepted M1 definitions. The QMKKeymap configuration provides the separate RAM-keymap editor and phone profiles.
 

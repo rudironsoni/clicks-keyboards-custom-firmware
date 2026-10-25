@@ -16,6 +16,14 @@ uint32_t ck5200_test_serial_word = 42000007u; /* synthetic host fixture */
 #include "ck5200_staging.h"
 #include "ck5200_staging_host.h"
 
+typedef struct {
+    volatile uint32_t CTLR, PSCR, RLDR, STATR;
+} IWDG_TypeDef;
+static IWDG_TypeDef watchdog_registers;
+#define IWDG (&watchdog_registers)
+#define CK5200_WATCHDOG_HOST_TEST
+#include "../firmware/platform/ch32x035/platform.c"
+
 int ck5200_main(void);
 void advance_time(uint32_t ms);
 void tud_mount_cb(void);
@@ -25,7 +33,9 @@ void tud_vendor_tx_cb(uint8_t, uint32_t);
 void ck5200_vendor_tx_failed(uint8_t);
 
 static jmp_buf escape;
-static bool expect_rescue, stop_loop, fail_platform, mounted;
+static bool expect_rescue, stop_loop, fail_platform, mounted, suspended;
+static bool skip_scan;
+static unsigned stop_after_usb_task = 8;
 static unsigned usb_tasks, matrix_inits, matrix_scans, pre_init, post_init;
 static unsigned auth_init, auth_reads, auth_writes, usb_packets, backlight_calls;
 static uint8_t flash[0x10000], response[8];
@@ -41,14 +51,16 @@ void keyboard_pre_init_user(void) { assert(!expect_rescue); ++pre_init; }
 void keyboard_post_init_user(void) { assert(!expect_rescue); ++post_init; }
 void matrix_init_custom(void) { assert(!expect_rescue); ++matrix_inits; }
 bool matrix_scan_custom(matrix_row_t rows[]) {
-    (void)rows; assert(!expect_rescue); ++matrix_scans; return false;
+    (void)rows; assert(!expect_rescue); ++matrix_scans;
+    if (!skip_scan) ck5200_watchdog_note_scan();
+    return false;
 }
 void ck5200_backlight_init(void) { assert(!expect_rescue); ++backlight_calls; }
 void ck5200_backlight_set(uint8_t raw) { (void)raw; assert(!expect_rescue); ++backlight_calls; }
 uint8_t ck5200_backlight_get(void) { assert(!expect_rescue); return 0; }
 
 bool tud_mounted(void) { return mounted; }
-bool tud_suspended(void) { return false; }
+bool tud_suspended(void) { return suspended; }
 bool tud_hid_ready(void) { return false; }
 bool tud_hid_report(uint8_t id, const void *p, uint16_t n) {
     (void)id; (void)p; (void)n; assert(!expect_rescue); return false;
@@ -56,7 +68,8 @@ bool tud_hid_report(uint8_t id, const void *p, uint16_t n) {
 void tud_init(uint8_t port) { assert(port == 0); }
 void tud_task(void) {
     advance_time(1);
-    if (stop_loop && ++usb_tasks == 8) longjmp(escape, 1);
+    ++timer_count;
+    if (stop_loop && ++usb_tasks == stop_after_usb_task) longjmp(escape, 1);
 }
 uint32_t tud_vendor_n_write(uint8_t itf, const void *p, uint32_t n) {
     if (reject_write) return 0;
@@ -126,7 +139,19 @@ static uint32_t marker(void) { uint32_t v; memcpy(&v, flash+0x8A00, 4); return v
 
 int main(int argc, char **argv) {
     assert(argc == 3);
-    expect_rescue = strcmp(argv[1], "normal") != 0;
+    expect_rescue = strcmp(argv[1], "normal") != 0 &&
+                    strcmp(argv[1], "watchdog-scan-stall") != 0 &&
+                    strcmp(argv[1], "watchdog-transport-stall") != 0 &&
+                    strcmp(argv[1], "watchdog-busy") != 0 &&
+                    strcmp(argv[1], "watchdog-suspend") != 0;
+    watchdog_registers.CTLR = 0xCCCC;
+    watchdog_registers.PSCR = 3;
+    watchdog_registers.RLDR = 4000;
+    skip_scan = strcmp(argv[1], "watchdog-scan-stall") == 0;
+    if (strcmp(argv[1], "watchdog-transport-stall") == 0) stop_after_usb_task = 1;
+    if (strcmp(argv[1], "watchdog-busy") == 0 ||
+        strcmp(argv[1], "watchdog-suspend") == 0) mounted = true;
+    suspended = strcmp(argv[1], "watchdog-suspend") == 0;
     memset(flash, 0xA5, sizeof(flash));
     memset(flash+0x8A00, 0, 4); /* Fixture: no pending install. */
     if (expect_rescue) {
@@ -139,15 +164,53 @@ int main(int argc, char **argv) {
     if (exit_reason == 0) ck5200_main();
     stop_loop = false;
     assert(writes == 0);
+    assert(watchdog_registers.PSCR == 3 && watchdog_registers.RLDR == 4000);
+    if (skip_scan || stop_after_usb_task == 1) {
+        assert(exit_reason == 1 && watchdog_registers.CTLR == 0xCCCC);
+        puts("stalled production scan or transport did not feed watchdog"); return 0;
+    }
     if (fail_platform) {
         assert(exit_reason == 3 && auth_init == 0 && usb_tasks == 0);
         puts("startup failure before transport: outside rescue guarantee"); return 0;
     }
     assert(exit_reason == 1 && auth_init == 1 && usb_tasks == 8);
+    assert(watchdog_registers.CTLR == 0xAAAA);
+    if (strcmp(argv[1], "watchdog-busy") == 0 ||
+        strcmp(argv[1], "watchdog-suspend") == 0) {
+        puts("busy or suspended USB still feeds after completed work"); return 0;
+    }
     if (!expect_rescue) {
         assert(pre_init == 1 && post_init == 1 && matrix_inits == 1 && matrix_scans > 0);
         assert(backlight_calls && eeconfig_is_enabled());
         assert(command(0x94, 0, NULL, 0) == 255); /* No unauthenticated reset. */
+        /* TinyUSB bus reset drops transfers without an unmount callback.
+         * Cover an accepted reply, an unsent reply, and an accepted A0 ACK. */
+        for (unsigned interrupted = 0; interrupted < 3; ++interrupted) {
+            connect_phone();
+            defer_completion = true;
+            reject_write = interrupted == 1;
+            const uint8_t request = interrupted == 2 ? 0xA0 : 0x03;
+            assert(command(request, 0, NULL, 0) == (reject_write ? 255 : 0));
+            const unsigned reboots_before = staging_host_reboots;
+            mounted = false;
+            service(1);
+            mounted = true;
+            response_len = 0;
+            tud_mount_cb();
+            if (interrupted == 2) {
+                tud_vendor_tx_cb(1, 4); /* An old A0 completion has no authority. */
+                assert(staging_host_reboots == reboots_before);
+            }
+            reject_write = false;
+            service(1);
+            assert(response_len == 0); /* Do not replay a reply from the old mount. */
+            connect_phone();
+            defer_completion = false;
+            assert(command(0x03, 0, NULL, 0) == 0 &&
+                   "bus reset left the old reply blocking the new session");
+            assert(staging_host_reboots == reboots_before);
+        }
+        puts("bus reset cancels accepted, queued, and A0 reply ownership");
         connect_phone();
         memset(flash+0x8A00, 0xA5, 4);
         assert(command(0x94, 0, NULL, 0) == 255); /* Unknown/pending marker blocks reset. */

@@ -3,6 +3,7 @@ name: Clicks Inspector iOS
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - "ios/ClicksInspector/**"
       - ".github/workflows/ios.yml"
@@ -11,6 +12,7 @@ on:
       - "keyboards/ck5200/firmware/**"
       - "keyboards/ck5200/scripts/pins.env"
       - "keyboards/ck5200/tests/qmk_shim/**"
+      - "keyboards/ck5200/stock_extension/**"
   pull_request:
     paths:
       - "ios/ClicksInspector/**"
@@ -20,14 +22,50 @@ on:
       - "keyboards/ck5200/firmware/**"
       - "keyboards/ck5200/scripts/pins.env"
       - "keyboards/ck5200/tests/qmk_shim/**"
+      - "keyboards/ck5200/stock_extension/**"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  extension-editor:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare genuine V122 emulator
+        working-directory: keyboards/ck5200
+        run: |
+          brew install xcodegen
+          bash scripts/setup.sh
+          bash scripts/revert-stock.sh --download-only
+          bash stock_extension/build_extension_image.sh
+          cmp build/stock_extension/ck5200_extension.bin ../../ios/ClicksInspector/Resources/ck5200_extension.bin
+          python3 stock_extension/assurance/run.py
+      - name: Verify editor, profiles, exact HID and recovery in Simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          python3 ios/ClicksInspector/Tests/run-extension-editor.py --device "$DEVICE_ID" --output evidence/extension-editor
+          python3 ios/ClicksInspector/Tests/run-extension-editor.py --configuration ExtensionInstaller --device "$DEVICE_ID" --output evidence/extension-installer
+      - name: Retain editor screens and V122 execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-editor-${{ github.sha }}
+          path: |
+            evidence/extension-editor/
+            evidence/extension-installer/
+            keyboards/ck5200/build/stock_extension/build-report.txt
+            keyboards/ck5200/build/stock_extension/build-source-sha256.json
+            keyboards/ck5200/build/stock_extension/assurance/report.json
+          retention-days: 30
   verify:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +103,13 @@ jobs:
             -scheme ClicksInspector -configuration Debug \
             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
             2>&1 | tee evidence/iphone-build.log
+      - name: Build release diagnostics iPhone configuration
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration Release \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/iphone-Release-build.log
       - name: Build unsigned simulator application
         run: |
           set -o pipefail
@@ -72,35 +117,50 @@ jobs:
           xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
             -scheme ClicksInspector -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
-             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
-      - name: Build release diagnostics and QMK RAM iPhone configurations
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee evidence/simulator-build.log
+      - name: Build unsigned M4 stock flash trial configuration
         run: |
           set -o pipefail
-          for CONFIG in Release QMKKeymap; do
-            xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
-              -scheme ClicksInspector -configuration "$CONFIG" \
-              -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
-              2>&1 | tee "evidence/iphone-$CONFIG-build.log"
-          done
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration StockFlashTrial \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/stock-flash-trial-build.log
+      - name: Build unsigned extension-only installer
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration ExtensionInstaller \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/extension-installer-build.log
       - name: Test recording, export, and deletion in Simulator
         run: |
           set -o pipefail
           DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          echo "UI_DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
           xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
             -scheme ClicksInspector -configuration Debug \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -parallel-testing-enabled NO -resultBundlePath evidence/ui-tests.xcresult \
              CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/ui-tests.log
-      - name: Test QMK editing, durable profiles, reconnect, and runtime factory restore
+      - name: Retain source exports from simulator storage
+        if: always() && env.UI_DEVICE_ID != ''
+        run: |
+          mkdir -p evidence/source-exports
+          # Xcode can shut down the device or use a test clone. Read only the
+          # explicit Debug UI-test snapshots, without requiring a running device.
+          find "$HOME/Library/Developer/CoreSimulator/Devices" -type f \
+            -path '*/data/Containers/Data/Application/*/tmp/stock-export-ui-evidence/stock-*-*.json' \
+            -print -exec cp '{}' evidence/source-exports/ \;
+      - name: Extract UI captures from test results
+        if: always() && env.UI_DEVICE_ID != ''
+        run: |
+          xcrun xcresulttool export attachments --path evidence/ui-tests.xcresult --output-path evidence/ui-attachments
+      - name: Compare exported source bytes with UI capture
+        if: always() && env.UI_DEVICE_ID != ''
         run: |
           set -o pipefail
-          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
-          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
-            -scheme ClicksInspector -configuration QMKKeymap \
-            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
-            -only-testing:ClicksInspectorUITests/QMKProfileUITests \
-            -parallel-testing-enabled NO -resultBundlePath evidence/qmk-ui-tests.xcresult \
-            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/qmk-ui-tests.log
+          python3 ios/ClicksInspector/Tests/compare_ui_export.py evidence/source-exports evidence/ui-attachments \
+            2>&1 | tee evidence/source-ui-comparison.log
       - name: Build and package the write-disabled stock manager
         run: |
           set -o pipefail
@@ -124,7 +184,21 @@ jobs:
               "evidence/ClicksInspector-StockFirmwareManager-$SDK.zip"
           done
           shasum -a 256 evidence/ClicksInspector-StockFirmwareManager-*.zip > evidence/app-SHA256SUMS
-      - name: Export simulator screenshots
+      - name: Verify integrated QMK iPhone profiles
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration QMKKeymap \
+            -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee evidence/qmk-iphone-build.log
+          DEVICE_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime,items in d["devices"].items() if ".iOS-" in runtime for x in items if x["name"].startswith("iPhone")))')
+          xcodebuild -project ios/ClicksInspector/ClicksInspector.xcodeproj \
+            -scheme ClicksInspector -configuration QMKKeymap \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -only-testing:ClicksInspectorUITests/QMKProfileUITests \
+            -parallel-testing-enabled NO -resultBundlePath evidence/qmk-ui-tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee evidence/qmk-ui-tests.log
+      - name: Retain QMK workflow screenshots
         if: always()
         run: |
           if [ -d evidence/qmk-ui-tests.xcresult ]; then

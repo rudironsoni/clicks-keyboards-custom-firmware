@@ -7,3 +7,6 @@
 **/.pytest_cache/
 *.pyc
 .DS_Store
+/tmp/
+/*.ipa
+/com.clickscompanion.app_6466761655_3.0.2/

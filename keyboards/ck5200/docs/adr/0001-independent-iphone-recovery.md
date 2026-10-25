@@ -125,7 +125,12 @@ WCH System FLASH is separate from the presumed Clicks installer, but it is mutab
 
 The inspected `wchisp` programs from zero and provides no proven application-range erase.
 A6 compares supplied bytes rather than reading unknown main flash.
-The final stock page includes 40 unknown bytes outside the image. Their preservation remains required.
+The final stock page includes 40 bytes outside the image. [CORRECTION
+2026-10-21:] the flash-ownership investigation reclassified these as ordinary
+unused application-area flash that no stock code reads and that every OEM
+update erases; the earlier "preservation remains required" statement is
+superseded by that evidence. The unknown boot-stage behavior above is
+unaffected by this correction.
 Thus successful entry or enumeration would not establish a permissible restore or power-loss recovery.
 The report records exact source pins, a conditional circuit, alternatives, and eight falsifiable R3 criteria.
 

@@ -33,14 +33,8 @@ cc -std=c11 -Wall -Wextra -DCK5200_BACKLIGHT_HOST_TEST -I tests/stubs -I firmwar
 
 "$TEST_BUILD/ck5200_backlight_test"
 
-# Consumer-key state machine: press/release semantics and 10-byte
-# report packing against the descriptor contract.
-cc -std=c11 -Wall -Wextra -I firmware/platform/ch32x035 \
-  tests/ck5200_consumer_test.c \
-  firmware/platform/ch32x035/ck5200_consumer.c \
-  -o "$TEST_BUILD/ck5200_consumer_test"
-
-"$TEST_BUILD/ck5200_consumer_test"
+cc -std=c11 -Wall -Wextra tests/ck5200_watchdog_test.c -o "$TEST_BUILD/ck5200_watchdog_test"
+"$TEST_BUILD/ck5200_watchdog_test"
 
 cc -std=c11 -Wall -Wextra -I tests/stubs -DMATRIX_ROWS=6 -DMATRIX_COLS=6 \
   tests/ck5200_keymap_test.c \
@@ -110,7 +104,7 @@ QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c
  $Q/quantum/deferred_exec.c $Q/quantum/caps_word.c $Q/quantum/bootmagic/bootmagic.c \
  $Q/quantum/process_keycode/process_magic.c $Q/quantum/logging/debug.c \
  $Q/quantum/logging/print.c $Q/quantum/logging/sendchar.c \
- $Q/quantum/debounce/sym_defer_g.c \
+ $ROOT/firmware/keyboard/ck5200_debounce.c \
  $Q/quantum/send_string/send_string.c \
  $Q/drivers/eeprom/eeprom_driver.c $Q/drivers/eeprom/eeprom_transient.c \
  $Q/lib/fnv/hash_64a.c $Q/tmk_core/protocol/host.c $Q/tmk_core/protocol/report.c \
@@ -118,16 +112,26 @@ QCORE="$Q/quantum/action.c $Q/quantum/action_layer.c $Q/quantum/action_tapping.c
 QCK="$ROOT/firmware/platform/ch32x035/ck5200_consumer.c \
  $ROOT/firmware/platform/ch32x035/ck5200_keymap.c"
 
+# Consumer-key state changes send through QMK's host interface.
+cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_consumer_test" \
+  tests/ck5200_consumer_test.c firmware/platform/ch32x035/ck5200_consumer.c
+"$TEST_BUILD/ck5200_consumer_test"
+
 cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_qmk_core_test" \
   tests/ck5200_qmk_core_test.c $QCORE $QCK
 
-"$TEST_BUILD/ck5200_qmk_core_test"
+liveness_failures=0
+"$TEST_BUILD/ck5200_qmk_core_test" || liveness_failures=$((liveness_failures + 1))
 
 cc $QFLAGS $QINC $QDEFS -o "$TEST_BUILD/ck5200_protocol_task_test" \
   tests/ck5200_protocol_task_test.c \
   firmware/platform/ch32x035/protocol.c firmware/keyboard/matrix.c $QCORE $QCK
 
-"$TEST_BUILD/ck5200_protocol_task_test"
+"$TEST_BUILD/ck5200_protocol_task_test" || liveness_failures=$((liveness_failures + 1))
+if (( liveness_failures > 0 )); then
+  echo "Both liveness harnesses ran; $liveness_failures failure(s)" >&2
+  exit 1
+fi
 
 # Real selected main, transport tasks, Apple session, and constrained staging.
 M2_BUILD="$TEST_BUILD"
@@ -141,7 +145,7 @@ cc $QFLAGS $QINC $QDEFS -DCK5200_STAGING_HOST_TEST -DCK5200_IDENTITY_HOST_TEST -
   firmware/platform/ch32x035/ck5200_staging.c \
   firmware/platform/ch32x035/ck5200_update_protocol.c \
   $QCORE $QCK -o "$M2_BUILD/rescue_test"
-for mode in normal rescue early-failure closed-session watchdog-jump watchdog-packet watchdog-ep3; do
+for mode in normal rescue early-failure closed-session watchdog-jump watchdog-packet watchdog-ep3 watchdog-scan-stall watchdog-transport-stall watchdog-busy watchdog-suspend; do
   UBSAN_OPTIONS=halt_on_error=1 "$M2_BUILD/rescue_test" "$mode" .stock/iKeyboard_CK-5200_V122_120.bin
 done
 

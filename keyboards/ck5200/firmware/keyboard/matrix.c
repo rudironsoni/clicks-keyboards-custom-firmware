@@ -17,6 +17,7 @@
 #include "ch32x035.h"
 #include "ch32x035_gpio.h"
 #include "ch32x035_rcc.h"
+#include "ck5200_watchdog.h"
 
 #define MATRIX_MASK ((uint16_t)0x003Fu)
 
@@ -54,5 +55,6 @@ bool matrix_scan_custom(matrix_row_t current_matrix[]) {
     }
 
     GPIO_ResetBits(GPIOB, MATRIX_MASK);
+    ck5200_watchdog_note_scan();
     return changed;
 }

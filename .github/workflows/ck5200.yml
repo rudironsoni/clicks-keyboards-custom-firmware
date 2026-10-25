@@ -3,13 +3,24 @@ name: CK-5200
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - "keyboards/ck5200/**"
       - ".github/workflows/ck5200.yml"
+      - "ios/ClicksInspector/Sources/StockExtensionProtocol.swift"
+      - "ios/ClicksInspector/Sources/StockExtensionTransport.swift"
+      - "ios/ClicksInspector/Sources/StreamLink.swift"
+      - "ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift"
+      - "ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift"
   pull_request:
     paths:
       - "keyboards/ck5200/**"
       - ".github/workflows/ck5200.yml"
+      - "ios/ClicksInspector/Sources/StockExtensionProtocol.swift"
+      - "ios/ClicksInspector/Sources/StockExtensionTransport.swift"
+      - "ios/ClicksInspector/Sources/StreamLink.swift"
+      - "ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift"
+      - "ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift"
 
 permissions:
   contents: read
@@ -41,6 +52,7 @@ jobs:
           cc --version
           git --version
           curl --version
+          swiftc --version
 
       - name: Set up toolchain and dependencies
         run: bash scripts/setup.sh
@@ -63,15 +75,85 @@ jobs:
       - name: Run tests
         run: bash scripts/test.sh
 
+      - name: Execute exact firmware in the bounded assurance model
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          mkdir -p build/assurance
+          python3 assurance/run.py --image build/ck5200_qmk.bin --elf build/ck5200_qmk.elf \
+            2>&1 | tee build/assurance/ci.log
+          test -s build/assurance/report.json
+
+      - name: Retain binary assurance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ck5200-assurance
+          if-no-files-found: warn
+          path: |
+            keyboards/ck5200/build/assurance/*.json
+            keyboards/ck5200/build/assurance/*.jsonl
+            keyboards/ck5200/build/assurance/*.log
+            keyboards/ck5200/build/ck5200_qmk.bin
+            keyboards/ck5200/build/ck5200_qmk.elf
+
       - name: Inspect firmware
         run: |
-          TOOLCHAIN_BIN="$(find .toolchains -type f -name riscv-none-elf-objdump -print -quit | xargs dirname)"
+          TOOLCHAIN_BIN="$(find .toolchains -type f -name riscv-none-elf-objdump -exec dirname '{}' \; -quit)"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           riscv-none-elf-size build/ck5200_qmk.elf
           riscv-none-elf-objdump -h build/ck5200_qmk.elf
           riscv-none-elf-objdump -d build/ck5200_qmk.elf > build/ck5200_qmk.disassembly.txt
           .venv/bin/python tools/validate_image.py build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
           sha256sum build/ck5200_qmk.bin build/ck5200_qmk.elf build/ck5200_qmk.map
+
+      - name: Run CK-5200 host Python tests
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tests -q
+
+      - name: Execute separate V122 scanner profile
+        run: |
+          set -o pipefail
+          python3 stock_extension/assurance/run.py | tee build/stock_extension/v122-execution.log
+          python3 tools/executable_installation_probes.py
+          python3 -c 'from tools.ios_updater_forensics import behavioral_cases; print("reconstructed iOS worker cases:", len(behavioral_cases()))'
+
+      - name: Execute iOS codec against V122 configuration
+        run: |
+          set -o pipefail
+          swiftc ../../ios/ClicksInspector/Sources/StockExtensionProtocol.swift \
+            ../../ios/ClicksInspector/Sources/StockExtensionTransport.swift \
+            ../../ios/ClicksInspector/Sources/CustomKeyboardProtocol.swift \
+            ../../ios/ClicksInspector/Sources/StreamLink.swift \
+            ../../ios/ClicksInspector/Tests/StockExtensionProtocolTests.swift \
+            -o build/stock_extension/assurance/swift-extension-test
+          build/stock_extension/assurance/swift-extension-test \
+            "$PWD/build/stock_extension/assurance/runner" \
+            "$PWD/build/stock_extension/ck5200_extension.bin" \
+            "$PWD/.stock/iKeyboard_CK-5200_V122_120.bin" \
+            "$PWD/build/stock_extension/assurance" | tee build/stock_extension/swift-execution.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ck5200-stock-extension-research
+          path: |
+            keyboards/ck5200/build/stock_extension/ck5200_extension.bin
+            keyboards/ck5200/build/stock_extension/ck5200_extension.elf
+            keyboards/ck5200/build/stock_extension/ck5200_extension.map
+            keyboards/ck5200/build/stock_extension/ck5200_extension.disassembly.txt
+            keyboards/ck5200/build/stock_extension/symbols.txt
+            keyboards/ck5200/build/stock_extension/SHA256SUMS
+            keyboards/ck5200/build/stock_extension/build-report.txt
+            keyboards/ck5200/build/stock_extension/build-source-sha256.json
+            keyboards/ck5200/build/stock_extension/patch_manifest.json
+            keyboards/ck5200/build/stock_extension/assurance/report.json
+            keyboards/ck5200/build/stock_extension/assurance/*.trace.jsonl
+            keyboards/ck5200/build/installation-probes/report.json
+            keyboards/ck5200/build/installation-probes/*.jsonl
+            keyboards/ck5200/build/stock_extension/v122-execution.log
+            keyboards/ck5200/build/stock_extension/swift-execution.log
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,8 @@
 # Selective factory-ISP recovery inquiry
 
-Status: **READY TO SEND, UNSENT**. Date: 2026-10-17.
+Status: **READY TO SEND, UNSENT**. Date: 2026-10-17. Updated: 2026-10-20 with
+the OEM boot-stage questions after the
+[memory-ownership investigation](memory-ownership-and-oem-transition.md).
 Recipient: `support@clicks.tech`, Clicks support/firmware engineering, with the protocol questions forwarded to WCH ISP engineering.
 The [existing recovery audit](../../keyboards/ck5200/docs/recovery-audit-2026-10-14.md) records this public support address.
 This draft requests existing records. Sending it requires a separate user decision.
@@ -30,6 +32,43 @@ The presumed OEM installer occupies `[0x0000,0x2000)` and is absent from this fi
 The recovery method must leave that installer untouched, including during interruption.
 It must also preserve other unknown flash, serial/configuration pages at offsets `0xF600` and `0xF700`, System FLASH, options, and authentication data.
 It must not require mass erase, protection removal, debug enabling, or replacement of the factory loader.
+
+**0. The OEM boot stage at offsets `[0x0000,0x2000)` (decisive questions)**
+
+Static analysis of all six official application images (V114-V122) shows that the
+application stages an image at `0x8A00` (four-byte length marker, then image
+bytes), acknowledges A0 with a plain system reset, never reads the marker, and
+contains no destination-write code. The boot stage must therefore consume the
+marker and perform the installation copy. Please answer from existing
+engineering records for CK-5200 hardware 1.2.0:
+
+0a. **Marker validation:** Which marker values does the boot stage accept, and
+    what length bounds does it enforce? Does it validate the staged image
+    beyond the marker (checksum, signature, version window, model check), and
+    what does it do on validation failure?
+0b. **Marker clearing order:** Is the marker cleared or invalidated before,
+    during, or only after a completed destination copy? After a successful
+    installation, is the marker value `0xFFFFFFFF`, the installed length, or
+    something else?
+0c. **Interrupted-copy retry:** If power is lost after a valid marker but during
+    the destination copy, what does the next power-up do? Does the keyboard
+    complete the installation, revert, or remain in its previous state? Is this
+    behavior covered by a specified or tested power-loss sequence?
+0d. **Maximum image acceptance:** The application accepts any declared length
+    up to `0x6A00` (the full `[0x2000,0x8A00)` area). Does the boot stage accept
+    and correctly install a `0x6A00`-length image? Does it accept any length the
+    application accepts, or only lengths matching officially released images?
+0e. **Copy granularity and final pages:** Does the boot stage copy exactly the
+    marker length in bytes, or whole 256-byte pages? What does it write to the
+    unwritten tail of the final destination page (erase residue `0xFF`, staged
+    bytes, or preserved previous content)?
+0f. **Recovery with a dead application:** When the application cannot start or
+    enumerate USB, what supported method restores firmware from an iPhone? Does
+    the boot stage expose any interface in that state, and under which entry
+    condition?
+
+Answers to 0a-0f from the installer's source or an engineering specification
+would resolve the current installation and recovery assessment directly.
 
 **1. Applicable loader and protection**
 
@@ -67,8 +106,13 @@ If a RAM helper is proposed, please specify how factory USB loads and starts it 
 
 The final destination page is `[0x6800,0x6900)`.
 V122 supplies its first 216 bytes. It supplies nothing for `[0x68D8,0x6900)`.
-Are these 40 bytes meaningful data, guaranteed erased padding, or bytes that the OEM installer preserves?
-Please provide the applicable storage map or installer copy specification, including behavior after older images or interrupted updates.
+Our cross-version analysis indicates these 40 bytes are unused application-area
+padding: every consecutive official update requires erasing the predecessor's
+final page (V121→V122 has 69 erase-forcing bytes in that page), V122 writes image
+data through V121's former tail, no official image's code reads beyond its own
+extent, and device-specific data (serial at `0xF600`, configuration at `0xF700`)
+lives outside the application area. Please confirm or correct this
+classification.
 
 Static analysis of the V122 application shows staging at `0x8A00` with a four-byte length marker.
 The staged image ends at `0xD2DC`, followed by 36 `0xFF` fill bytes through `0xD2FF`.

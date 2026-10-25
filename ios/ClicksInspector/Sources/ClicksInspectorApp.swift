@@ -11,17 +11,75 @@ struct ClicksInspectorApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationStack {
+                if let mode = confirmationTestMode {
+                    ConfirmationView(title: "Confirmation UI test",
+                        detail: "Simulator view test only. No keyboard link or firmware operation exists.",
+                        acknowledgementRequired: "Acknowledge the test warning.",
+                        eligibility: { mode == "blocked" ? "Test preflight blocked." : nil }) {}
+                } else {
+                    StockExtensionView(inspector: inspector, editor: inspector.extensionEditor)
+                }
+            }
+            .preferredColorScheme(testAppearance)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active: inspector.foreground()
+            case .background: inspector.background()
+            case .inactive: inspector.inactive()
+            @unknown default: break
+            }
+        }
+    }
+
+    private var testAppearance: ColorScheme? {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.environment["MY_CLICKS_DARK_TEST"] == "1" ? .dark : nil
+        #else
+        nil
+        #endif
+    }
+
+    private var confirmationTestMode: String? {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.environment["FIRMWARE_CONFIRMATION_UI_TEST"]
+        #else
+        nil
+        #endif
+    }
+}
+
+struct AdvancedInspectorView: View {
+    @ObservedObject var inspector: AccessoryInspector
+    @ObservedObject var custom: CustomFirmwareController
+
+    init(inspector: AccessoryInspector) {
+        self.inspector = inspector
+        self.custom = inspector.customFirmware
+    }
+
+    private var qmkEmulatorAvailable: Bool {
+        #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
+        true
+        #else
+        false
+        #endif
+    }
+
+    var body: some View {
                 List {
                     Section("Stock evidence") {
                         NavigationLink("Stock characterization and key recorder") {
                             StockCharacterizationView(inspector: inspector)
                         }
                     }
+                    if custom.hasQMKIdentity || qmkEmulatorAvailable {
                     Section("QMK RAM profiles") {
                         NavigationLink("Edit QMK keymap and phone profiles") {
-                            QMKKeymapView(custom: inspector.customFirmware)
+                            QMKKeymapView(custom: inspector.customFirmware, inspector: inspector)
                         }
                         .accessibilityIdentifier("qmk.open")
+                    }
                     }
                     Section("Session") {
                         Text("Open session uses the stock read-only path. Firmware controls require a separate session.")
@@ -73,7 +131,7 @@ struct ClicksInspectorApp: App {
                                 }
                                 Button("Open session") { inspector.openSession(for: accessory) }
                                     .disabled(!accessory.isConnected || !accessory.protocolStrings.contains(AccessoryInspector.supportedProtocol))
-                                Button("Identify stock-manager session (read-only)") {
+                                Button("Open firmware-control session") {
                                     inspector.openSession(for: accessory, firmwareControls: true)
                                 }
                                 .disabled(inspector.stockEvidence.isRecording || inspector.customFirmware.phaseIsBusy || !accessory.isConnected)
@@ -96,7 +154,7 @@ struct ClicksInspectorApp: App {
                         }
                     }
                 }
-                .navigationTitle("Clicks Inspector")
+                .navigationTitle("Advanced")
                 .toolbar {
                     Button("Refresh") { inspector.refresh() }
                 }
@@ -109,16 +167,6 @@ struct ClicksInspectorApp: App {
                         UIApplication.shared.isIdleTimerDisabled = false
                     }
                 }
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active: inspector.foreground()
-            case .background: inspector.background()
-            case .inactive: inspector.inactive()
-            @unknown default: break
-            }
-        }
     }
 }
 
@@ -145,6 +193,14 @@ private struct CustomFirmwareSection: View {
 
     var body: some View {
         Section("Verified stock firmware manager") {
+            if CustomFirmwareController.stockFlashTrial {
+                Text("STOCK FLASH TRIAL BUILD")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                Text("This is the authorized M4 trial configuration. It can physically rewrite the keyboard's application firmware with the official V122 image. Recovery from a failed installation is NOT established. Do not use without the reviewed trial procedure.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             Button("Prepare official CK-5200 V122") {
                 if let image = Self.stockImage() { custom.prepareStock(image) }
             }
@@ -152,7 +208,9 @@ private struct CustomFirmwareSection: View {
             Text(custom.stockPreparation).accessibilityIdentifier("stockManager.preparation")
             Text("Stock to stock: functioning updater required. QM/RS to stock: functioning authenticated application service required. Unbootable to stock: R3 unmet.")
                 .font(.caption)
-            Text("Physical installation is disabled in every iPhone build. A separate explicit authorization and recovery decision are required.")
+            Text(CustomFirmwareController.stockFlashTrial
+                 ? "Trial configuration active: installation is enabled below, only after the explicit risk acknowledgement and the reviewed procedure."
+                 : "Default configurations physically disable installation. The dedicated M4 StockFlashTrial configuration is required for the authorized trial.")
                 .font(.caption)
             switch custom.phase {
             case .idle: Text("No session.")
@@ -169,6 +227,14 @@ private struct CustomFirmwareSection: View {
                 Text(custom.stockObservation)
                 Text("A version reply or typing test cannot prove application replacement. The record cannot be cleared by marking it verified.")
                     .font(.caption)
+                if let pending = custom.pendingUpdate, !pending.isResolved {
+                    Button("Conclude trial (evidence captured)") {
+                        custom.concludePendingUpdate(
+                            observation: "Post-update observation: reconnect identity \(custom.lastVersionPayload.map { $0.map { String(format: "%02x", $0) }.joined() } ?? "none") at \(Date().formatted()).")
+                    }
+                    Text("Concluding closes the trial operationally and clears the controller gate for a future transaction. It never claims the application was rewritten; the install control stays off for this journal record, and the resolution persists in the audit log.")
+                        .font(.caption)
+                }
             }
 
             let sessionReady = custom.phaseIsStockFirmware || custom.phaseIsCustomFirmware
@@ -180,10 +246,14 @@ private struct CustomFirmwareSection: View {
                 // would promise an operation the controller rejects.
                 if custom.stockMode != nil {
                     if let image = Self.stockImage() {
-                        Button("Install official stock V122 (disabled)") {
-                            confirmation = .restoreStock(image)
+                        if CustomFirmwareController.stockFlashTrial {
+                            Button("Install official stock V122") {
+                                confirmation = .restoreStock(image)
+                            }
+                        } else {
+                            Button("Install official stock V122 (disabled)") {}
+                                .disabled(true)
                         }
-                        .disabled(true)
                     } else {
                         Text("Bundled stock image missing from the app bundle.")
                             .font(.caption)
@@ -193,21 +263,42 @@ private struct CustomFirmwareSection: View {
                     Text("Unknown firmware mode. Installation is refused.")
                         .font(.caption)
                 }
-                Text("Only the exact official CK-5200 V122 image is accepted for preparation. QMK installation is out of scope.")
+                Text(custom.pendingUpdate.map { pending in
+                    pending.isResolved
+                     ? "A concluded trial record exists. The install control stays off for it by design (one physical trial per record); the resolution is retained in the audit log."
+                     : "A previous update record is unresolved; installation stays blocked until the trial is concluded after capturing its evidence."
+                } ?? (CustomFirmwareController.stockFlashTrial
+                      ? "Only the exact official CK-5200 V122 image can be installed. QMK installation remains disabled in every configuration."
+                      : "Physical installation is disabled in this configuration. Only the dedicated M4 StockFlashTrial configuration can enable it, under the reviewed trial procedure."))
                     .font(.caption)
                 Text("Transfer, commit acknowledgement, reboot request, stock observed, and installation proven are separate states. This app cannot prove the original installer's copy operation.")
                     .font(.caption)
             }
+            if custom.stagingAbortAvailable {
+                Button("Abort update (staging only)", role: .destructive) {
+                    custom.requestStagingAbort()
+                }
+                Text("Aborting stops staging new pages. It is refused once the commit (A3) has been requested, because the device may already have committed.")
+                    .font(.caption)
+            }
         }
         .sheet(item: $confirmation) { confirmation in
-            let (title, detail): (String, String) = {
+            let (title, detail, acknowledgement): (String, String, String?) = {
                 switch confirmation {
                 case .restoreStock(let image):
-                    ("Re-flash stock firmware",
-                     "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.")
+                    if CustomFirmwareController.stockFlashTrial {
+                        ("Re-flash stock firmware (M4 trial)",
+                         "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it. This is a real flash operation with nonzero risk: the keyboard's application firmware is rewritten, and if the installation fails, no recovery path is established for this device.",
+                         "I understand this rewrites the keyboard's firmware, that a same-version reply cannot prove the rewrite happened, and that recovery from a failed install is not established.")
+                    } else {
+                        ("Re-flash stock firmware",
+                         "Stages the bundled Clicks V122 image (\(image.count) bytes, sha256 \(Self.sha256(image).prefix(12))…) and reboots the keyboard to install it.",
+                         nil)
+                    }
                 }
             }()
-            ConfirmationView(title: title, detail: detail) {
+            ConfirmationView(title: title, detail: detail,
+                              acknowledgementRequired: acknowledgement) {
                 switch confirmation {
                 case .restoreStock(let image):
                     custom.flash(image: image, rebootToInstall: true)
@@ -227,32 +318,53 @@ private struct CustomFirmwareSection: View {
     }
 }
 
-private struct ConfirmationView: View {
+struct ConfirmationView: View {
     let title: String
     let detail: String
+    var acknowledgementRequired: String? = nil
+    var eligibility: () -> String? = { nil }
     let confirm: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var acknowledged = false
 
     var body: some View {
+        let blockedReason = eligibility()
+        ScrollView {
         VStack(spacing: 16) {
             Text(title).font(.headline)
             Text(detail).font(.subheadline)
+            if let acknowledgement = acknowledgementRequired {
+                Toggle(acknowledgement, isOn: $acknowledged)
+                    .font(.caption)
+                    .accessibilityIdentifier("firmware.risk")
+            }
+            if let blockedReason {
+                Text(blockedReason)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("firmware.blockReason")
+            }
             HStack {
                 Button("Cancel") { dismiss() }
                 Button("Flash", role: .destructive) {
+                    guard eligibility() == nil, acknowledgementRequired == nil || acknowledged else { return }
                     dismiss()
                     confirm()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(blockedReason != nil || acknowledgementRequired != nil && !acknowledged)
+                .accessibilityIdentifier("firmware.confirm")
             }
         }
         .padding()
+        }
     }
 }
 
 /// Layer-by-layer keymap editor for the custom firmware.
 private struct QMKKeymapView: View {
     @ObservedObject var custom: CustomFirmwareController
+    @ObservedObject var inspector: AccessoryInspector
     @State private var editingCell: Cell?
     @State private var profileName = ""
     @FocusState private var profileNameFocused: Bool
@@ -373,6 +485,7 @@ private struct QMKKeymapView: View {
 
     #if targetEnvironment(simulator) && QMK_RAM_KEYMAP
     private func connectSimulation() {
+        guard inspector.claimFirmwareEmulator() else { return }
         custom.connectedTarget = .init(model: "CK-5200", firmwareRevision: "QMK", hardwareRevision: "1.2.0")
         custom.attach(SimulatedQMKLink())
     }

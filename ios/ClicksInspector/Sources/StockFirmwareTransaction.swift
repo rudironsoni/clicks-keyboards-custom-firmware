@@ -1,20 +1,43 @@
 import CryptoKit
 import Foundation
 
+/// The sheet carries the session being confirmed, not a separate optional
+/// state value that can lag behind Boolean sheet presentation.
+struct ExtensionInstallConfirmation: Identifiable {
+    let id: Int
+
+    func blockReason(currentSession: Int, preflight: String?) -> String? {
+        guard id == currentSession else { return "The connection changed. Cancel, open the installer connection, and review again." }
+        return preflight
+    }
+}
+
 /// Artifact approval is separate from permission to write a physical keyboard.
-struct PreparedStockImage {
+struct PreparedFirmwareImage {
+    enum Artifact { case stock, programmable }
+    let artifact: Artifact
     let bytes: [UInt8]
     let sha256: String
 
-    init(_ bytes: [UInt8]) throws {
+    init(_ bytes: [UInt8], artifact: Artifact = .stock) throws {
         let hash = SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
-        guard bytes.count == 18_648,
-              hash == CustomKeyboardImageAuthorization.authorizedStockSHA256 else {
-            throw CustomKeyboardError.invalidImage("Only exact CK-5200 V122 is accepted")
+        let expectedSize = artifact == .stock ? 18_648 : 27_058
+        let expectedHash = artifact == .stock ? CustomKeyboardImageAuthorization.authorizedStockSHA256
+            : CustomKeyboardImageAuthorization.authorizedExtensionSHA256
+        guard bytes.count == expectedSize, hash == expectedHash else {
+            throw CustomKeyboardError.invalidImage("The image does not match the pinned \(artifact) artifact")
         }
         try CustomKeyboardImageValidation.validate(image: bytes)
-        self.bytes = bytes
-        sha256 = hash
+        self.artifact = artifact
+        // Full application pages avoid an unknown final-page copy tail. The
+        // accepted executable is unchanged. Only its 78 unused bytes become FF.
+        self.bytes = artifact == .programmable
+            ? bytes + Array(repeating: 0xff, count: CustomKeyboardCommand.maximumImageSize - bytes.count) : bytes
+        sha256 = SHA256.hash(data: Data(self.bytes)).map { String(format: "%02x", $0) }.joined()
+        guard sha256 == (artifact == .stock ? expectedHash : CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256) else {
+            throw CustomKeyboardError.invalidImage("The transfer image hash does not match")
+        }
+        try CustomKeyboardImageValidation.validate(image: self.bytes)
     }
 }
 
@@ -35,7 +58,7 @@ enum StockFirmwareMode: String, Codable {
 /// State advances only after its complete, validated acknowledgement.
 struct StockFirmwareTransaction {
     enum Step { case begin, data, commit, reboot, finished }
-    let image: PreparedStockImage
+    let image: PreparedFirmwareImage
     let source: StockFirmwareMode
     let target: CustomFirmwareController.ConnectedTarget
     let generation: Int

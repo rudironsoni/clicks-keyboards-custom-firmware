@@ -10,13 +10,20 @@ This file owns the current readiness and authorization status. Other guides must
 | M2 application-level rescue | COMPLETE, accepted at `ee45b6b` after independent review as a software-only secondary mechanism. Not installed or physically verified. See [acceptance and evidence](application-rescue.md#acceptance). Does not satisfy R3. |
 | M3 first usable QMK release | Three software deliverables implemented and independently reviewed; firmware, Swift/C integration and simulator CI passed at the [recorded revisions](m3-verification.md). Candidate: 26,496 bytes, 640 bytes headroom. No physical boot or compatibility claim. |
 | M3 spare hardware path | [Procedure prepared](m3-spare-bring-up.md); no matching spare acquired or verified by this task. Restoration route not established. No physical operations authorized. |
-| R3 iPhone-only independent recovery | UNMET. USB-C/BLE-host adapter research is conceptual only. No proven rescue from an unbootable application. [Investigation](../../../reports/CK5200%20USB%20recovery%20feasibility.md). |
-| Custom firmware flashing | NO-GO, no custom image authorized |
-| M1 stock firmware writes and resets | Disabled; not authorized for this stage |
-| Default iOS Debug and Release | Diagnostics-only; controller permits only exact demonstrated stock getters on the known identity |
-| QMKKeymap iOS configuration | Separate RAM-keymap permission, limited to exact CK-5200 hardware 1.2.0 and QM 00 01 identity, with explicit per-session write consent. A0–A3 remain blocked. No physical use authorized by M3. |
+| R3 iPhone-only independent recovery | UNMET. No proven rescue from an unbootable application using the iPhone alone without added hardware. [Current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18). |
+| Installation feasibility, 2026-10-23 | **NO-GO under current constraints.** [Comprehensive verdict](../../../docs/ck5200-installation-feasibility-verdict.md): iOS encoder recovered, exact receive controls pass, full startup stops at unsupported RCC access, OEM copier and independent recovery remain unverified. |
+| Custom firmware flashing | Rudi requested the explicit extension installer on 2026-10-23. The ExtensionInstaller configuration permits only the pinned stock-derived extension after session-bound confirmation and preflight checks. No agent-executed physical flash is authorized or performed. R3 remains unmet; this is not a physical safety acceptance. Arbitrary images and QMK flashing remain disabled. |
+| M1 stock settings writes and generic resets | Disabled. Image-pinned extension installation has the separate scope below. |
+| Default iOS Debug and Release | Firmware diagnostics-only. Offline drafts/profiles are available. Exact authorized stock reads require the known identity. Extension capability reads require explicit confirmation. RAM apply requires compatible extension identity and separate session consent, not flash authorization. No physical operation ran in the current UX task. |
+| ExtensionInstaller configuration | Enabled at Rudi's explicit request and installed on the iPhone 15 Pro Max. Only the pinned extension is allowed. Current-session consent, fresh stock identity, phone power/thermal checks, and existing audit/journal/transaction guards are required. Local Swift, ten production-C staging/fault cases, Simulator editor/UI, and padded-image V122 runtime checks pass. No agent-executed physical keyboard flash ran. |
+| First user-run extension update | Physical extension acceptance FAILED. The exact 27,136-byte client transfer and data/commit/reboot acknowledgements are verified. Two later capability reads both received `080294ff00000000`. Staging/marker contents, completed reset, and installed bytes remain unverified. The saved journal stays `sentRebootPending`, unchanged byte-for-byte. No further capability read, flash, reset, power-cycle test, or journal change is authorized. No agent keyboard operation ran. [Evidence and offline forensics](stock-extension-feasibility.md#19-post-transfer-installation-forensics-2026-10-23). |
+| Post-transfer installation forensics | Complete within retained-evidence scope. V122 helpers check BUSY only, not programming success or readback. Saved chronology cannot establish detach/reattach after A0. Six bounded image probes pass but do not identify the physical cause. The retained iOS EAF worker has no second install command after A0. No model-matched boot-stage executable was found. Staging/marker failure, incomplete reset, boot rejection/skipped copy, and an installed but inactive/corrupted hook remain indistinguishable. [Results and limits](stock-extension-feasibility.md#19-post-transfer-installation-forensics-2026-10-23). |
+| Hosted editor verification | PASS at `aa590fa59348b766d6f7ab849dc11937c213d5af`. Hosted iOS run `39932153737` passed both `extension-editor` and `verify`. The one-line selector fix changes no app or firmware code. At `fa4725a`, firmware run `39923157723` passed; iOS run `39923157707` passed `verify` but failed `extension-editor`. The hosted rerun closes the CI failure, not physical installation acceptance. |
 | StockFirmwareManager / AuthorizedStockUpdate configurations | Physical writes disabled. Exact identity query and offline official-image preparation only. |
-| M3 verified stock firmware manager | Implemented on `main`; physical firmware updates remain disabled. [Readiness, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
+| M3 verified stock firmware manager | COMPLETE/CLOSED for software scope in the R3 investigation. Software checks and independent review complete at `a7cf3f7`. [Delivery, app downloads and hashes](stock-manager-readiness.md). Stock-to-stock and QM/RS-to-stock are host workflows, not physical recovery claims. |
+| M4 first physical stock flash | SOFTWARE GATE CLOSED 2026-10-21; the StockFlashTrial app was additionally installed and launched on Rudi's physical iPhone over Wi-Fi (no firmware write; no flash pressed). Physical firmware execution remains unauthorized and separate. [Trial record](m4-stock-flash-trial.md). |
+| Stock settings protocol (evidence phase) | COMPLETE as a static baseline: `0x81–0x8D` contract and 36-position capability ledger ([protocol](stock-settings-protocol.md), [ledger](stock-capability-ledger.md)). No settings write, no zero-mask query executed: everything beyond the accepted getter baseline requires a separate authorization decision. |
+| Programmable stock-extension feasibility | `1cbb07a` remains the accepted offline RAM milestone. Editor and installer software checks remain separate from the failed physical extension check. The accepted executable and 978-byte record bound are unchanged. Four system cap-to-matrix assignments remain unverified. Full startup/USB assurance, keyboard-flash persistence, and R3 remain open. M4 stays closed. Contacting Clicks is excluded. No new keymap or UI work is in scope while physical execution remains unresolved. [Current evidence](stock-extension-feasibility.md#19-post-transfer-installation-forensics-2026-10-23). |
 
 The goals remain official stock installation, separately authorized custom transitions, independent iPhone-only recovery,
 preservation of the only keyboard, and reuse of maintained dependencies.
@@ -38,6 +45,94 @@ The missing evidence is an independent boot service with iPhone transport, valid
 Installer readback could help but would not satisfy these requirements by itself.
 See [iPhone transport limits](iphone-recovery-transport.md) for the separate public-API constraint.
 
+## Installation feasibility, 2026-10-18
+
+The completed runtime and binary assurance does not establish installation
+readiness. The [current decision frontier](recovery-research.md#installation-decision-frontier-2026-10-18)
+ranks the missing OEM entry, iPhone transport, and preservation evidence.
+The exact reviewed QMK image places instructions in `[0x68D8,0x6900)`, whose
+original contents remain unknown and protected. Safe installation of that
+image is therefore unverified, even though it fits the application allocation.
+External adapters and replacement-loader installation do not meet the current
+constraints. R3 remains UNMET. Physical flashing remains NO-GO.
+
+## Stock settings protocol milestone, 2026-10-21
+
+Rudi's 2026-10-21 principal-engineer direction: the stock firmware already
+implements a configurable settings surface (`0x81–0x8D`, persistent record at
+`0x0800F700`), so the next milestone is a stock-configuration evidence and
+capability-boundary workstream. M4 stays closed; no physical writes and no
+implementation are authorized yet.
+
+Delivered statically on branch `docs/ck5200-stock-settings-protocol`:
+
+- [stock-settings-protocol.md](stock-settings-protocol.md): the
+  instruction-level contract for `0x81–0x8D` (frames, validation, stores,
+  side effects, replies, dirty-flag and page-commit semantics), the 12-byte
+  flash record layout, the ClicksFT cross-check with confirmed discrepancies,
+  and the static proof that the zero-mask `04 83 00 00` query writes nothing.
+- [stock-capability-ledger.md](stock-capability-ledger.md): the 36 matrix
+  positions classified (fixed / mode-dependent / config-driven / consumer),
+  the complete stock-configurable behavior set (flags bits 0–7, brightness,
+  timeouts, currency, layout), the decoded currency emission path with its
+  Mac-standard gestures, and the hard boundary: no per-key remapping
+  facility exists in V122.
+
+The StockFlashTrial app was also installed and launched on Rudi's physical
+iPhone over Wi-Fi on 2026-10-21 (deployment only; no firmware command was
+sent and no flash was pressed). The on-device visual checks of the trial
+build remain his pending step; see the M4 record.
+
+Authorization unchanged: the accepted getter baseline is the only physical
+read evidence; the zero-mask query, any settings write, V121, QMK, and any
+firmware reflash all require separate explicit decisions.
+
+## M4 milestone status, 2026-10-21
+
+Rudi's 2026-10-20 review of the M4 delivery accepted the implementation and
+required corrections before authorizing any physical write. All were applied
+on 2026-10-21 on branch `feat/ck5200-m4-stock-flash-trial`:
+
+- The audit first-event overwrite defect is fixed and regression-tested
+  (a fresh log retains its complete first transaction, 583 ordered A2
+  frames included, byte-for-byte).
+- The audit is fail-closed: no update frame may be dispatched unless its
+  audit entry persisted first.
+- The staging abort is exercised mid-stall and its post-A3 refusal is
+  asserted.
+- `concludePendingUpdate` closes a finished trial operationally without ever
+  claiming the application was rewritten; the record and audit log are kept.
+- Host suite: 248 checks, zero failures, including the full flash path
+  compiled under the trial flag. The complete hosted iOS workflow (Swift
+  tests, diagnostics, simulator, and StockFlashTrial builds, simulator UI
+  tests, stock-manager UI tests, QMK profile regressions) passed at
+  `7585e58`, CI run `39553836693` (30m31s, all steps green); the firmware
+  workflow passed at `9e83272`, whose only successor change is this Swift
+  test file.
+- The V121 downgrade is explicitly NOT approved.
+- The signed-device build is prepared; signing requires one GUI action on
+  this machine (keychain ACL blocks non-GUI codesign):
+  `ios/ClicksInspector/sign-trial-app.sh` or Xcode GUI Product → Run.
+- The Mac descriptor capture ran read-only; the CK-5200 was not attached.
+  Rudi's one-command step reruns it.
+
+**M4 software gate CLOSED by Rudi on 2026-10-21:** he independently verified
+both workflows green at the same branch tip (`499c13b`) and closed software
+development for M4. No further implementation work is requested. The missing
+evidence is physical-device validation only, in this order: (1) the read-only
+Mac USB capture with the CK-5200 attached
+(`keyboards/ck5200/tools/mac_usb_capture.sh`); (2) the signed StockFlashTrial
+build installed and inspected on his iPhone without flashing (red trial
+banner, CK-5200 hardware 1.2.0, stock 1.2.2, V122 image SHA-256 `8ee86935…`,
+consent dialog); (3) one explicit V122-to-V122 trial decision, accepting the
+stated residual risk.
+
+**No physical firmware write has been performed. Execution of the prepared
+trial requires Rudi's explicit approval recorded in
+[m4-stock-flash-trial.md](m4-stock-flash-trial.md).** The independent review
+of the physical-trial path was commissioned per his direction; its findings
+and disposition are recorded in the M4 document.
+
 ## R3 investigation status, 2026-10-16
 
 **2026-10-17 follow-up:** outcome 2, exact vendor dependency. No preservation-safe factory-ISP sequence is established.
@@ -48,7 +143,15 @@ The [USB recovery feasibility report](../../../reports/CK5200%20USB%20recovery%2
 The adapter could avoid the direct iPhone raw-USB API limit. It does not resolve keyboard entry or preservation.
 PC17-high power-up entry is documented at chip level. Connector routing, VDD timing, loader identity, and protection remain unverified.
 System FLASH is mutable, not immutable ROM. The inspected client programs from zero, and no safe selective factory erase is established.
-The stock image's final page has 40 unknown bytes that must survive. Full interruption recovery remains unproven.
+[CORRECTION 2026-10-21, flash-ownership evidence] The final stock page's 40
+tail bytes are no longer "unknown bytes that must survive": the six-version
+erase-necessity analysis and the serial/config findings
+([memory-ownership-and-oem-transition.md](../../../research_notes/CK5200%20USB%20recovery%20feasibility/memory-ownership-and-oem-transition.md))
+classified them as ordinary unused application-area flash that no stock code
+reads and that every OEM update erases. The still-unverified subject is
+different and must not be conflated: the boot stage's marker consumption,
+copy semantics, and interruption behavior remain unknown, and full
+interruption recovery remains unproven.
 
 **R3 remains UNMET. Custom flashing remains NO-GO.** This file remains the sole readiness authority.
 Current work permits research and offline models only. No physical experiment, device command, reboot, probe, opening, ISP, unlock, purchase, or hardware build is authorized.
@@ -59,6 +162,9 @@ The model provides no OEM normal-boot or physical recovery proof. A3/A7 protocol
 Both scoped independent agent reviews are closed. The final ISP/lab review closed all four findings with no actionable blockers.
 The electrical review found no P1/P2 blockers for conceptual scope. [Review summary and verification limits](../../../research_notes/CK5200%20USB%20recovery%20feasibility/review.md).
 This closes review of the investigation, not R3 or physical recovery authorization.
+
+The separate [binary-execution assurance work](firmware-assurance.md) evaluates direct application startup in a specified software model.
+It cannot establish OEM boot handoff, physical USB behavior, or independent recovery. It changes none of the authorization gates above.
 
 Baseline collection is closed. Use the five recorded sessions as the stock diagnostics reference.
 Further physical characterization requires a specific need in a separately scoped task, not completion of every catalog trial.

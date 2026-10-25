@@ -1,0 +1,709 @@
+# CK-5200 binary-execution assurance
+
+Date: 2026-10-17. This record covers the first software-only execution gate.
+[flash-readiness.md](flash-readiness.md) remains the only authorization authority.
+**R3 remains UNMET. Physical custom flashing remains NO-GO.**
+
+## Proposal review before implementation
+
+The independent adversarial review accepted a bounded application-startup gate.
+It rejected using an unchanged CHGame emulator as assurance evidence.
+The review checked the prepared candidate and the pinned emulator source, without executing either or accessing a device.
+
+Candidate under review:
+
+- BIN: 26,496 bytes, SHA-256 `94ba2f708b69a754f26698cad700d0969601322c6bb692a38c8533cb60e3d2e4`.
+- ELF: SHA-256 `0ad0afccae603914cdf90e9298ef3da2f3e0a62c6ea7e877a730ba0d7dd1d298`.
+- Source context: the existing uncommitted [QMK delivery](qmk-delivery-evidence.md) on `feat/software-only-qmk-delivery`, based on `497b8e1592344567f1f5452443050b2fa692c814`.
+- Emulator: [`joyrider3774/chgame_emulator` at `bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48`](https://github.com/joyrider3774/chgame_emulator/tree/bb183d7863961b5f53dab3c8d3d3c7a9dc4b1a48), MIT licensed.
+
+### Findings that determine the gate design
+
+All emulator source locators below use that fixed commit.
+
+| Severity | Finding | Required correction |
+| --- | --- | --- |
+| P1 | `src/bus.c:1093–1102,1145–1146,1191–1196` silently stores unknown peripheral accesses, returns zero, or discards writes. | Check register address, access width, direction, and supported semantics before effects. Reject unknown accesses. |
+| P1 | `src/rv32.c:627–670,903–916` aliases unknown CSRs and ignores the validity result. Fast memory paths bypass the bus. Some exceptions do not set `faulted`. Opcode `0x0f` decoding is too permissive. | Stop on unsupported CSR/instruction, unexpected exception, invalid execution/memory range, or reset. Check cached and direct access paths. |
+| P1 | `src/loader.c:183–227,275–300` uses CHGame's `0x3000` application layout and manufactures boot metadata at `0xF700`. | Load the exact CK-5200 BIN at `0x2000`. Do not use CHGame's loader, embedded bootloader, or save machinery. |
+| P1 | `src/machine.c:25–42` imposes CHGame reset flags and state. The stock OEM handoff remains unknown. | Name synthetic reset profiles. Test retained RAM separately. Claim direct application entry, not OEM boot. |
+| P1 | USB in `src/bus.c` is byte storage. It does not implement interrupt-flag write-one-to-clear behavior or host enumeration. | Model only the documented disconnected-device register behavior needed by startup. Do not manufacture enumeration or authentication success. |
+| P1 | Upstream headless execution can return success after a fault. Retired instructions and reaching `main` do not establish useful progress. | Require ordered startup checks, completed QMK work, SysTick entry/return, and foreground progress within a fixed bound. |
+| P2 | Upstream flash operations replace a page before advancing modeled time. Protection values are hardcoded. | Reject flash writes and unlock/erase/program commands in this first gate. Do not claim interrupted-update assurance. |
+| P2 | The firmware build did not pin or validate the emulator dependency. Instrumented firmware would not be the release artifact. | Pin the host dependency, validate BIN/ELF correspondence, and run the exact artifact that CI uploads. |
+
+The review also found an upstream chip-label mismatch: `0x03510601` is labeled G8U6 in the emulator.
+The pinned WCH GPIO implementation maps the masked identifier to C8T.
+The keyboard's C8T package remains an inference, so a synthetic identity is a model input, not a new physical observation.
+
+### Required first-gate claims
+
+1. Guest startup initializes `.data`, `.bss`, `gp`, and `sp` from the matching ELF while preserving `.noinit`.
+2. Normal entry reaches QMK and completes bounded repeated scans and SysTick interrupt returns.
+3. Warm entry with a valid rescue request follows the transport loop and consumes the request without entering QMK.
+4. An invalid rescue request follows normal startup. Warm-state cases retain modeled RAM.
+5. Unknown operations, forbidden writes, invalid code, unexpected resets, and missing progress produce failure, not a partial pass.
+6. Negative controls demonstrate rejection of the wrong-family failure class and CPU/model contract violations.
+
+These are bounded observations under explicit model assumptions. They are not exhaustive liveness or memory-safety proofs.
+
+### Corrections to the broader proposal
+
+- A finite execution trace proves that particular modeled execution, not every future execution or indefinite runtime progress.
+- Instruction fixtures check selected CPU behavior. They do not certify the complete emulator against the physical MCU.
+- Reset profiles must state initial interrupt/controller state. In the pinned startup, interrupt enable precedes installation of the vector table.
+- A successful direct entry at `0x2000` does not prove the OEM installer supplies that entry or the same initial state.
+- BIN/ELF agreement establishes the loadable image, including initialized data. It does not mean every image byte is an executable instruction.
+- A disconnected USB model can establish bounded software startup while no host responds. It cannot establish enumeration or completion recovery.
+- CBMC bounds, Frama-C proof obligations, and SPIN fairness contracts require separate artifacts. None can be inferred from an emulator pass.
+
+## Boundaries retained from the proposal
+
+- No original Clicks installer executes. Starting at `0x2000` assumes the missing handoff.
+- The first gate does not establish USB enumeration, MFi authentication, HID delivery, or physical matrix wiring.
+- The first gate checks the firmware artifact uploaded by firmware CI. It does not add a QMK image to the iPhone app or validate a new phone package.
+- Historical note: the original binary profile preceded the liveness fixes. Host tests now cover debounce starvation and one lost-HID-callback recovery; progress-aware watchdog, connected-USB emulation, and formal proofs remain separate.
+- A watchdog can reset a stalled executable application. It cannot repair invalid flash or establish independent recovery.
+- The candidate spans the unknown stock tail `[0x68D8,0x6900)`. Executing it in synthetic memory does not authorize overwriting that region.
+- The plausible-marker/partial-payload installation hazard remains unresolved. No successful startup model closes it.
+- No purchase, vendor contact, physical reset, ISP command, flash write, or keyboard access belongs to this gate.
+
+## Implementation and verification
+
+The [strict runner](../assurance/README.md) executes the exact BIN using a locally patched copy of the pinned emulator.
+It checks BIN/ELF identity before execution and records hashes after execution.
+The candidate firmware, build artifacts, and upstream dependency checkouts remain unchanged.
+
+Run from `keyboards/ck5200`:
+
+```sh
+python3 assurance/run.py --image build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
+```
+
+Local ASan/UBSan verification passed:
+
+| Case | Completed scans and task returns | Rescue loops | SysTick entries and validated returns |
+| --- | --- | --- | --- |
+| Cold, nonzero seeded RAM | 1,364 | 0 | 99 |
+| Warm, retained RAM | 1,364 | 0 | 99 |
+| Warm, valid rescue request | 0 | 6,227 | 99 |
+| Warm, invalid request word | 1,364 | 0 | 99 |
+
+Each case runs for 4,800,000 modeled cycles, nominally 100 ms at 48 MHz.
+A final instruction can cross that boundary.
+The model starts with no enabled or pending PFIC interrupts and disabled SysTick.
+These initial conditions do not establish the OEM handoff state.
+
+Controls passed for 193 XW encodings, each decoded upstream and executed with and without cached decoding.
+Further controls passed for 21 rejected operations, six execution boundaries, two initial stalls, and two late stalls.
+Artifact controls now accept compiler-comment differences and reject five image or runtime-contract changes.
+The local report is `keyboards/ck5200/build/assurance/report.json`.
+Its adjacent JSONL files contain ordered execution traces.
+
+### Implementation review and correction
+
+The independent implementation review found one P2 defect in the initial progress check.
+Early completed loops could satisfy cumulative counts even if execution stopped for the rest of the observation window.
+The reviewer reproduced false passes by stopping execution after about 50 modeled ms, including inside a SysTick handler.
+This was a gate defect, not a demonstrated firmware hang.
+
+The corrected gate requires a validated foreground completion and SysTick return within separate 480,000-cycle maximum gaps.
+Both deadlines include startup and the final observation boundary.
+Checks run before completion timestamps can update, so late completion cannot hide a missed deadline.
+Scheduling slices also stop at the next deadline.
+
+The late-foreground control now fails with `foreground-progress-timeout` while SysTick returns continue.
+The late-handler control now fails with `SysTick-progress-timeout`.
+Both preserve the exact flash bytes.
+The reviewer reran the original counterexamples independently under ASan/UBSan and closed the finding with no remaining blocker.
+
+An independent integration review checked the workflow, dependency pin, bootstrap addition, and authorization boundary.
+It found no blocker in those files. CI uses the existing build, preserves runner failure through `pipefail`, and uploads the assurance evidence separately.
+The workflow also requires a nonempty `report.json`, so a log alone cannot satisfy the evidence requirement.
+The runner arguments and output paths match the workflow.
+CI retains the JSON report, JSONL traces, and log before any successful firmware upload.
+### Hosted ELF failure and correction
+
+[Run 39050140084](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39050140084) passed the build and firmware tests, then failed the whole-ELF identity check.
+The matching BIN did not make that gate failure acceptable.
+Diagnostic [run 39051670366](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39051670366) retained the actual inputs and reproduced the same ELF hash:
+`ef8df7d3bbf94e5518c7c64e18fd5ce7bf66600c23011e8a28eda84138d4d7db`.
+
+The section comparison established the cause: `.comment` names the compiler host as `x86_64` instead of `arm64`.
+Its extra byte shifts the file offset of `.riscv.attributes` by one.
+The CPU attributes, symbols, entry point, load segments, and firmware bytes match the reviewed local artifact.
+
+The corrected gate pins the exact BIN and an ELF contract derived from the original reviewed local ELF.
+It hashes all section and segment contents and runtime descriptors, excluding compiler-comment text and file placement.
+It retains the entry, vector, symbol, ABI, permissions, complete loadable-image, and tracepoint checks.
+The raw input hashes remain in the report.
+Changing the expected raw ELF hash to the CI value is not the fix.
+
+Both actual local and hosted inputs passed the corrected gate locally under ASan/UBSan.
+The compiler-comment regression failed before the correction and passes afterward.
+Runtime symbol, segment-permission, entry, ABI, and BIN changes still fail before execution.
+Independent review verified the section-level cause and found no runtime-contract normalization bypass.
+[Hosted run 39052293311](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39052293311) passed at `3ae82074aa4df310b7310533d7856e879172b05a`.
+The build, existing firmware tests, strict gate, final inspection, and firmware artifact upload all succeeded.
+Its report confirms ASan/UBSan, four passing startup cases, the pinned contract hash, and all rejection controls.
+
+The diagnostic workflow passed the existing firmware suite with the unchanged candidate.
+No physical tests ran. R3 remains UNMET and physical flashing remains NO-GO.
+
+## Runtime-liveness gate (2026-10-17)
+
+This section adds results for the **new candidate**, not a retrospective change
+to the first-gate evidence above. R3 remains UNMET; physical flashing NO-GO.
+
+### Red-first and implemented fix
+
+- Branch: `feat/ck5200-runtime-liveness`, based on verified `6a29277`.
+- Red-first commit `9af647f`, then standalone dual-regression runner `1456de8`.
+  [Red CI run 39065223970](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39065223970)
+  proved both failures against the original production paths:
+  `sym_defer_g` suppressed a stable `KC_M` under independent chatter;
+  a lost HID completion froze matrix scanning (`delta=0`) and blocked
+  the pending release even after the endpoint became ready.
+- Fix commit `90c29cc`: static 6x6 per-key deferred debounce without
+  allocation; scanning is independent of HID backpressure; the in-flight
+  queue head is retained during a callback loss and is only resubmitted
+  after the endpoint reports ready and a 20-millisecond grace window.
+  A busy endpoint is never resubmitted into. The queue preserves its
+  bounded-overload policy; no change was made to rescue/installer writes.
+- [Host regression CI 39068934989](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39068934989)
+  passed both new checks and the prior host suite. Its exact-binary
+  gate correctly rejected the new artifact under the old hash.
+
+### New exact-binary execution profile and evidence
+
+The strict profile was deliberately re-reviewed using the compiled artifact,
+not automatically widened to accept any build. The [passing hosted gate
+39069270426](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39069270426)
+produced this evidence:
+
+| Property | Verified result |
+| --- | --- |
+| New BIN | 26,644 bytes; SHA-256 `4f30569f0e439137e18899dbec268eacfee0af54f7e55334fb82b86e6842f394` |
+| Hosted ELF | SHA-256 `362efbe227ed3a0a908659efdec4acdd7fc5eaa1d85d6e1beb2342aa6a85d714` |
+| Strict ELF runtime contract | `0d0a7a722563f5c15ea927d24241d61bca3652e647fa5918d9987b5001f1b8c2` |
+| Application flash | `[0x2000,0x8814)` inside `[0x2000,0x8a00)`; only 492 bytes remain |
+| RAM sections | 144-byte initialized data, 4,680-byte BSS; stack budget unchanged |
+| Normal cases | Cold, warm-retained, and warm-invalid rescue: 913 complete scans and normal loops each, 99 validated SysTick returns |
+| Valid rescue | 6,227 transport loops, zero QMK scans, 99 validated SysTick returns |
+| Model and failure tests | 193 XW fixtures; 21 rejected operations, six execution bounds, two initial and two late-stall controls |
+| Artifact controls | Compiler metadata change accepted; BIN mismatch and mutated runtime symbol, ABI, entry, or segment permissions rejected |
+
+Tracepoint meanings and disassembly were checked individually:
+`SystemInit` return `0x8006`, startup MRET `0x8012`, rescue consumption
+`0x7bcc`, normal-loop head `0x7ea6`; disconnected USB chooses the
+`keyboard_task` call at `0x7ef6` with return `0x7efa`, then normal
+loop-back at `0x7f4a`. Matrix GPIO read `0x6118` indexes the row in
+`a5` (x15) and completes all six rows at `0x6134`.
+SysTick MRET is `0x7808`; rescue loop `0x7c8a` to `0x7caa`.
+All PCs and register choices are artifact-specific, and changing the BIN
+requires re-review of this contract.
+
+### Claims explicitly excluded
+
+- The model's USB remains **disconnected**, so it does not test actual
+  USB enumeration, iAP2/MFi, real endpoint behavior, or on-device typing.
+  The host protocol test exercises a scripted callback loss but not every
+  interrupt ordering or a permanently busy USB endpoint.
+- Watchdog supervision is absent; progress in this 100-ms modeled
+  execution is not a proof of perpetual forward progress.
+- The model starts directly at application address `0x2000`, not through
+  the installed OEM boot stage. It cannot prove actual installer behavior,
+  protected tail preservation, or recovery from interrupted flashing.
+- No physical device operation, software flashing, hardware modification,
+  peripheral accessory, or vendor communication occurred.
+  **R3 is UNMET. Physical flashing remains NO-GO.**
+
+
+## Consumer-transition recovery correction, 2026-10-18
+
+The reviewed `e477c2645e8de357c3a542f514a6e8817acb0df4` firmware lost consumer taps
+while an outstanding HID transfer blocked queue insertion. QMK processed the
+press and release, but the release replaced the unqueued consumer usage.
+The defect occurred with spare capacity in the sixteen-report FIFO.
+
+The permanent regressions first landed without production changes in
+[`b9abd91f52745cb0c970ba01fe6fcdbd0a176505`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/b9abd91f52745cb0c970ba01fe6fcdbd0a176505).
+The ASan/UBSan protocol harness returned exit 1 for each new scenario:
+
+```text
+FAIL missing consumer usage 0x00B8 after recovery
+FAIL retry keeps exact Q/0000, Q/00B8, Q/0000 reports (count=3)
+FAIL same-scan 0x00CF, 0x00B8, release reach wire in order (count=1)
+```
+
+P10 confirms that QMK processed both consumer edges while scans continued and
+TinyUSB remained busy. Its three pending states fit below the sixteen-report
+limit. After endpoint recovery, the corrected code submits the uncertain Q
+report again, then distinct Q/00B8 and Q/0000 reports. The test compares all ten
+bytes, checks the final keyboard release, and rejects idle replay.
+P11 changes two consumer crossings in one matrix pass and requires three ordered
+reports, 00CF, 00B8, and 0000. This excludes a fix that captures only after the scan.
+Both tests pass unchanged in their assertions after the correction.
+
+`ck5200_consumer_key()` now calls the existing `host_keyboard_send()` for each
+actual state change. That path snapshots the current keyboard and consumer state
+through `send_keyboard_impl()` and the existing FIFO before another event runs.
+The old dirty flag and end-of-task polling are removed. The necessary scope
+extension is `firmware/platform/ch32x035/ck5200_consumer.h`, whose obsolete API
+declarations and contract must match the changed implementation.
+The consumer unit test retains replacement, repeated-press, inactive-release,
+final-release, and little-endian packing checks through synchronous send counts.
+Its existing test-script entry now uses the common QMK headers and sanitizer flags.
+
+The FIFO depth, overload coalescing, missing-callback grace, endpoint readiness
+checks, connection policies, and eight-byte boot format remain unchanged.
+An uncertain in-flight retry can duplicate a report. This is ordered delivery
+under resumed transfer progress, not exactly-once delivery.
+
+### Exact artifact and executable review
+
+The pinned local build reproduced the old BIN and ELF contract before the fix.
+The corrected build and image validator returned exit 0 with these identities:
+
+| Property | Corrected artifact |
+| --- | --- |
+| BIN size | 26,620 bytes, 24 fewer than the preceding image |
+| BIN SHA-256 | `322f227997d5ea8c291a06dc2e5c210be31f1a97c00816c18ffcf161e7326c00` |
+| Local ELF SHA-256 | `872501f24dc185ea7ca78b9053b5d4799b93a273195b24cbf7af5f7fcbef7bbd` |
+| ELF runtime contract SHA-256 | `de296b6d1ed8b342e07c2426f51d672f3d34990104ec340d2d73e42cc31296d2` |
+| Application image | `[0x2000,0x87fc)`, 516 bytes below the unchanged `0x8a00` limit |
+| Executable sections | `.init [0x2000,0x2004)`, `.vector [0x2004,0x2100)`, `.text [0x2100,0x876c)` |
+| Initialized data | Flash `[0x876c,0x87fc)`, RAM `[0x20000000,0x20000090)` |
+| BSS and retained data | BSS `[0x20000090,0x200012d8)`, `.noinit [0x200012d8,0x200012e0)` |
+| Stack contract | `_estack=0x20005000`, `__stack_size=0x800`, `gp=0x20000828` |
+
+The setter at `0x2ea6` stores a changed usage at `0x2eb0` or clears it at `0x2ec0`,
+then passes the static keyboard report at `0x20000094` to `host_keyboard_send`
+at `0x266a`. `send_keyboard_impl` at `0x4bde` queues the snapshot before attempting
+submission. The queue still packs eight keyboard bytes plus the consumer halfword.
+The compiler now shares `host_keyboard_send` with `send_6kro_report` and expands
+main's stack frame from 64 to 80 bytes within the unchanged 2,048-byte budget.
+
+The reviewed profile binds QMK's disconnected call `0x7ef8` and return `0x7efc`,
+normal loop `0x7ea8` and back edge `0x7f4a`, GPIO read `0x6116`, and completed
+six-row scan `0x6132`. Row index remains `a5`/x15 with the six-row bound at `0x612e`.
+Startup return `0x7ff0`, startup MRET `0x7ffc`, and SysTick MRET `0x7806` moved.
+Rescue consumption `0x7bcc`, transport setup return `0x7cc0`, rescue loop `0x7c8a`,
+and rescue back edge `0x7caa` retain their meanings.
+No execution obligation, memory limit, progress deadline, or rejection check changed.
+
+### Verification evidence
+
+The following local commands returned exit 0 against the corrected source:
+
+```sh
+bash scripts/build.sh
+bash scripts/test.sh
+python3 assurance/run.py --image build/ck5200_qmk.bin --elf build/ck5200_qmk.elf
+```
+
+The full firmware test script passed. Its QMK, protocol, consumer, and production
+entry harnesses use ASan/UBSan. Existing tests retain coverage for per-key debounce,
+scan progress, modifiers, combined reports, rejected and failed transfers, FIFO
+overload, suspend, unmount, resume, reconnect, and boot protocol.
+The initial full-script attempt stopped at its missing Python environment.
+The successful run used an isolated worktree environment with the existing package
+versions and a copy of the existing hash-verified stock fixture. No shared dependency
+or source configuration changed to make tests pass.
+
+The strict report records all four successful cases. Cold, retained warm, and
+invalid-rescue entry each complete 896 scans and loops. Valid rescue completes
+6,464 transport loops with zero QMK scans. Each case validates 99 SysTick returns.
+All 193 cached and uncached instruction fixtures, 21 rejected operations, six
+execution-boundary cases, two initial stalls, and two late-stall controls pass.
+Artifact controls reject BIN mismatch and runtime symbol, ABI, entry, and segment
+permission mutations while accepting non-loadable compiler-comment changes.
+
+Local evidence is retained under `build/consumer-fix-evidence/`, including the
+red and green logs, compiler commands, baseline and corrected executable inspection,
+and full test output. `build/assurance/report.json` and its adjacent traces bind
+the exact executed BIN and ELF identities.
+
+Independent review found no unresolved in-scope correctness blocker. The reviewer
+rebuilt and passed all protocol scenarios with sanitizers, reran both preserved red
+cases with exit 1, and independently passed the strict gate with all controls.
+Fresh disassembly confirmed the capture path, FIFO bounds, transfer guards,
+tracepoints, register choices, and memory layout. The review record and independent
+strict report are `build/consumer-fix-evidence/independent-review.md` and
+`build/consumer-fix-evidence/independent-assurance.json`.
+[Firmware run 39073570304](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39073570304)
+passed on implementation commit
+[`3ac32b0e4b491b1009a80870a7ae36ed751230fb`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/3ac32b0e4b491b1009a80870a7ae36ed751230fb).
+Its build, complete tests, strict binary gate, firmware inspection, and artifact
+retention steps all passed. Both `ck5200-assurance` and `ck5200-firmware` artifacts
+were retained. The downloaded BIN matches the reviewed hash, and the hosted ELF
+has the same reviewed runtime contract. Hosted ELF provenance is
+`5d218a1003267773230d5beac041e6ba386fcf13eb3f6ed3c567645465d8a610`.
+All four downloaded trace hashes match the successful hosted assurance report.
+The local hosted verification record is
+`build/consumer-fix-evidence/hosted-implementation-verified.json`.
+
+The model remains disconnected USB with direct application entry. It does not
+prove connected USB behavior, installation safety, protected-byte preservation,
+interruption recovery, or independent iPhone-only recovery. Watchdog supervision
+and connected-USB emulation remain separate workstreams.
+**R3 remains UNMET. Physical flashing remains NO-GO.**
+
+
+## Software-only assurance program, 2026-10-18
+
+This program continues beyond individual milestone completion. The baseline is
+`de8ef3e06279b48f7623cbcf8cfca736ef2ea6c1` on `feat/ck5200-runtime-liveness`.
+The live feature ref, retained BIN/ELF, and completed firmware and iOS workflow
+results were verified before new source changes. The primary checkout remains
+on `feat/software-only-qmk-delivery`; private inputs and dependency symlinks remain preserved.
+
+| Milestone | State | Next acceptance condition |
+| --- | --- | --- |
+| A: runtime integrity | MILESTONE_COMPLETE | Preserve existing regressions after later changes. |
+| B: progress-aware watchdog | MILESTONE_COMPLETE | Reviewed firmware and strict hosted execution passed at `732d651fdd36e9013a932df99518073339af8841`. |
+| C: connected USB | MILESTONE_COMPLETE within the stated controller model | Reviewed enumeration, HID, fault controls, and strict hosted execution passed at `732d651fdd36e9013a932df99518073339af8841`. |
+| D: installer and preservation | MILESTONE_BLOCKED | Custom staging faults and region checks pass; the original OEM installer contract is unavailable. |
+| E: independent recovery | MILESTONE_COMPLETE for the assessment; R3 UNMET | Failure-state evidence is classified in recovery-research.md; no independent iPhone-only path is established. |
+| Final integration | MILESTONE_COMPLETE for the tested software contracts | Firmware artifacts passed at `732d651`; host-bridge and iOS verification passed at `fad3969`. |
+
+The existing `scripts/test.sh`, image validator, exact-binary runner, restore
+harness, and recovery lab remain the verification owners. Local commands,
+reports, and milestone state are retained under `build/program-evidence/`.
+Each material change needs independent review and exact-revision hosted proof.
+
+The IWDG design uses the pinned CH32X035 manual chapter 5 and datasheet timing
+tables. The clock is HSI divided by 1024, not a separate oscillator. Servicing
+depends on completed work, not USB host availability or instruction activity.
+The model distinguishes hardware watchdog reset from its own assertion failures.
+
+The retained OEM application contains no bytes below `0x2000`; its installer
+consumer is unavailable. The existing model's assumed independent loader and
+tail-preserving operation do not establish actual hardware behavior. The earlier
+conceptual external adapter does not satisfy this program's no-extra-hardware
+recovery requirement. Those gaps do not block independent runtime and USB work.
+
+**R3 remains UNMET. Physical flashing remains NO-GO.**
+
+
+### Watchdog candidate and verification boundary
+
+The candidate services IWDG only after a fresh loop has completed its required
+work and SysTick has advanced since the previous service. Normal execution
+requires a completed six-row scan and a completed transport pass. Rescue requires
+a completed transport pass because it does not run QMK. Each new loop clears the
+marks, and each service decision consumes them. Endpoint readiness and host
+presence are not progress requirements. A non-returning transport call, scan,
+foreground pass, or interrupt therefore prevents further servicing.
+
+The application owns a strong `handle_reset` override of the pinned SDK's weak
+handler. Its straight-line prefix unlocks and configures IWDG, enables it, then
+polls status and reloads the counter. All status waits, data/BSS loops,
+`SystemInit`, and main initialization therefore run under supervision. The
+following reset sequence preserves the pinned GP/SP, data/BSS, CSR, vector,
+SystemInit, and main-entry behavior. A required one-line linker change retains
+`.vector` explicitly: replacing the weak handler removed its former live
+reference, and the image validator rejected that intermediate missing-vector
+build. The final vector remains at `0x2004`, size `0xfc`; flash allocation is
+unchanged. No shared dependency or option word is modified.
+
+The OEM boot stage and the short entry/configuration prefix before enable remain
+outside software protection. The model uses software-watchdog reset defaults;
+the keyboard's IWDG_SW option setting and physical reset behavior are unverified.
+A reset before `main` preserves a valid rescue request for the next startup.
+A reset after `main` consumes it normally restarts QMK. These are modeled
+application restarts, not independent recovery. Persistent initialization faults
+can cause reset loops and must not be reported as successful recovery.
+
+CH32X035 reference manual V1.9 chapter 5 specifies HSI/1024 and a prescaler of 32
+with reload 4000. After the AAAA reload, the interval is
+`(4000 + 1) * 32 * 1024`, or 131,104,768 HSI
+cycles, nominally 2.731349 seconds at 48 MHz. Datasheet V2.3 table 3-9 gives
+calibrated HSI tolerance of -2.6% to +2.2% over -40 to 85 degrees Celsius. Under
+those stated conditions the interval is approximately 2.673 to 2.804 seconds.
+These are conditional datasheet bounds, not CK-5200 measurements. HSI failure is
+outside this watchdog clock model. The manual's introductory LSI wording conflicts
+with its repeated HSI description, diagram, and register timing; the model uses
+the repeated HSI definition and does not assume a second oscillator.
+
+The first internal count loaded by CCCC is not specified by the available
+manual text. The model uses the conservative maximum 12-bit count, 4095, for
+that first interval: 134,217,728 HSI cycles with prescaler 32. This is an upper
+bound assumption, not an observed counter value. It is 2.796203 seconds at the
+modeled 48 MHz, or approximately 2.870845 seconds at the stated slow HSI limit.
+The healthy reset prefix must reach AAAA before either a 4000-count or maximum
+count deadline. A stuck post-enable status poll must reset by the maximum bound.
+Subsequent feeds use the documented reload value of 4000.
+
+The current candidate has 26,792 application bytes, ending at `0x88a8`, with 344
+bytes before `0x8a00`. Its BIN SHA-256 is
+`9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439`;
+its ELF runtime contract is
+`3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
+The reviewed disassembly and memory layout are retained in
+`build/program-evidence/watchdog-final/`. Verification and independent review remain
+in progress; these identities do not by themselves establish milestone acceptance.
+
+The timing review bounds authentication call sizes and retry counts, and checks
+the datasheet's 3 ms erase and 2 ms program maxima. It does not establish a full
+hardware loop bound: vendor flash-busy waits have no software limit, and complete
+SHA, callback, and initialization timing is unmeasured. The watchdog is intended
+to reset a stuck busy wait. A reset during a page operation does not establish
+installer interruption safety. The preserved analysis is
+`build/program-evidence/watchdog/timing-review.md`.
+
+Independent D/E review found no blocker in the twelve A2 page-fault cases or the
+recovery assessment. Its focused restore build and run both returned zero with
+the 18,648-byte stock fixture and 26,788-byte candidate. The cases cover the first,
+middle, and last full A2 page of a bounded 768-byte transaction, not every possible
+firmware length. They preserve bytes outside the staging write region and allow
+retry only under the explicit assumption that the application remains callable.
+The OEM installation contract and independent iPhone recovery remain unverified;
+see [the current D/E assessment](recovery-research.md#current-de-assessment-2026-10-18).
+
+The full host suite passed after the final startup correction, including
+ASan/UBSan on the production QMK and protocol harnesses
+(`build/program-evidence/watchdog/host-tests.log`). The earlier baseline entry
+failed the new supervision harness (`ck5200-baseline-red.log`, exit 134).
+Independent review then exposed the late-arm candidate's initialization gap.
+The permanent pre-SystemInit fault case failed against its exact BIN with zero
+feeds, zero resets, and `pre-main-IWDG-reset-missing`
+(`watchdog-model/pre-main-red.json`, exit 1). That defective candidate and its
+profile are preserved in `build/program-evidence/watchdog-pre-main-baseline/`.
+The final artifact must pass the same case along with thirteen watchdog cases,
+four startup cases, 193 instruction fixtures, existing rejection controls, and
+two deliberate watchdog-model mutations before milestone acceptance.
+
+Independent review found that the initial watchdog reset model discarded sticky
+reset-cause flags. A new fixture failed with `got 20000000, expected 38000000`
+before correction (`watchdog-model/sticky-red.json`). The corrected model
+preserves prior causes and adds IWDGRSTF, then verifies that RMVF clears them.
+The full gate passed again with every recorded assurance-source hash matching
+the current source. The firmware bytes did not change for this model correction.
+
+
+The local implementation is
+[`c24fd9b6b8dea74e7a1c54b28ca293b27860732b`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/c24fd9b6b8dea74e7a1c54b28ca293b27860732b).
+The separate staging regression is
+[`990ef5b4c6bb1dad90f985553d91ff8ed4297223`](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/commit/990ef5b4c6bb1dad90f985553d91ff8ed4297223).
+The final vendor-order binary passes all thirteen watchdog cases, including the
+same pre-SystemInit case that failed before correction. All four startup cases,
+193 instruction fixtures, prior rejection controls, and both watchdog mutants
+also pass under the strict sanitizer-enabled gate. The final command, exit zero,
+and source-hash match are retained in
+`build/program-evidence/watchdog-model/executed-command.json`.
+Hosted verification remains pending.
+
+
+## Historical connected USB red checkpoint (2026-10-18)
+
+This section records the pre-correction checkpoint. The [combined correction](#combined-watchdog-and-usb-correction-2026-10-18) below owns the current status.
+
+The connected model uses the unchanged watchdog BIN `9fb5af9d3c474ea8df761857bfb5fb678231e90de22da5b8c861af1cc9b44439` and contract `3348f035f6e7d1fa319159c6aaadd2c8669082df0ec8ba9e1531497cd650785b`.
+It executes the compiled DCD, TinyUSB, QMK and protocol paths through modeled
+USBFS IRQ45, DMA buffers and GPIO matrix closures. It records the actual EP0
+and EP1 IN bytes, including full descriptor packets and ordered HID reports.
+
+The local command record is
+`build/program-evidence/connected-usb/final-executed-commands.json`.
+The default strict gate exits zero. The opt-in `assurance/run.py --connected`
+gate exits one because `USB-resume-state` fails. Both runs preserve exact
+BIN/ELF identity and record matching assurance-source hashes.
+Seven connected scenarios pass: ordinary keyboard/consumer/combined reports
+and boot protocol; synthetic missing class callback; synthetic failed class
+completion; host detach and re-enumeration; endpoint backpressure beyond one
+watchdog interval; a stalled USB IRQ followed by watchdog reset and
+re-enumeration; and healthy suspended idle beyond one watchdog interval.
+Eleven invalid USB-operation fixtures, two deliberate model mutations and one
+host-input alteration pass their rejection checks. The initial report labels
+all three controls as model mutations; review identified that classification
+error. These results do not close Milestone C.
+
+Independent model review also found missing row-output configuration checks,
+missing matrix GPIO clocks, missing USB clock and PHY prerequisites, and a missing malformed-SETUP
+negative control. Red controls reproduced the row-drive, matrix-clock and USB-prerequisite
+false acceptance before correction. The corrected model checks those
+prerequisites and malformed SETUP framing. Its TOG_OK mutant now changes
+the peripheral status read, rather than changing the host input.
+The pre-correction source and execution evidence are preserved in
+`build/program-evidence/connected-usb/red-baseline/manifest.json`.
+The current command record is
+`build/program-evidence/connected-usb/review-gpio-clock-final-executed.json`: default
+B exits zero, connected C exits one only for resume. All 21 invalid-operation
+controls, row-drive/clock checks, three actual model mutants and seven
+connected scenarios pass. Both reports match the live assurance sources and
+unchanged BIN/ELF. Independent re-review closed the model findings with no
+additional in-scope model blocker. The separate compiled resume defect still
+blocks Milestone C. The retained review is
+`build/program-evidence/connected-usb/independent-review.md`. Descriptor checks
+prove delivery and selected contents, not full byte-for-byte validation.
+
+The resume failure is a confirmed driver defect. The pinned
+`external/tinyusb/src/portable/wch/dcd_ch32_usbfs.c` emits only SUSPEND for X035,
+while X035 MIS_ST bit 2 distinguishes suspend from wake-up on that shared
+interrupt. Independent inspection confirmed the source, compiled branch,
+manual semantics and failing execution. WCH's CompositeKM example clears
+the flag, waits 10 microseconds, then reads MIS_ST. A proposed correction
+follows that order using the running SysTick without reprogramming it.
+Dependency and build-file approval, implementation, a newly reviewed binary,
+green resume evidence and hosted verification remain pending.
+
+Model limits remain explicit. Host detach means no tokens followed by a full
+bus reset; it does not invent a hardware unmount callback. Missing and failed
+class completions are labeled CPU fault inputs after TinyUSB releases the
+endpoint, not controller-generated errors. Packet scheduling, GPIO closure,
+clock timing and reset profiles are software assumptions. The host script
+uses EP0 and EP1. The compiled iAP2 task may attempt EP2 attach, but the script
+does not answer its link handshake, open an EA session, or supply successful
+authentication-device responses. This proves neither iPhone recognition nor
+MFi authentication, accessory compatibility, OEM installation, or independent
+recovery. R3 remains UNMET. Physical flashing remains NO-GO.
+
+
+## Combined watchdog and USB correction, 2026-10-18
+
+The feature-branch publication and project-owned TinyUSB correction are
+explicitly authorized by the current program goal. The earlier approval
+requests are resolved. This section supersedes the pending correction status
+in the preceding work-in-progress record.
+
+The pinned X035 DCD emitted SUSPEND for both suspend and wake-up. The permanent
+compiled regression failed at `USB-resume-state` with the old exact BIN. A
+stronger control also reproduced the old handler clearing a later USB flag.
+The project-owned `firmware/usb/tinyusb.patch` now clears UIF first, waits using
+the existing HCLK SysTick across rollover, then reads MIS_ST to choose SUSPEND
+or RESUME. It does not clear a later event. CMake builds a patched copy; the
+pinned TinyUSB checkout stays unchanged. Repeated configuration produces the
+same copied driver and image. No dependency revision changed.
+
+Integration review found a separate normal update-channel deadlock. TinyUSB
+bus reset drops transfers without calling `tud_umount_cb`, so an old reply
+could remain marked in flight after remount. The new regression in
+`tests/ck5200_rescue_test.c` failed against the old production protocol, then
+passed for accepted replies, queued replies and a pending A0 acknowledgment.
+Mount now clears response ownership and aborts rescue staging before starting
+a fresh session. All eleven rescue-harness modes passed under ASan/UBSan.
+Evidence: `build/program-evidence/usb-remount/final-red.json`, `final-green.json`
+and `integration-review.md`. The independent reviewer also ruled out a shared
+EP2 FIFO hypothesis: this build uses unbuffered vendor transfers, whose endpoint
+claim prevents accepting an update behind an outstanding attach packet.
+
+The combined firmware is 26,860 bytes in `[0x2000,0x88EC)`, leaving 276 bytes
+in the unchanged allocation. BIN SHA-256 is
+`eef27f62706cbedc9fb61b485953a81cd76caccdafd6958853435846eed08df4`.
+The ELF runtime contract is
+`aa89d4c8873912febb65f45001aabc78ce2a2f66ec5c9efe41d5d69ecdbc32f7`;
+local raw ELF SHA-256 is
+`c452c84cc9c33a62a13a1b660ab38790bf26c24cd4ffc97f7985bb6fb93a38ba`.
+The image validator confirms BIN/ELF correspondence and memory boundaries.
+Actual reset, scan, loop, interrupt, and suspend instructions were inspected
+before updating the exact profile. `.data` remains 144 bytes; `.bss` is 4,680
+bytes ending at `0x200012D8`, followed by eight retained bytes. The model derives
+RAM symbols from the reviewed ELF. Build, host tests, sections, symbols and
+source snapshots are retained in
+`build/program-evidence/connected-usb/combined-candidate/manifest.json`.
+
+The default strict gate now requires connected cases; there is no optional
+connected switch that hosted CI can omit. It retains four startup cases,
+thirteen watchdog cases, 193 instruction fixtures, existing memory/execution,
+stall and artifact controls, plus eight connected cases and the resume case.
+All 21 USB negative controls, row-drive/clock checks and three model mutations
+pass. Resume waits 532 modeled HCLK cycles from the first CNT read to MIS_ST,
+retains a second USB flag through the first interrupt return, and submits a
+fresh Q press followed by release after wake-up. Stopped CNT resets once through
+IWDG while the modeled HSI continues. These are software timing observations.
+
+The later-event test also exposed an observer defect: a valid pending interrupt
+can be entered immediately after MRET, before a foreground instruction. The
+same restored register, stack, PC and timer checks now run at either observation
+point. The original failing report is retained; actual nested interrupts and
+invalid restored context still fail. A transient all-zero idle HID report after
+resume is accepted only with complete zero-byte validation and a bounded drain;
+nonzero offline taps still fail.
+
+Independent final review found no actionable in-scope correctness blocker in
+the resume patch, remount correction, model or exact binary. The final local
+strict run after the README edit exited zero. All seven
+assurance source hashes match, and BIN/ELF identity is unchanged. The canonical
+local report is `build/assurance/report.json`; the command record is
+`build/program-evidence/connected-usb/root-final-executed.json`.
+The D/E assessment remains unchanged: custom staging fault handling is modeled
+and reviewed, but original OEM installation, preservation
+of `[0x68D8,0x6900)`, interruption recovery and independent iPhone-only recovery
+remain unverified. R3 remains UNMET. Physical flashing remains NO-GO.
+
+
+### Hosted firmware and integration evidence
+
+[Firmware run 39124133944](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124133944)
+passed at implementation revision
+`732d651fdd36e9013a932df99518073339af8841`. Its host tests, image inspection,
+and mandatory strict gate passed. Downloaded firmware and assurance artifacts
+contain identical BIN and ELF files. Their BIN and runtime contract match the
+combined artifact above. The hosted raw ELF hash is
+`cf9fefc8db51113b5e9566cc133d5db605d4c1fa261e4794c9502198e89d1711`;
+compiler-host metadata differs from the local ELF, while the reviewed runtime
+contract is identical. All seven assurance source hashes match the published
+revision, and all four retained startup trace hashes match the report.
+The downloaded BIN/ELF also passed the local image validator.
+
+Retained artifact identities:
+
+| Artifact | GitHub artifact ID | Archive digest |
+| --- | --- | --- |
+| ck5200-firmware | 12135950107 | `sha256:91f8f0d51cb3bb1be14007503a5c5646b15a224d18da765ff8ba627005ed4f53` |
+| ck5200-assurance | 12135835649 | `sha256:ebd6d64c64498371e7bdf248171d820a097dff7c0024600507d0bfd76f23c197` |
+
+The local command and comparison record is
+`build/program-evidence/hosted-732d651/verified-artifacts.json`.
+Independent binary and model review is retained in
+`build/program-evidence/connected-usb/final-independent-review.md`.
+The final integration review found the remount defect described above; its
+regression and correction resolved the finding. Installer and recovery review
+is retained in `build/program-evidence/installer-independent-review.md`.
+
+The same revision's
+[iOS run 39124133942](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124133942)
+exposed a missing host-test integration: the C bridge compiles the real firmware
+loop but omits the hardware platform, so three watchdog hooks were undefined.
+Revision `fad396907480482046f325ff3974f9f495b4e180` adds those three no-op hooks
+beside the existing platform stub, using the production declarations. This is
+a necessary test-bridge scope expansion, not an application behavior change.
+A local C bridge probe reproduced the three undefined symbols before the fix,
+then linked and booted successfully afterward. Independent review found no
+blocker. Evidence is `build/program-evidence/ios-bridge/manifest.json`; the
+review is retained beside it as `independent-review.md`.
+No local Swift or Xcode tests were run.
+
+[iOS run 39124581002](https://github.com/rudironsoni/clicks-keyboards-custom-firmware/actions/runs/39124581002)
+passed at `fad396907480482046f325ff3974f9f495b4e180`, including Swift tests,
+unsigned application builds, Simulator recording/export/deletion checks, source
+byte comparison, and write-disabled stock-manager packaging. The bridge-only
+change leaves the reviewed firmware bytes and assurance sources unchanged.
+The completed job record is `build/program-evidence/ios-bridge/hosted-run.json`.
+
+
+### Software-scope completion boundary
+
+The final audit retains the runtime regressions, progress-based watchdog
+obligations, strict controller checks, actual HID payload assertions, staging
+fault matrix, and independent recovery assessment. The connected model runs
+compiled EP0 enumeration and EP1 HID paths. Missing and failed class completions
+are explicit CPU fault inputs. It does not simulate successful Apple
+authentication or establish an EP2/EP3 Apple session. Host harnesses separately
+exercise the application update session and remount behavior.
+
+No actionable correctness finding remains from the reviewed software changes.
+Milestone D remains blocked for the actual OEM installation contract: the
+available application image does not contain the bootstage that performs the
+installation. Additional assumed copy, erase, or recovery behavior would not
+close that evidence gap. The custom staging tests establish their stated
+application-level bounds only. Milestone E completes the assessment, not R3.
+
+The remaining system guarantees require original OEM boot/installer evidence
+or admissible device evidence that this software-only program does not supply.
+They include marker interpretation, interrupted installation, preservation of
+excluded destination bytes, and an independent iPhone-only service when the
+application cannot execute. Physical operations remain prohibited. Software
+scope completion does not establish installation safety or flash readiness.
+**R3 remains UNMET. Physical flashing remains NO-GO.**

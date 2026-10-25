@@ -21,6 +21,7 @@
 #include "report.h"
 #include "tusb.h"
 #include "ck5200_update_protocol.h"
+#include "ck5200_consumer.h"
 #include "ch32x035_gpio.h"
 #include "ch32x035_rcc.h"
 
@@ -32,6 +33,8 @@ void protocol_setup(void);
 void protocol_pre_task(void);
 void protocol_keyboard_task(void);
 void protocol_post_task(void);
+void ck5200_watchdog_note_scan(void) {}
+void ck5200_watchdog_note_transport(void) {}
 
 /* ---------------- TinyUSB stub ------------------------------------------ */
 bool stub_mounted, stub_suspended, stub_hid_ready;
@@ -439,7 +442,7 @@ static void p8_report_recovery(void) {
     before = stub_submit_count;
     reject_report = false; settle_ticks(12);
     CHECK(stub_submit_count > before && stub_epin_buf[8] == 0x9d && stub_epin_buf[9] == 2,
-          "rejected consumer submission retains dirty state");
+          "rejected consumer submission stays queued for retry");
     set_key(1, 5, false); settle_ticks(12);
     CHECK(wire_empty(), "consumer release reaches wire");
 
@@ -478,6 +481,121 @@ static void p8_report_recovery(void) {
           "bounded queue overload retains in-flight head and final release");
 }
 
+static void p9_missing_hid_completion(void) {
+    printf("== P9 lost HID callback must not freeze matrix or trap final release ==\n");
+    extern bool tud_hid_set_idle_cb(uint8_t, uint8_t);
+    (void)tud_hid_set_idle_cb(0, 0); /* Do not confuse the result with SET_IDLE retransmits. */
+    settle_ticks(15);
+
+    const long before = stub_submit_count;
+    set_key(0, 0, true); /* KC_Q press goes to the endpoint. */
+    for (int i = 0; i < 12; ++i) loop_tick(); /* Deliberately omit USB completion callback. */
+    CHECK(stub_submit_count == before + 1 && report_wire_has(KC_Q),
+          "press accepted before the missing completion");
+
+    /* The endpoint is genuinely busy. We MUST NOT resend while it is busy,
+     * but scanning must continue so that the final release is recorded. */
+    stub_hid_ready = false;
+    const long scans_before = scan_calls;
+    set_key(0, 0, false);
+    for (int i = 0; i < 80; ++i) loop_tick();
+    CHECK(scan_calls - scans_before >= 75,
+          "matrix remains live through 80 ms without a HID completion (delta=%ld)",
+          scan_calls - scans_before);
+    CHECK(stub_submit_count == before + 1,
+          "never resend to a busy endpoint");
+
+    /* TinyUSB's busy bit clears but the completion callback was lost.
+     * The queue must recover without assuming that the original report
+     * reached the host; retry the press, then transmit its queued release. */
+    stub_hid_ready = true;
+    long observed = stub_submit_count;
+    bool retried_press = false, delivered_release = false;
+    for (int i = 0; i < 150; ++i) {
+        loop_tick();
+        if (stub_submit_count > observed) {
+            if (report_wire_has(KC_Q)) retried_press = true;
+            if (wire_empty()) delivered_release = true;
+            usb_complete_hid(); /* Only newly submitted transfers get callbacks. */
+            observed = stub_submit_count;
+        }
+    }
+    CHECK(retried_press, "endpoint ready without callback triggers bounded retry");
+    CHECK(delivered_release && wire_empty(),
+          "final key release follows the retried report and reaches the host");
+}
+
+static void p10_consumer_tap_during_busy_endpoint(void) {
+    printf("== P10 consumer tap survives a busy endpoint ==\n");
+    extern bool tud_hid_set_idle_cb(uint8_t, uint8_t);
+    (void)tud_hid_set_idle_cb(0, 0);
+    settle_ticks(15);
+    wire_count = 0;
+    set_key(0, 0, true);
+    for (int i = 0; i < 12; ++i) loop_tick();
+    CHECK(wire_count == 1 && wire_history[0][2] == KC_Q,
+          "Q press owns the endpoint before consumer tap");
+
+    /* Q press, consumer press, and consumer release use three of 16 slots. */
+    stub_hid_ready = false;
+    long scans_before = scan_calls;
+    set_key(5, 5, true);
+    for (int i = 0; i < 12; ++i) loop_tick();
+    CHECK(ck5200_consumer_usage() == 0x00B8, "consumer press reaches QMK state");
+    set_key(5, 5, false);
+    for (int i = 0; i < 12; ++i) loop_tick();
+    CHECK(ck5200_consumer_usage() == 0, "consumer release reaches QMK state");
+    CHECK(scan_calls - scans_before >= 22, "matrix scans while endpoint is busy");
+    CHECK(wire_count == 1, "busy endpoint receives no extra submission");
+
+    stub_hid_ready = true;
+    for (int i = 0; i < 40; ++i) {
+        unsigned before = wire_count;
+        loop_tick();
+        if (wire_count > before) usb_complete_hid();
+    }
+    const uint8_t q_plain[10] = {0, 0, KC_Q};
+    const uint8_t q_eject[10] = {0, 0, KC_Q, 0, 0, 0, 0, 0, 0xB8};
+    CHECK(history_has(KC_Q, 0, 0x00B8), "missing consumer usage 0x00B8 after recovery");
+    CHECK(wire_count == 4 && wire_len == 10 &&
+          memcmp(wire_history[1], q_plain, 10) == 0 &&
+          memcmp(wire_history[2], q_eject, 10) == 0 &&
+          memcmp(wire_history[3], q_plain, 10) == 0,
+          "retry keeps exact Q/0000, Q/00B8, Q/0000 reports (count=%u)", wire_count);
+    unsigned idle_count = wire_count;
+    settle_ticks(12);
+    CHECK(wire_count == idle_count, "idle does not replay the tap");
+    set_key(0, 0, false);
+    settle_ticks(12);
+    CHECK(wire_empty(), "Q release reaches wire after consumer tap");
+}
+
+static void p11_two_consumer_crossings_one_scan(void) {
+    printf("== P11 two consumer crossings in one scan stay distinct ==\n");
+    settle_ticks(15);
+    wire_count = 0;
+    stub_hid_ready = false;
+    set_key(0, 5, true); /* row order sends 0x00CF first */
+    set_key(5, 5, true); /* then 0x00B8 in the same QMK matrix pass */
+    for (int i = 0; i < 12; ++i) loop_tick();
+    CHECK(ck5200_consumer_usage() == 0x00B8, "last crossing is active");
+    set_key(0, 5, false);
+    set_key(5, 5, false);
+    for (int i = 0; i < 12; ++i) loop_tick();
+    CHECK(ck5200_consumer_usage() == 0 && wire_count == 0,
+          "same-scan releases update state while endpoint stays busy");
+    stub_hid_ready = true;
+    for (int i = 0; i < 12; ++i) { loop_tick(); usb_complete_hid(); }
+    const uint8_t first[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0xCF};
+    const uint8_t second[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0xB8};
+    const uint8_t clear[10] = {0};
+    CHECK(wire_count == 3 && wire_len == 10 &&
+          memcmp(wire_history[0], first, 10) == 0 &&
+          memcmp(wire_history[1], second, 10) == 0 &&
+          memcmp(wire_history[2], clear, 10) == 0,
+          "same-scan 0x00CF, 0x00B8, release reach wire in order (count=%u)", wire_count);
+}
+
 int main(int argc, char **argv) {
     set_time(0);
     setup_firmware();
@@ -490,6 +608,9 @@ int main(int argc, char **argv) {
     if (strcmp(which, "p6") == 0 || strcmp(which, "all") == 0) p6_root_port_init();
     if (strcmp(which, "p7") == 0 || strcmp(which, "all") == 0) p7_all_crossings();
     if (strcmp(which, "p8") == 0 || strcmp(which, "all") == 0) p8_report_recovery();
+    if (strcmp(which, "p9") == 0 || strcmp(which, "all") == 0) p9_missing_hid_completion();
+    if (strcmp(which, "p10") == 0 || strcmp(which, "all") == 0) p10_consumer_tap_during_busy_endpoint();
+    if (strcmp(which, "p11") == 0 || strcmp(which, "all") == 0) p11_two_consumer_crossings_one_scan();
     printf("==== %d failure(s) ====\n", failures);
     if (!failures) printf("ok\n");
     return failures ? 1 : 0;

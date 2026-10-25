@@ -20,7 +20,10 @@ import Foundation
 ///  - `close` is the host side stopping: the outbox is dropped and
 ///    `onClosed` is NOT fired.
 final class StreamLink: KeyboardPacketLink {
-    var onFragment: (([UInt8]) -> Void)?
+    var onFragment: (([UInt8]) -> Void)? {
+        didSet { if onFragment != nil { onReceiverReady?() } }
+    }
+    var onReceiverReady: (() -> Void)?
     var onClosed: ((String) -> Void)?
 
     private let output: OutputStream?
@@ -46,6 +49,7 @@ final class StreamLink: KeyboardPacketLink {
         lost = true
         outbox.removeAll()
         onFragment = nil
+        onReceiverReady = nil
         onClosed = nil
     }
 

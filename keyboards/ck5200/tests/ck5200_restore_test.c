@@ -198,6 +198,70 @@ static void run_cycle(const uint8_t *image, size_t image_len, bool expect_ok) {
     assert(staging_host_reboots == reboots_before + 1 && "A0 did not trigger the reset path");
 }
 
+/* A full-page fault must fail during A2, keep the marker invalid, and leave
+ * every byte outside the staging write pages unchanged. Retry only after a
+ * simulated reset, assuming the custom application is callable again. */
+static void test_a2_page_flush_faults(const uint8_t *stock, size_t stock_len,
+                                      const uint8_t *custom, size_t custom_len) {
+    assert(custom_len >= 768);
+    uint8_t *before = malloc(FLASH_SIZE);
+    assert(before);
+    for (uint32_t i = 0; i < FLASH_SIZE; ++i) flash[i] = (uint8_t)(i * 37u + 11u);
+    power_cycle();
+    run_cycle(stock, stock_len, true); /* prior committed image over patterned device flash */
+
+    const staging_fault_phase_t phases[] = {
+        STAGING_FAULT_BEFORE_ERASE, STAGING_FAULT_AFTER_ERASE,
+        STAGING_FAULT_AFTER_PROGRAM_MARKER, STAGING_FAULT_HALF_PROGRAMMED,
+    };
+    for (size_t page_index = 0; page_index < 3; ++page_index) {
+        for (size_t phase_index = 0; phase_index < sizeof(phases) / sizeof(phases[0]); ++phase_index) {
+            const uint32_t total = 768; /* third full-page flush is A2; A3 has a partial page */
+            const uint8_t a1[] = {0x06, 0xA1, 0, 0, 0x03, 0};
+            const uint8_t a3[] = {0x06, 0xA3, 0, 0, 0x03, 0};
+            const uint8_t a0[] = {0x02, 0xA0};
+            uint8_t response[8];
+            memcpy(before, flash, FLASH_SIZE);
+            assert(marker_read() == stock_len);
+            const unsigned reboots_before = staging_host_reboots;
+            assert(ck5200_update_handle(a1, sizeof(a1), response, &ck5200_staging_ops) == 8);
+            assert(response[3] == 0 && marker_read() == 0);
+            staging_host_fail_at = STAGING_BASE + (uint32_t)page_index * FLASH_PAGE_SIZE;
+            staging_host_fault_phase = phases[phase_index];
+
+            uint32_t off = 0;
+            while (off < total) {
+                uint8_t a2[6 + 32] = {sizeof(a2), 0xA2, 0, 0,
+                                      (uint8_t)(off >> 8), (uint8_t)off};
+                memcpy(a2 + 6, custom + off, 32);
+                assert(ck5200_update_handle(a2, sizeof(a2), response, &ck5200_staging_ops) == 8);
+                if (response[3] != 0) break;
+                off += 32;
+            }
+            assert(off < total && "fault did not fire during A2");
+            assert(staging_host_fail_at == 0xFFFFFFFFu);
+            assert(response[2] == 0xA2 && response[3] == 1);
+            assert(marker_read() == 0 || marker_read() == UINT32_MAX);
+            assert(memcmp(flash, before, STAGING_BASE - 0x08000000u) == 0);
+            assert(memcmp(flash + 0xF500u, before + 0xF500u, FLASH_SIZE - 0xF500u) == 0);
+            assert(ck5200_update_handle(a3, sizeof(a3), response, &ck5200_staging_ops) == 8);
+            assert(response[2] == 0xA3 && response[3] == 1);
+            assert(memcmp(response + 4, (uint8_t[]){0, 0, 0, 0}, 4) == 0);
+            assert(ck5200_update_handle(a0, sizeof(a0), response, &ck5200_staging_ops) == 4);
+            assert(memcmp(response, (uint8_t[]){4, 2, 0xA0, 0}, 4) == 0);
+            assert(staging_host_reboots == reboots_before);
+            assert(marker_read() == 0 || marker_read() == UINT32_MAX);
+
+            power_cycle(); /* only the callable-app case; no installer behavior modeled */
+            run_cycle(stock, stock_len, true); /* retry over damaged, unblanked flash */
+            assert(memcmp(flash, before, STAGING_BASE - 0x08000000u) == 0);
+            assert(memcmp(flash + 0xF500u, before + 0xF500u, FLASH_SIZE - 0xF500u) == 0);
+        }
+    }
+    free(before);
+    puts("A2 first/middle/last page-flush faults and retained-flash retry ok");
+}
+
 int main(int argc, char **argv) {
     assert(argc == 3 && "usage: restore_test <stock.bin> <custom.bin>");
     flash = malloc(FLASH_SIZE);
@@ -445,6 +509,8 @@ int main(int argc, char **argv) {
     run_cycle(stock, stock_len, true);
     assert(marker_read() == (uint32_t)stock_len);
     puts("final chained stock/custom/stock over retained flash ok");
+
+    test_a2_page_flush_faults(stock, stock_len, custom, custom_len);
 
     free(stock);
     free(custom);

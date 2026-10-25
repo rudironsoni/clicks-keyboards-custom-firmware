@@ -1,22 +1,112 @@
 import CryptoKit
 import Foundation
 import OSLog
+#if canImport(UIKit)
+import UIKit
+#endif
 
-/// Read-only identity and official stock image preparation on iOS.
-/// Host tests exercise stock, QM and RS transactions with physical writes disabled.
+/// Identity, RAM maps, and image-pinned update transactions.
 @MainActor
 final class CustomFirmwareController: ObservableObject {
-    // No shipped iOS configuration can enable firmware writes, including the legacy flag.
-    // Only macOS host executables compiled for offline tests can exercise them.
+    // Default builds remain write-disabled. Two explicit iOS configurations
+    // authorize separate pinned images, never arbitrary files or QMK firmware.
     #if STOCK_MANAGER_OFFLINE_TESTING && os(macOS)
+    static let diagnosticsOnly = false
     static let stockUpdatesEnabled = true
+    #elseif STOCK_FLASH_TRIAL
+    static let diagnosticsOnly = false
+    static let stockUpdatesEnabled = true
+    #elseif EXTENSION_INSTALLER
+    static let diagnosticsOnly = false
+    static let stockUpdatesEnabled = false
     #else
+    static let diagnosticsOnly = true
     static let stockUpdatesEnabled = false
     #endif
-    #if STOCK_FIRMWARE_MANAGER || STOCK_MANAGER_OFFLINE_TESTING
-    static let stockManagerEnabled = true
+
+    #if EXTENSION_INSTALLER
+    static let extensionUpdatesEnabled = true
     #else
-    static let stockManagerEnabled = false
+    static let extensionUpdatesEnabled = false
+    #endif
+    private static var firmwareUpdatesEnabled: Bool { stockUpdatesEnabled || extensionUpdatesEnabled }
+
+    var installationSessionID: Int { sessionGeneration }
+
+    /// No cached consent survives a session change. UI confirmation captures
+    /// this session ID, and flash checks it again before starting.
+    var extensionInstallBlockReason: String? {
+        guard Self.extensionUpdatesEnabled else { return "Use the ExtensionInstaller app configuration to install." }
+        guard !journalUnreadable else { return "The saved update record is unreadable. Installation is blocked." }
+        guard pendingUpdate == nil else { return "A previous update record exists. Review it under Advanced before another attempt." }
+        guard !flashInFlight, !keymapOperationRunning, !selfTestRunning else { return "Wait for the current operation to finish." }
+        guard link != nil, !sessionNeedsReconnect, stockMode == .stock,
+              lastVersionPayload == CustomKeyboardCommand.stockVersionPayload,
+              connectedTarget == ConnectedTarget(model: "CK-5200", firmwareRevision: "1.2.2", hardwareRevision: "1.2.0") else {
+            return "Open an installer connection to CK-5200 firmware 1.2.2, hardware 1.2.0."
+        }
+        return Self.extensionPowerBlockReason
+    }
+
+    private static var extensionPowerBlockReason: String? {
+        #if canImport(UIKit)
+        guard UIApplication.shared.applicationState == .active else { return "Keep the app in the foreground." }
+        if !UIDevice.current.isBatteryMonitoringEnabled { UIDevice.current.isBatteryMonitoringEnabled = true }
+        let device = UIDevice.current
+        guard device.batteryState == .charging || device.batteryState == .full || device.batteryLevel >= 0.5 else {
+            return "Charge the iPhone to at least 50%, or connect it to power. Keep keyboard power stable."
+        }
+        return thermalBlockReason(ProcessInfo.processInfo.thermalState)
+        #else
+        return nil
+        #endif
+    }
+
+    static func thermalPressureName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: "nominal"
+        case .fair: "fair"
+        case .serious: "serious"
+        case .critical: "critical"
+        @unknown default: "unknown (\(state.rawValue))"
+        }
+    }
+
+    static func thermalBlockReason(_ state: ProcessInfo.ThermalState) -> String? {
+        guard state != .nominal && state != .fair else { return nil }
+        return "iOS reports \(thermalPressureName(state)) thermal pressure. Installation is paused. This is not a surface temperature reading."
+    }
+
+    var extensionPowerStatus: String {
+        #if canImport(UIKit)
+        if !UIDevice.current.isBatteryMonitoringEnabled { UIDevice.current.isBatteryMonitoringEnabled = true }
+        let device = UIDevice.current
+        let level = device.batteryLevel < 0 ? "unknown" : "\(Int((device.batteryLevel * 100).rounded()))%"
+        let powered = device.batteryState == .charging || device.batteryState == .full
+        return "Battery: \(level), \(powered ? "external power" : "battery power"). iOS thermal pressure: \(Self.thermalPressureName(ProcessInfo.processInfo.thermalState))."
+        #else
+        return "Host test. No physical iPhone power or thermal reading."
+        #endif
+    }
+
+    func recordInstallationPreflight() {
+        logUpdateAudit("preflight", detail: extensionPowerStatus)
+    }
+
+    func recordExtensionDiagnostic(_ event: String, bytes: [UInt8], detail: String?) {
+        logUpdateAudit("extension.\(event)", command: 0x94,
+                       request: event == "request" ? bytes : nil,
+                       reply: event == "reply" || event == "invalidFragment" ? bytes : nil,
+                       detail: detail)
+    }
+
+    #if STOCK_FLASH_TRIAL
+    /// True only in the dedicated M4 trial configuration. Drives the visible
+    /// trial banner, the enabled install control, and the explicit
+    /// risk acknowledgement in the confirmation sheet.
+    static let stockFlashTrial = true
+    #else
+    static let stockFlashTrial = false
     #endif
 
     #if QMK_RAM_KEYMAP
@@ -24,9 +114,13 @@ final class CustomFirmwareController: ObservableObject {
     #else
     static let keymapBuildEnabled = false
     #endif
-    static var diagnosticsOnly: Bool { !stockUpdatesEnabled && !keymapBuildEnabled }
+    #if STOCK_FIRMWARE_MANAGER || STOCK_MANAGER_OFFLINE_TESTING
+    static let stockManagerEnabled = true
+    #else
+    static let stockManagerEnabled = false
+    #endif
 
-    @Published private(set) var preparedStock: PreparedStockImage?
+    @Published private(set) var preparedStock: PreparedFirmwareImage?
     @Published private(set) var stockPreparation = "Official image has not been checked."
     @Published private(set) var stockMode: StockFirmwareMode?
     @Published private(set) var stockObservation = "No post-update observation. Installation is unproven."
@@ -38,8 +132,11 @@ final class CustomFirmwareController: ObservableObject {
 
     func prepareStock(_ bytes: [UInt8]) {
         do {
-            preparedStock = try PreparedStockImage(bytes)
-            stockPreparation = "Verified official CK-5200 V122: 18,648 bytes, SHA-256 \(preparedStock!.sha256). Physical installation is disabled."
+            preparedStock = try PreparedFirmwareImage(bytes)
+            stockPreparation = "Verified official CK-5200 V122: 18,648 bytes, SHA-256 \(preparedStock!.sha256). "
+                + (Self.stockFlashTrial
+                   ? "Trial build: installation is enabled after the risk acknowledgement."
+                   : "Physical installation is disabled in this configuration.")
         } catch {
             preparedStock = nil
             stockPreparation = "Preparation failed: \(error)"
@@ -48,6 +145,7 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Sole controller-to-transport boundary, including the fire-and-forget reboot.
     func dispatch(_ request: [UInt8]) throws {
+        logger.debug("command \(request.count > 1 ? Int(request[1]) : -1, privacy: .public) requested with \(request.count, privacy: .public) bytes")
         try checkBuildPermission(request)
         if request.count > 1, (0xa0...0xa3).contains(request[1]) {
             guard dispatchPermit == request else { throw CustomKeyboardError.diagnosticsOnly }
@@ -58,19 +156,23 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func checkBuildPermission(_ request: [UInt8]) throws {
+        guard request.count >= 2 else { throw CustomKeyboardError.diagnosticsOnly }
         guard !sessionNeedsReconnect, let target = connectedTarget else {
             throw CustomKeyboardError.transportUnavailable
         }
-        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
-            guard Self.stockUpdatesEnabled, let transaction,
+        let command = request[1]
+        if (0xa0...0xa3).contains(command) {
+            guard Self.firmwareUpdatesEnabled, !Self.diagnosticsOnly, let transaction,
                   transaction.target == target, transaction.generation == sessionGeneration,
                   transaction.source == stockMode, transaction.request == request,
-                  transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256 else {
+                  (transaction.image.artifact == .stock
+                   ? Self.stockUpdatesEnabled && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedStockSHA256
+                   : Self.extensionUpdatesEnabled && transaction.source == .stock
+                        && transaction.image.sha256 == CustomKeyboardImageAuthorization.authorizedExtensionTransferSHA256) else {
                 throw CustomKeyboardError.diagnosticsOnly
             }
             return
         }
-        let command = request.count > 1 ? request[1] : 0
         if (0x90...0x93).contains(command) {
             guard Self.keymapBuildEnabled else { throw CustomKeyboardError.diagnosticsOnly }
             guard hasQMKIdentity else { throw CustomKeyboardError.notCustomFirmware }
@@ -90,6 +192,12 @@ final class CustomFirmwareController: ObservableObject {
         }
         if Self.keymapBuildEnabled, request == CustomKeyboardCommand.versionRequest,
            target.model == "CK-5200", target.hardwareRevision == "1.2.0" {
+            return
+        }
+        if Self.extensionUpdatesEnabled {
+            guard request == CustomKeyboardCommand.versionRequest,
+                  target.model == "CK-5200", target.firmwareRevision == "1.2.2", target.hardwareRevision == "1.2.0",
+                  !flashInFlight || transaction?.step == .begin else { throw CustomKeyboardError.diagnosticsOnly }
             return
         }
         if Self.stockManagerEnabled {
@@ -142,6 +250,16 @@ final class CustomFirmwareController: ObservableObject {
             /// A3 acknowledged. The separate rebootRequested field records A0 intent.
             case sentRebootPending
         }
+        /// Operational closure of a finished trial (review 2026-10-20):
+        /// records the observation evidence that ended the trial WITHOUT
+        /// claiming the application was rewritten. A resolved record no
+        /// longer blocks a new transaction; its contents and the audit log
+        /// are retained. Installation remains unproven by construction.
+        struct Resolution: Codable, Equatable {
+            let date: Date
+            let observation: String
+            let statement: String
+        }
         let imageSHA256: String
         let imageSize: Int
         let date: Date
@@ -149,11 +267,14 @@ final class CustomFirmwareController: ObservableObject {
         var sourceMode: StockFirmwareMode? = nil
         var transferredBytes: Int? = nil
         var rebootRequested: Bool? = nil
+        var resolution: Resolution? = nil
+
+        var isResolved: Bool { resolution != nil }
     }
 
     private static let pendingUpdateKey = "ck5200.pendingUpdate"
     private static var journalURL: URL {
-        #if (STOCK_MANAGER_OFFLINE_TESTING || QMK_RAM_KEYMAP) && os(macOS)
+        #if (STOCK_MANAGER_OFFLINE_TESTING || QMK_RAM_KEYMAP || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
         if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
             return URL(fileURLWithPath: path)
         }
@@ -162,6 +283,73 @@ final class CustomFirmwareController: ObservableObject {
             .appendingPathComponent("ClicksInspector/StockUpdate.json")
     }
     private var journalUnreadable = false
+
+    /// M4 trial audit trail: exact TX/RX frames and lifecycle events for
+    /// every update-command exchange, persisted as JSON lines beside the
+    /// journal. The stock image is a public artifact in this repository, so
+    /// recording full frame bytes loses no secret. The log is append-only;
+    /// nothing interprets it during the trial. See
+    /// keyboards/ck5200/docs/m4-stock-flash-trial.md.
+    private struct StockUpdateAuditEvent: Codable {
+        let date: Date
+        let event: String
+        let command: Int?
+        let requestHex: String?
+        let replyHex: String?
+        let detail: String?
+    }
+
+    private static var updateAuditURL: URL {
+        #if (STOCK_MANAGER_OFFLINE_TESTING || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
+        if let path = ProcessInfo.processInfo.environment["STOCK_MANAGER_TEST_STORAGE"] {
+            return URL(fileURLWithPath: path).deletingLastPathComponent()
+                .appendingPathComponent("StockUpdateAudit.jsonl")
+        }
+        #endif
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ClicksInspector/StockUpdateAudit.jsonl")
+    }
+
+    /// Returns false when the event could not be persisted. Callers that
+    /// gate a physical frame on audit success must treat false as a hard
+    /// stop (review 2026-10-20: audit write failure must not silently
+    /// continue the trial).
+    @discardableResult
+    private func logUpdateAudit(_ event: String, command: Int? = nil,
+                                request: [UInt8]? = nil, reply: [UInt8]? = nil,
+                                detail: String? = nil) -> Bool {
+        func hex(_ bytes: [UInt8]) -> String { bytes.map { String(format: "%02x", $0) }.joined() }
+        let record = StockUpdateAuditEvent(
+            date: Date(), event: event, command: command,
+            requestHex: request.map(hex), replyHex: reply.map(hex), detail: detail)
+        guard let data = try? JSONEncoder().encode(record) else {
+            logger.error("audit log encode failed for \(event, privacy: .public)")
+            return false
+        }
+        do {
+            let url = Self.updateAuditURL
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: url.path) {
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                // A failed seek must not silently rewind the log over earlier
+                // evidence (review 2026-10-21, P3-1).
+                try handle.seekToEnd()
+                try handle.write(data)
+                try handle.write(Data("\n".utf8))
+            } else {
+                // Single atomic write of record AND terminator: two separate
+                // atomic writes overwrite the first event with the newline
+                // (review 2026-10-20 defect).
+                try (data + Data("\n".utf8)).write(to: url, options: .atomic)
+            }
+            return true
+        } catch {
+            logger.error("audit log write failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var keymap: [[[UInt16]]] = [] // [layer][row][col]
@@ -201,6 +389,7 @@ final class CustomFirmwareController: ObservableObject {
     private let logger = Logger(subsystem: "com.rudironsoni.clicks-inspector", category: "custom")
     private var link: KeyboardPacketLink?
     private var exchange: CustomKeyboardExchange?
+    private var replyFramer = KeyboardPacketFramer(maximumLength: 15)
     private var continuation: CheckedContinuation<[UInt8], Error>?
     private var timeoutTask: Task<Void, Never>?
     private var rebootTask: Task<Void, Never>?
@@ -208,8 +397,9 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Synchronous single-operation guard, set and cleared on the main
     /// actor before any Task runs, so two rapid submissions cannot both
-    /// pass (review 2026-10-12).
-    private var flashInFlight = false
+    /// pass (review 2026-10-12). Published so the M4 trial UI can offer
+    /// staging-only abort exactly while it is safe.
+    @Published private(set) var flashInFlight = false
 
     /// The connected keyboard's reported identity, and the version payload
     /// from the last successful identify. Flashing requires both (review
@@ -222,7 +412,7 @@ final class CustomFirmwareController: ObservableObject {
                 stockMode = nil
                 keymapIsVerified = false
                 ramWritesAllowed = false
-                if transaction != nil { detach() }
+                if transaction != nil || keymapOperationRunning { detach() }
             }
         }
     }
@@ -253,7 +443,7 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     /// Host-test hook: clear the persisted unresolved-update record.
-    #if (STOCK_MANAGER_OFFLINE_TESTING || QMK_RAM_KEYMAP) && os(macOS)
+    #if (STOCK_MANAGER_OFFLINE_TESTING || QMK_RAM_KEYMAP || STOCK_FLASH_TRIAL || EXTENSION_INSTALLER) && os(macOS)
     static func resetPendingUpdateForTesting() {
         UserDefaults.standard.removeObject(forKey: pendingUpdateKey)
         try? FileManager.default.removeItem(at: journalURL)
@@ -302,7 +492,36 @@ final class CustomFirmwareController: ObservableObject {
         guard pendingUpdate != nil else { return }
         // Kept as a fail-closed API for old callers. User acknowledgement and
         // a same-version response cannot prove that the installer copied bytes.
-        phase = .updateUnverified("Installation cannot be marked verified manually. The transaction record is retained.")
+        phase = .updateUnverified("Installation cannot be marked verified manually. The transaction record is retained. Use 'Conclude trial' to close it operationally; installation stays unproven.")
+    }
+
+    /// Operational closure of a finished trial (review 2026-10-20).
+    ///
+    /// The journal's uncertainty is correct and stays: this NEVER records
+    /// that the application was rewritten. It records the observation that
+    /// ended the trial (for example the post-reboot identity payload and
+    /// typing behavior), clears the controller gate for a future transaction,
+    /// and logs a `trialConcluded` event whose detail retains the observation.
+    /// The trial UI intentionally keeps its install control off while this
+    /// journal record exists, so one concluded record means one physical
+    /// trial per record. The journal slot is reused only by a future
+    /// transaction; the resolution's evidence persists in the audit log.
+    /// Use only after the trial's evidence bundle has been captured.
+    func concludePendingUpdate(observation: String) {
+        guard var record = pendingUpdate, !record.isResolved else { return }
+        record.resolution = PendingUpdate.Resolution(
+            date: Date(),
+            observation: observation,
+            statement: "Trial concluded from observed evidence. Application rewrite remains unproven.")
+        do {
+            try persist(record)
+            logUpdateAudit("trialConcluded",
+                           detail: "observation: \(observation); installation remains unproven")
+            phase = .updateUnverified("Trial concluded. Installation remains unproven by construction. The install control stays off for this journal record; the resolution is retained in the audit log.")
+        } catch {
+            journalUnreadable = true
+            stockObservation = "The trial record could not be updated. It is preserved; installation remains unproven."
+        }
     }
 
     var layers: Int { info?.layers ?? 0 }
@@ -314,6 +533,7 @@ final class CustomFirmwareController: ObservableObject {
         sessionNeedsReconnect = false
         self.link = link
         let generation = sessionGeneration
+        logger.debug("session attached at generation \(generation, privacy: .public)")
         link.onFragment = { [weak self] fragment in
             guard let self, generation == self.sessionGeneration else { return }
             self.receive(fragment)
@@ -321,11 +541,23 @@ final class CustomFirmwareController: ObservableObject {
         link.onClosed = { [weak self] reason in
             guard let self, generation == self.sessionGeneration else { return }
             let rebootRequested = self.awaitingReboot
-            let wasBusy = self.flashInFlight
+            let flashWasInFlight = self.flashInFlight
+            let keymapWasInFlight = self.keymapOperationRunning
+            if flashWasInFlight {
+                /* The realistic mid-trial interruption must be in the audit
+                 * evidence bundle (review 2026-10-21, P2-2). */
+                self.logUpdateAudit("sessionClosed",
+                                    detail: "reason: \(reason); update was in flight; "
+                                        + "rebootRequested \(rebootRequested); journal "
+                                        + "\(self.pendingUpdate?.outcome.rawValue ?? "none")")
+            }
+            if keymapWasInFlight && self.plannedWrites > 0 {
+                self.profileMessage = "Link closed: \(self.verifiedWrites)/\(self.plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+            }
             self.invalidateSession(with: CustomKeyboardError.transportUnavailable)
             if rebootRequested {
                 self.phase = .updateUnverified("Session closed after reboot request. Reboot, installer execution and installation remain unproven.")
-            } else if wasBusy {
+            } else if flashWasInFlight || keymapWasInFlight {
                 self.phase = .failed("Link closed: \(reason)")
             } else {
                 self.phase = .idle
@@ -335,32 +567,38 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     func detach() {
+        logger.debug("session detach requested at generation \(self.sessionGeneration, privacy: .public)")
+        if keymapOperationRunning && plannedWrites > 0 {
+            profileMessage = "Disconnected: \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+        }
         invalidateSession(with: CustomKeyboardError.transportUnavailable)
         phase = .idle
+        logger.debug("session detached at generation \(self.sessionGeneration, privacy: .public)")
     }
 
-    /// Drop all queued output before an old operation can continue.
+    /// Drop queued output and cancel both operation types before an old callback can continue.
     private func invalidateSession(with error: Error) {
         if keymapOperationRunning && plannedWrites > 0 {
             profileMessage = "Disconnected: \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
         }
         sessionGeneration += 1
+        operationTask?.cancel()
+        operationTask = nil
         keymapTask?.cancel()
         keymapTask = nil
+        transaction = nil
+        dispatchPermit = nil
+        replyFramer = KeyboardPacketFramer(maximumLength: 15)
+        stockMode = nil
+        lastVersionPayload = nil
+        flashInFlight = false
+        sessionNeedsReconnect = true
         info = nil
         keymap = []
         keymapIsVerified = false
         ramWritesAllowed = false
         keymapOperationRunning = false
         selfTestRunning = false
-        operationTask?.cancel()
-        operationTask = nil
-        transaction = nil
-        dispatchPermit = nil
-        stockMode = nil
-        lastVersionPayload = nil
-        flashInFlight = false
-        sessionNeedsReconnect = true
         link?.onFragment = nil
         link?.onClosed = nil
         link?.close()
@@ -483,14 +721,15 @@ final class CustomFirmwareController: ObservableObject {
         keymapIsVerified = false
         plannedWrites = 0
         verifiedWrites = 0
-        keymapOperationRunning = true
         let generation = sessionGeneration
-        operationTask = Task {
+        keymapOperationRunning = true
+        keymapTask = Task {
             defer { if generation == sessionGeneration { keymapOperationRunning = false } }
             do {
                 try Task.checkCancellation()
                 guard generation == sessionGeneration else { return }
                 let payload = try await perform(.version())
+                try Task.checkCancellation()
                 guard generation == sessionGeneration, !sessionNeedsReconnect else { return }
                 lastVersionPayload = payload
                 stockMode = StockFirmwareMode(payload: payload)
@@ -498,28 +737,46 @@ final class CustomFirmwareController: ObservableObject {
                 if Self.keymapBuildEnabled && hasQMKIdentity {
                     identified = .customFirmware("Custom QMK firmware detected")
                 } else if payload == CustomKeyboardCommand.stockVersionPayload {
-                    identified = .stockFirmware("Stock V122 detected. Physical installation is disabled.")
+                    identified = .stockFirmware(Self.extensionUpdatesEnabled
+                        ? "Stock V122 detected. The programmable extension installer is available."
+                        : Self.stockFlashTrial
+                        ? "Stock V122 detected. Trial build: installation is enabled below."
+                        : "Stock V122 detected. Physical installation is disabled in this configuration.")
                 } else if stockMode == .rescue {
                     identified = .stockFirmware("RS 00 01 application rescue detected. This is not independent boot recovery.")
                 } else {
                     identified = .stockFirmware("Unrecognized firmware identity \(payload.map { String(format: "%02x", $0) }.joined()); flashing is refused")
                 }
-                if pendingUpdate != nil {
+                logger.info("firmware mode identified: \(String(describing: identified), privacy: .public)")
+                if let pending = pendingUpdate {
                     /* An unresolved update is never silently resolved by a
-                     * reconnect (review 2026-10-12). */
-                    stockObservation = stockMode == .stock
-                        ? "Stock V122 responds after reconnect. This does not prove installer execution or application replacement."
-                        : "Expected stock V122 is not observed. Installation remains unproven."
-                    phase = .updateUnverified("Previous update retained: \(pendingUpdate!.outcome.rawValue). \(stockObservation)")
+                     * reconnect (review 2026-10-12). A concluded trial shows
+                     * its resolution instead. */
+                    if pending.isResolved {
+                        stockObservation = "Concluded trial: \(pending.resolution?.observation ?? ""). Installation remains unproven by construction."
+                    } else if stockMode == .stock {
+                        stockObservation = "Stock V122 responds after reconnect. This does not prove installer execution or application replacement. Conclude the trial after capturing the evidence bundle."
+                    } else {
+                        stockObservation = "Expected stock V122 is not observed. Installation remains unproven."
+                    }
+                    phase = .updateUnverified("Previous update retained: \(pending.outcome.rawValue). \(stockObservation)")
                 } else {
                     phase = identified
-                    if case .customFirmware = identified {
-                        try await loadKeymap()
-                    }
+                }
+                if case .customFirmware = identified {
+                    try await loadKeymap()
                 }
             } catch {
                 guard generation == sessionGeneration else { return }
-                fail("Identify failed; \(error)")
+                keymapIsVerified = false
+                ramWritesAllowed = false
+                profileMessage = "Custom firmware identity or keymap read failed. No mapping is verified. \(error)"
+                if let pendingUpdate {
+                    stockObservation = "A new identity or keymap read failed. Installation remains unproven."
+                    phase = .updateUnverified("Previous update retained: \(pendingUpdate.outcome.rawValue). \(stockObservation)")
+                } else {
+                    fail("Identify failed; \(error)")
+                }
             }
         }
     }
@@ -537,7 +794,9 @@ final class CustomFirmwareController: ObservableObject {
             try await readKeymap(layer: UInt8(layer))
         }
         keymapIsVerified = true
-        phase = .customFirmware("Custom firmware ready; \(parsed.layers) layers, \(parsed.rows)x\(parsed.columns)")
+        if pendingUpdate == nil {
+            phase = .customFirmware("Custom firmware ready; \(parsed.layers) layers, \(parsed.rows)x\(parsed.columns)")
+        }
     }
 
     func selectLayer(_ layer: Int) {
@@ -558,6 +817,7 @@ final class CustomFirmwareController: ObservableObject {
 
     /// Custom X035 keymap edits are runtime-only and lost on power loss.
     func setKey(layer: Int, row: Int, column: Int, keycode: UInt16) {
+        logger.debug("key edit requested at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public), keycode \(String(format: "%04x", keycode), privacy: .public)")
         guard canEditKeymap, (0..<layers).contains(layer), (0..<rows).contains(row),
               (0..<columns).contains(column) else { return }
         startKeymapOperation(total: 1) {
@@ -567,17 +827,24 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func writeAndVerify(layer: Int, row: Int, column: Int, keycode: UInt16) async throws {
-        _ = try await perform(.setKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column), keycode: keycode))
-        let payload = try await perform(.getKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column)))
-        guard payload == [UInt8(keycode >> 8), UInt8(keycode & 0xff)] else {
-            throw CustomKeyboardError.readbackMismatch
+        do {
+            _ = try await perform(.setKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column), keycode: keycode))
+            let payload = try await perform(.getKey(layer: UInt8(layer), row: UInt8(row), column: UInt8(column)))
+            guard payload == [UInt8(keycode >> 8), UInt8(keycode & 0xff)] else {
+                throw CustomKeyboardError.readbackMismatch
+            }
+            keymap[layer][row][column] = keycode
+            verifiedWrites += 1
+            logger.debug("key write/readback verified at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public)")
+        } catch {
+            logger.error("key write/readback failed at layer \(layer, privacy: .public), row \(row, privacy: .public), column \(column, privacy: .public)")
+            throw error
         }
-        keymap[layer][row][column] = keycode
-        verifiedWrites += 1
     }
 
     private func startKeymapOperation(total: Int, operation: @escaping @MainActor () async throws -> Void) {
         guard canEditKeymap else { return }
+        logger.debug("keymap operation started with \(total, privacy: .public) planned writes")
         keymapOperationRunning = true
         verifiedWrites = 0
         plannedWrites = total
@@ -591,6 +858,7 @@ final class CustomFirmwareController: ObservableObject {
                 phase = .customFirmware("Keyboard RAM readback verified")
             } catch {
                 guard generation == sessionGeneration else { return }
+                logger.error("keymap operation stopped after \(self.verifiedWrites, privacy: .public) of \(self.plannedWrites, privacy: .public) writes")
                 keymapIsVerified = false
                 sessionNeedsReconnect = true
                 ramWritesAllowed = false
@@ -602,6 +870,7 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     func resetKeymap() {
+        logger.info("factory keymap restore requested")
         startKeymapOperation(total: 1) {
             _ = try await self.perform(.resetKeymap())
             for layer in 0..<self.layers {
@@ -610,10 +879,12 @@ final class CustomFirmwareController: ObservableObject {
             guard self.keymap == FactoryLayout.asRowMajor else { throw CustomKeyboardError.readbackMismatch }
             self.verifiedWrites = 1
             self.profileMessage = "Factory layout restored and all 144 keys verified. Phone profiles are kept."
+            self.logger.info("factory keymap restore verified across 144 keys")
         }
     }
 
     func saveProfile(name: String) {
+        logger.debug("profile save requested")
         guard keymapIsVerified, !keymapOperationRunning, profileStorageAvailable else { return }
         do {
             let profile = try KeymapProfile(name: name, keymap: keymap)
@@ -625,10 +896,15 @@ final class CustomFirmwareController: ObservableObject {
             profiles = next.profiles
             desiredProfile = profile
             profileMessage = "Saved \(profile.name) on this iPhone (four 6x6 layers)."
-        } catch { profileMessage = "Profile was not saved: \(error)" }
+            logger.info("profile saved; total profiles \(self.profiles.count, privacy: .public), key count 144")
+        } catch {
+            logger.error("profile save failed")
+            profileMessage = "Profile was not saved: \(error)"
+        }
     }
 
     func selectProfile(_ id: UUID) {
+        logger.debug("profile selection requested")
         guard !keymapOperationRunning, profileStorageAvailable,
               let profile = profiles.first(where: { $0.id == id }) else { return }
         do {
@@ -638,7 +914,11 @@ final class CustomFirmwareController: ObservableObject {
             library = next
             desiredProfile = profile
             profileMessage = "Selected \(profile.name). Apply is always manual."
-        } catch { profileMessage = "Profile selection was not saved: \(error)" }
+            logger.info("profile selected; total profiles \(self.profiles.count, privacy: .public)")
+        } catch {
+            logger.error("profile selection persistence failed")
+            profileMessage = "Profile selection was not saved: \(error)"
+        }
     }
 
     func applyDesiredProfile() {
@@ -649,20 +929,33 @@ final class CustomFirmwareController: ObservableObject {
                 keymap[layer][row][column] == profile.keymap[layer][row][column] ? nil : (layer, row, column)
             } }
         }
+        logger.info("profile apply requested with \(changes.count, privacy: .public) changed keys")
         startKeymapOperation(total: changes.count) {
             for (layer, row, column) in changes {
                 try await self.writeAndVerify(layer: layer, row: row, column: column, keycode: profile.keymap[layer][row][column])
             }
-            self.profileMessage = "Applied \(profile.name): \(changes.count) writes verified in RAM."
+            for layer in 0..<self.layers {
+                try await self.readKeymap(layer: UInt8(layer))
+            }
+            guard self.keymap == profile.keymap else { throw CustomKeyboardError.readbackMismatch }
+            self.profileMessage = "Applied \(profile.name): \(changes.count) writes and all 144 keys verified in RAM."
+            self.logger.info("profile apply verified after full 144-key readback")
         }
     }
 
-    /// Host-only stock transaction. Every iOS build refuses physical writes.
-    /// Exact CK-5200 hardware, recognized stock/QM/RS identity and V122 hash required.
-    func flash(image: [UInt8], rebootToInstall: Bool) {
-        guard Self.stockUpdatesEnabled else {
+    /// One updater for both explicitly enabled, hash-pinned artifacts.
+    /// The extension additionally needs current-session consent and fresh V122 identity.
+    func flash(image rawImage: [UInt8], rebootToInstall: Bool,
+               artifact: PreparedFirmwareImage.Artifact = .stock, authorizedSession: Int? = nil) {
+        guard artifact == .stock ? Self.stockUpdatesEnabled : Self.extensionUpdatesEnabled else {
             fail(CustomKeyboardError.diagnosticsOnly.description)
             return
+        }
+        // A duplicate request must not fail or cancel the active exchange.
+        guard !flashInFlight else { return }
+        if artifact == .programmable {
+            guard authorizedSession == sessionGeneration else { fail("Confirm installation for this connection first."); return }
+            if let reason = extensionInstallBlockReason { fail(reason); return }
         }
         guard link != nil else {
             fail("No connection; cannot flash")
@@ -672,13 +965,12 @@ final class CustomFirmwareController: ObservableObject {
             fail("Stored transaction is unreadable; installation is blocked.")
             return
         }
-        if pendingUpdate != nil {
-            phase = .updateUnverified("A previous update (sha256 \(pendingUpdate!.imageSHA256.prefix(12))…) is unresolved. A version response cannot clear it; further installation is blocked.")
+        if let pending = pendingUpdate, !pending.isResolved {
+            phase = .updateUnverified("A previous update (sha256 \(pending.imageSHA256.prefix(12))…) is unresolved. A version response cannot clear it; conclude the trial after capturing its evidence.")
             return
         }
         /* Synchronous single-operation guard, before any Task is created:
          * two rapid submissions cannot both pass (review 2026-10-12). */
-        guard !flashInFlight else { return }
         flashInFlight = true
 
         /* Target identity: flashing requires the connected keyboard to be
@@ -699,17 +991,21 @@ final class CustomFirmwareController: ObservableObject {
             fail("Unrecognized firmware identity; refusing to flash.")
             return
         }
-        let prepared: PreparedStockImage
+        let prepared: PreparedFirmwareImage
         do {
-            prepared = try PreparedStockImage(image)
+            prepared = try PreparedFirmwareImage(rawImage, artifact: artifact)
         } catch {
             flashInFlight = false
-            fail("Image refused: only the bundled stock V122 artifact is accepted. \(error)")
+            fail("Image refused: only the bundled \(artifact == .stock ? "stock V122" : "programmable extension") artifact is accepted. \(error)")
             return
         }
+        let image = prepared.bytes
         let imageSHA256 = prepared.sha256
         let generation = sessionGeneration
         transaction = StockFirmwareTransaction(image: prepared, source: mode, target: target, generation: generation)
+        logUpdateAudit("trialStart", detail: "image sha256 \(imageSHA256), \(image.count) bytes; "
+            + "target \(target.model) firmware \(target.firmwareRevision) hardware \(target.hardwareRevision); "
+            + "mode \(String(describing: mode)); rebootToInstall \(rebootToInstall)")
         phase = .busy("Starting update session")
         operationTask = Task {
             defer {
@@ -721,6 +1017,13 @@ final class CustomFirmwareController: ObservableObject {
             }
             do {
                 try requireTransaction(generation)
+                if artifact == .programmable {
+                    let fresh = try await perform(.version())
+                    try requireTransaction(generation)
+                    guard fresh == CustomKeyboardCommand.stockVersionPayload else {
+                        throw CustomKeyboardError.invalidImage("Stock identity changed before staging. No update was started.")
+                    }
+                }
                 flashingProgress = 0
                 let beginReply = try await perform(.beginUpdate(size: image.count))
                 try requireTransaction(generation)
@@ -750,6 +1053,7 @@ final class CustomFirmwareController: ObservableObject {
                  * leave this record behind. A3 is never retried; a validated
                  * acknowledgment is the only thing that advances the record. */
                 try recordPendingUpdate(imageSHA256: imageSHA256, imageSize: image.count, outcome: .commitUnknown)
+                logUpdateAudit("commitUnknownRecorded", detail: "A3 dispatch follows; any interruption from here leaves the record")
                 let finishReply: [UInt8]
                 do {
                     finishReply = try await perform(.finishUpdate(size: image.count))
@@ -767,6 +1071,8 @@ final class CustomFirmwareController: ObservableObject {
                     throw CustomKeyboardError.updateRejected(at: "committed size \(committed), expected \(image.count)", status: 0x01)
                 }
                 try transaction?.accept(finishReply)
+                logUpdateAudit("commitAcknowledged", command: 0xa3, reply: finishReply,
+                               detail: "committed size \(committed) of \(image.count)")
                 /* Validated acknowledgment: advance the record. The record
                  * itself stays until explicitly reconciled: a successful
                  * commit still proves nothing about installation. */
@@ -779,6 +1085,13 @@ final class CustomFirmwareController: ObservableObject {
                     if var record = pendingUpdate {
                         record.rebootRequested = true
                         try persist(record)
+                    }
+                    /* Fail-closed audit (review 2026-10-21, P2-1): this event
+                     * guards the direct A0 dispatch branch below, which does
+                     * not pass through perform()'s dispatch audit. */
+                    guard logUpdateAudit("rebootDispatched", command: 0xa0,
+                                         request: CustomKeyboardCommand.rebootRequest) else {
+                        throw CustomKeyboardError.auditUnavailable
                     }
                     if mode == .stock {
                         // V122 replies 04 02 A0 00. An ACK still proves no copying.
@@ -809,6 +1122,8 @@ final class CustomFirmwareController: ObservableObject {
                  * do not overwrite it with the generic transport error. */
                 let offset = transaction?.offset ?? 0
                 let rebootRequested = awaitingReboot
+                logUpdateAudit("updateFailed", detail: "staging stopped at \(offset) acknowledged bytes; "
+                    + "rebootRequested \(rebootRequested); error \(error)")
                 invalidateSession(with: error)
                 if case .updateUnverified = phase { return }
                 if case .failed = phase { return }
@@ -827,6 +1142,26 @@ final class CustomFirmwareController: ObservableObject {
               let transaction, transaction.generation == generation else {
             throw CustomKeyboardError.transportUnavailable
         }
+        if transaction.image.artifact == .programmable, pendingUpdate == nil,
+           let reason = Self.extensionPowerBlockReason { throw CustomKeyboardError.invalidImage(reason) }
+    }
+
+    /// Abort an in-flight STAGING transfer (A1/A2). Once A3 has been
+    /// dispatched the commit may already have happened on the device, so
+    /// aborting then is refused; the pending-update record governs that
+    /// state instead. Cancelling stops new frames; an in-flight exchange
+    /// ends through its normal timeout and the session is invalidated.
+    /// Staging writes only touch the keyboard's scratch area
+    /// `[0x8A00,0xF500)`, so an abandoned staging session is harmless.
+    func requestStagingAbort() {
+        guard Self.firmwareUpdatesEnabled, flashInFlight, pendingUpdate == nil else { return }
+        logUpdateAudit("abortRequested", detail: "staging-only abort; no commit was requested")
+        operationTask?.cancel()
+    }
+
+    /// True while an A1/A2 staging transfer can still be safely abandoned.
+    var stagingAbortAvailable: Bool {
+        Self.firmwareUpdatesEnabled && flashInFlight && pendingUpdate == nil
     }
 
     /// Session closure is an observation, not evidence of installer execution.
@@ -845,6 +1180,14 @@ final class CustomFirmwareController: ObservableObject {
         guard self.exchange == nil, continuation == nil else { throw CustomKeyboardError.transportUnavailable }
         let request = exchange.request
         let generation = sessionGeneration
+        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+            // Fail-closed audit (review 2026-10-20): no update frame may
+            // leave this device unless its audit entry persisted first. If
+            // the subsequent dispatch refuses, a corrective event is logged.
+            guard logUpdateAudit("dispatch", command: Int(request[1]), request: request) else {
+                throw CustomKeyboardError.auditUnavailable
+            }
+        }
         let payload: [UInt8] = try await withCheckedThrowingContinuation { continuation in
             self.exchange = exchange
             self.continuation = continuation
@@ -855,8 +1198,28 @@ final class CustomFirmwareController: ObservableObject {
                 self?.exchangeTimedOut()
             }
             dispatchPermit = request
-            do { try dispatch(request) }
-            catch { resumePending(with: error) }
+            do {
+                try dispatch(request)
+                if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+                    logUpdateAudit("dispatchAccepted", command: Int(request[1]),
+                                   detail: "frame sent to the transport")
+                }
+            } catch {
+                if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+                    logUpdateAudit("dispatchFailed", command: Int(request[1]),
+                                   detail: "frame was NOT sent: \(error)")
+                }
+                resumePending(with: error)
+            }
+        }
+        if request.count > 1, (0xa0...0xa3).contains(request[1]) {
+            // Evidence completeness (review 2026-10-20): the device's reply is
+            // logged even when the session is being torn down (A0 closes the
+            // session by design). The audit records the observation; the
+            // generation guard below still discards stale results.
+            guard logUpdateAudit("reply", command: Int(request[1]), reply: payload) else {
+                throw CustomKeyboardError.auditUnavailable
+            }
         }
         guard generation == sessionGeneration else { throw CustomKeyboardError.transportUnavailable }
         try Task.checkCancellation()
@@ -867,6 +1230,11 @@ final class CustomFirmwareController: ObservableObject {
     /// UI in .busy forever (review 2026-10-11, F-7).
     private func exchangeTimedOut() {
         guard continuation != nil else { return }
+        logUpdateAudit("exchangeTimedOut",
+                       detail: "reply never arrived; the exchange is abandoned and the session invalidated")
+        if keymapOperationRunning && plannedWrites > 0 {
+            profileMessage = "Timed out after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+        }
         invalidateSession(with: CustomKeyboardError.timedOut)
         fail(pendingUpdate == nil
              ? CustomKeyboardError.timedOut.description
@@ -874,10 +1242,12 @@ final class CustomFirmwareController: ObservableObject {
     }
 
     private func receive(_ fragment: [UInt8]) {
-        guard var current = exchange else { return }
-        guard let pendingContinuation = continuation else { return }
         do {
-            if let payload = try current.accumulator.append(fragment) {
+            guard let packet = try replyFramer.append(fragment, awaitingReply: exchange != nil) else { return }
+            guard var current = exchange, let pendingContinuation = continuation else {
+                throw CustomKeyboardError.invalidStreamFrame
+            }
+            if let payload = try current.accumulator.append(packet) {
                 timeoutTask?.cancel()
                 timeoutTask = nil
                 exchange = nil
@@ -887,6 +1257,13 @@ final class CustomFirmwareController: ObservableObject {
                 exchange = current
             }
         } catch {
+            /* Byte-persist the rejected fragment (review 2026-10-21, P3-4):
+             * a malformed reply is evidence too, not only an error message. */
+            logUpdateAudit("replyRejected", reply: fragment,
+                           detail: "fragment rejected by the accumulator: \(error)")
+            if keymapOperationRunning && plannedWrites > 0 {
+                profileMessage = "Invalid response after \(verifiedWrites)/\(plannedWrites) writes verified. The last write may have reached RAM. Reconnect to read the layout."
+            }
             invalidateSession(with: error)
             fail("Invalid response; \(error)")
         }

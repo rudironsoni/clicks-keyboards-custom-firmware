@@ -4,8 +4,8 @@
  * Electrical layout recovered from stock V122. Physical caps are unverified.
  *
  * The stock maps each electrical crossing inline in its HID builder
- * (stock 0x2a54..0x3010); M3 corrections are recorded in
- * docs/m3-first-boot.md. Our matrix scan (PB row high, read PA0..PA5)
+ * (stock 0x2a54..0x3010); corrections are recorded in
+ * docs/qmk-delivery-evidence.md. Our matrix scan (PB row high, read PA0..PA5)
  * uses the same crossing indexing as stock, so K<row><col> below matches
  * the stock crossing indices. (2,3) is Shift, handled before the letters.
  *

@@ -12,10 +12,13 @@
 #include "ck5200_keymap.h"
 #include "eeconfig.h"
 #include "ck5200_rescue.h"
+#include "ck5200_watchdog.h"
 
 #define UPDATE_RESPONSE_SIZE 8u
 #define CK_HID_REPORT_SIZE 10u /* 8-byte keyboard report + 16-bit consumer */
 #define HID_QUEUE_DEPTH 16u
+/* Reconcile a lost callback only after TinyUSB reports the endpoint free. */
+#define HID_LOST_COMPLETION_GRACE_MS 20u
 
 uint8_t keyboard_protocol = 1, keyboard_idle = 0;
 static uint8_t keyboard_led_state;
@@ -24,6 +27,7 @@ static uint8_t hid_queue[HID_QUEUE_DEPTH][CK_HID_REPORT_SIZE];
 static uint8_t hid_head, hid_count;
 static uint32_t last_keyboard_report_sent_at;
 static bool keyboard_report_in_flight, last_keyboard_report_valid;
+static uint32_t hid_inflight_started_at;
 static uint8_t pending_update_response[UPDATE_RESPONSE_SIZE];
 static uint8_t pending_update_response_len;
 static uint8_t pending_update_response_itf;
@@ -51,6 +55,7 @@ static bool submit_hid_report(void) {
     if (!tud_hid_report(0, hid_queue[hid_head], length)) return false;
 
     keyboard_report_in_flight = true;
+    hid_inflight_started_at = timer_read32();
     return true;
 }
 
@@ -62,7 +67,6 @@ static void queue_keyboard_report(const report_keyboard_t *report) {
     if (hid_count < HID_QUEUE_DEPTH) ++hid_count;
     uint8_t tail = (uint8_t)((hid_head + hid_count - 1u) % HID_QUEUE_DEPTH);
     ck5200_consumer_pack(hid_queue[tail], (const uint8_t *)report);
-    ck5200_consumer_clear_dirty();
 }
 
 static void send_keyboard_impl(report_keyboard_t *report) {
@@ -73,25 +77,31 @@ static void send_keyboard_impl(report_keyboard_t *report) {
 }
 
 void protocol_keyboard_task(void) {
-    if (!tud_mounted() || tud_suspended()) { keyboard_task(); return; }
-    if (keyboard_report_in_flight || !tud_hid_ready()) return;
-    if (hid_count) { (void)submit_hid_report(); return; }
+    const bool connected = tud_mounted() && !tud_suspended();
 
-    /* A consumer-only change still needs a fresh report on the wire. */
-    if (ck5200_consumer_dirty()) {
-        if (keyboard_report) queue_keyboard_report(keyboard_report);
-        else if (last_keyboard_report_valid) queue_keyboard_report(&last_keyboard_report);
-        if (submit_hid_report()) return;
+    /* A missing TinyUSB callback cannot freeze scanning.  A ready endpoint
+     * (unclaimed and not busy in pinned TinyUSB) after the grace interval
+     * establishes that no USB transfer is currently owned by the driver.
+     * It does NOT establish that the host received the old report.
+     * Therefore keep the queue head and retry in order, including releases.
+     * Never re-submit while TinyUSB still reports the endpoint busy. */
+    if (connected && keyboard_report_in_flight && tud_hid_ready() &&
+        timer_elapsed32(hid_inflight_started_at) >= HID_LOST_COMPLETION_GRACE_MS) {
+        keyboard_report_in_flight = false;
     }
+
+    /* Advance QMK independently of the HID endpoint state so that a lost
+     * callback, backpressure, and suspend cannot starve the matrix. */
+    keyboard_task();
+
+    if (!connected || keyboard_report_in_flight || !tud_hid_ready()) return;
+    if (hid_count) { (void)submit_hid_report(); return; }
 
     if (keyboard_idle != 0 && last_keyboard_report_valid &&
         timer_elapsed32(last_keyboard_report_sent_at) >= (uint32_t)keyboard_idle * 4u) {
         queue_keyboard_report(&last_keyboard_report);
         (void)submit_hid_report();
-        return;
     }
-
-    keyboard_task();
 }
 
 static void send_nkro_impl(report_nkro_t *report) { (void)report; }
@@ -168,11 +178,13 @@ void protocol_post_task(void) {
     tud_task();
     apply_persisted_brightness_once();
     service_iap2();
+    ck5200_watchdog_note_transport();
 }
 
 void ck5200_transport_task(void) {
     tud_task();
     service_iap2();
+    ck5200_watchdog_note_transport();
 }
 
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
@@ -248,6 +260,10 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type,
 }
 
 void tud_mount_cb(void) {
+    /* Bus reset drops old transfers without calling tud_umount_cb. */
+    pending_update_response_len = 0;
+    update_response_in_flight = false;
+    if (ck5200_rescue_active()) ck5200_staging_abort();
     keyboard_protocol = 1;
     keyboard_idle = keyboard_led_state = 0;
     last_keyboard_report_valid = false;

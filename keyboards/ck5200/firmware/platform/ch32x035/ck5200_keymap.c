@@ -2,14 +2,15 @@
  * CK-5200 custom firmware commands over the vendor bulk endpoint.
  *
  * Thin dispatch only: all keymap behavior comes from QMK's dynamic_keymap
- * module. Writes are durable immediately through QMK's wear-leveled EEPROM,
- * so there is no separate save command. 0xA0..0xA3 remain in
+ * module. Writes affect transient RAM and disappear after power loss.
+ * Phone profiles provide persistence. 0xA0..0xA3 remain in
  * ck5200_update_protocol.c.
  */
 #include "ck5200_keymap.h"
 
 #include "dynamic_keymap.h"
 #include "eeconfig.h"
+#include "matrix.h"
 #include "ck5200_backlight.h"
 
 #define CMD_VERSION 0x03u
@@ -21,6 +22,13 @@
 #define CMD_RESET 0x93u
 
 #define CUSTOM_FIRMWARE_ID 0x514Du /* "QM" */
+
+static bool keymap_busy(void) {
+    for (uint8_t row = 0; row < MATRIX_ROWS; ++row) {
+        if (matrix_get_row(row)) return true;
+    }
+    return false;
+}
 
 /* First boot on fresh EEPROM: seed the dynamic keymap from the factory map. */
 void eeconfig_init_kb(void) { dynamic_keymap_reset(); }
@@ -102,11 +110,13 @@ size_t ck5200_keymap_handle(const uint8_t *request, size_t request_len, uint8_t 
             if (request[2] >= dynamic_keymap_get_layer_count() || request[3] >= MATRIX_ROWS || request[4] >= MATRIX_COLS) {
                 return reply_status(CMD_SET_KEY, 0x01, response);
             }
+            if (keymap_busy()) return reply_status(command, 0x02, response);
             dynamic_keymap_set_keycode(request[2], request[3], request[4], (uint16_t)(((uint16_t)request[5] << 8) | request[6]));
             return reply_status(CMD_SET_KEY, 0x00, response);
 
         case CMD_RESET:
             if (request_len != 2) return 0;
+            if (keymap_busy()) return reply_status(command, 0x02, response);
             dynamic_keymap_reset();
             return reply_status(CMD_RESET, 0x00, response);
 

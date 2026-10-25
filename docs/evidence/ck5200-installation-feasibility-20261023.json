@@ -1,0 +1,113 @@
+{
+  "decision": "NO-GO under current constraints, not technical impossibility",
+  "date": "2026-10-23",
+  "baseline": "65198ce8df5204352ffdc6dc7d67599e3dc18528",
+  "classification": "sanitized evidence ledger, no proprietary executables or raw physical records",
+  "primary_inputs": [
+    {"path": "com.clickscompanion.app_3.0.2_und3fined.ipa.ipa", "bytes": 95340422, "sha256": "c4fdcc9050997ed20035f668c8eadbff51764f5c07e14e63aa2bb744b2b9b33c"},
+    {"path": "com.clickscompanion.app_6466761655_3.0.2.ipa", "bytes": 100241592, "sha256": "77c0f9edeb2dac6efc0b0450401b9104a0eda9d6a2f86be9c5cf5d6df3a9afa7"},
+    {"path": "tmp/ck5200-tail-evidence/und/Payload/Clicks.app/Clicks", "bytes": 9771792, "sha256": "d56a59180adad89542107924edc1cc046507f6b11730f912f2855a8c408f5c6b"},
+    {"path": "keyboards/ck5200/.stock/clicks-app-prod-release.apk", "bytes": 32550542, "sha256": "fc60df6c69f0fb142892b9a8b531c60fb439b8d7e37bbde01886eea296499740"},
+    {"path": "ios/ClicksInspector/Resources/ck5200_extension.bin", "bytes": 27058, "sha256": "2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132"},
+    {"path": "keyboards/ck5200/build/stock_extension/ck5200_extension.elf", "bytes": 35500, "sha256": "ded4a957581e12a8528ab6a3905012832b29e1f1f02c9cc9d923de07763ce8f5"},
+    {"path": "keyboards/ck5200/build/stock_extension/build-source-sha256.json", "bytes": 1325, "sha256": "aca051366fa0eb32e20f7cad47b7e3c1d5251385e95d8af85a02ceb7629f011e"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V114_120.bin", "bytes": 16828, "sha256": "23327377867f8c3e14168d5af25e18ef4cea697d7d0b203cf970da06d5f6ac8f"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V115_120.bin", "bytes": 17452, "sha256": "336f5658631bd5a9db1aba7481534574e0725e3c583bbd08b2263a8b4e85964e"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V116_120.bin", "bytes": 17460, "sha256": "73a8f71683aadbdd74ef157d2662f6cd1c33ceb09dadca04c6a426f1d26e3e95"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V117_120.bin", "bytes": 18296, "sha256": "0ee35d494a6edf96183a5f4cb41e61230af9b1324da66b737bc5cc7cb5b3a58b"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V121_120.bin", "bytes": 18572, "sha256": "1c9ae5b2a4a838a5c62db0ce38c6d1d71c91fcc4101f0f8e37b365a746dac4aa"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/firmware-private/iKeyboard_CK-5200_V122_120.bin", "bytes": 18648, "sha256": "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"},
+    {"path": "ios/ClicksInspector/build/post-install-capability-evidence-01/StockUpdate.json", "bytes": 223, "sha256": "0d777832ab53b8e9b795a03c18521a1252a73e65004efbf49b2bca49b615192c"},
+    {"path": "ios/ClicksInspector/build/post-install-capability-evidence-01/StockUpdateAudit.jsonl", "bytes": 289285, "sha256": "2fbb76fe44654192d4dd17d10096d20b3c28fcf508a5e273f21ce1fd6f42b215"},
+    {"path": "ios/ClicksInspector/build/post-install-evidence-01/StockUpdate.json", "bytes": 223, "sha256": "0d777832ab53b8e9b795a03c18521a1252a73e65004efbf49b2bca49b615192c"},
+    {"path": "ios/ClicksInspector/build/post-install-evidence-01/StockUpdateAudit.jsonl", "bytes": 288354, "sha256": "0daf6306f8f335300b06df4470dee41a5ed4364a31ec7864eb0f62b20737c66a"},
+    {"path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/manifest.json", "bytes": 1675, "sha256": "461ca2d7874235b086228f45b1ec290d5bbc87c71aca13c50de73a919e902dcf", "role": "prior research ledger, not firmware distribution manifest"},
+    {"path": "tmp/ck5200-tail-evidence/ios_clicks.dis", "bytes": 59210085, "sha256": "f0f198d28e96ac79d3700697bece4a44c766c4d5e86ad225eef94f4ce0b7b894"},
+    {"path": "keyboards/ck5200/.stock/audit/v122.dis", "bytes": 277095, "sha256": "7f7084fe739bc064057fc42e0a39b343d7fe67ad0e06b0fba40e07effc29dfc3"}
+  ],
+  "late_identified_input": {
+    "path": "tmp/ck5200-installation-evidence-usf0t3wf/frontier/matching-release-manifest.json",
+    "bytes": 2841,
+    "sha256": "909657fc03b938a7e0c068bd3c33f8fd41a48ea532d9540bcbabacefc570c89f",
+    "limit": "Distribution record identified after initial ledger creation. This is a current hash, not a claimed pre-analysis baseline comparison."
+  },
+  "observed_physical_facts": {
+    "transfer_bytes": 27136,
+    "transfer_sha256": "438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2",
+    "a2_advancing_acknowledgements": 848,
+    "a3_size_payload": "00006a00",
+    "a0_acknowledged": true,
+    "capability_requests": ["0c940100547becbf00000000", "0c940100a60a007000000000"],
+    "capability_responses": ["080294ff00000000", "080294ff00000000"],
+    "journal_outcome": "sentRebootPending",
+    "normal_typing": "reported by Rudi, not newly measured in this investigation",
+    "not_observed": ["trusted staging readback", "trusted marker readback", "destination readback", "completed hardware reset", "OEM copy execution"]
+  },
+  "original_ios_static_evidence": {
+    "confidence": "high for pinned byte identity and listed instructions, artifact authenticity UNVERIFIED",
+    "cryptid": 0,
+    "inventory_members": 213,
+    "anchors": {
+      "A1": {"start": "0x100179bc4", "end": "0x100179e54", "sha256": "245ff5852884057bef189f54f6e8e806a0aa63682ee472029a3fef0eb5586ee5"},
+      "A2": {"start": "0x100179e54", "end": "0x10017a2b4", "sha256": "659114939effb9462f7a511e0938c8075b2d5e45ad5fbc5a78545c3ace53dbfa"},
+      "A3": {"start": "0x10017a2b4", "end": "0x10017a544", "sha256": "b41785a8e68e9da837d3d99c191b385f39e4721e2fcfafb05c271b9f2597bddd"},
+      "A0": {"start": "0x10017a544", "end": "0x10017a740", "sha256": "d835567c07d3d0d6bce270cef1ba2ecc10cec2227def85f68e058648b12b09aa"},
+      "worker": {"start": "0x10017b05c", "end": "0x10017b218", "sha256": "63a1a8c0cb8201ee02bc7269fb7e46e9dc1f5c4573abb69f238e2e7d5f2b468d"},
+      "source-routing": {"start": "0x1000d7d5c", "end": "0x1000d80ac", "sha256": "afe944a6d1348e7bc2f157be75d204657caf8a0190b9bbde6d7727ca4d1f8dc9"},
+      "writer": {"start": "0x1001cb86c", "end": "0x1001cbd64", "sha256": "728b8cb0bd49a4b090302bbe04917d227ca346963f2735ff65cc1b7e610c58aa"},
+      "input": {"start": "0x1001cc38c", "end": "0x1001ccde0", "sha256": "5234046cec1bfb8a2414f7b5c91cfbd7ec932127db7580e161813524ef35cb0c"}
+    },
+    "findings": ["raw Data transfer after SHA256 equality", "first matching newer manifest entry", "CK-prefix EAF source routing", "A0 return ignored by worker", "single stream write with ignored count", "three-second response wait"]
+  },
+  "original_android_evidence": {
+    "kind": "retained APK decompilation, independently read, not a substitute for iOS",
+    "anchors": ["p002a1/b.java", "p002a1/o.java", "p002a1/q.java", "p002a1/s.java", "T0/o.java", "L0/a.java"],
+    "findings": ["highest newer matching manifest version", "raw byte-array chunks", "asset sideload without download hash check", "A0 write success required, no A0 reply read"],
+    "inventory_members": 1183
+  },
+  "v122_executable_evidence": {
+    "kind": "static stock executable analysis",
+    "flash_helper_addresses": ["0x3174", "0x31B2", "0x4956", "0x49D4", "0x4982", "0x49AA", "0x49FE", "0x4974"],
+    "facts": ["A1 invalid marker starts in RAM", "A3 length condition is OR", "BUSY-only status polls", "no independent programmed-byte verification in inspected chain", "A0 reset request does not perform application copy"]
+  },
+  "modeled_ios_behavior": {
+    "kind": "instruction-supported reconstruction, NOT original iOS execution",
+    "worker_cases_passed": 18,
+    "selection_validation_assertions": 7,
+    "physical_frames_compared": {"a1": 1, "a2": 848, "a3": 1, "a0": 1},
+    "report": "ios/ClicksInspector/build/installation-feasibility-20261023/ios-model/report.json",
+    "report_sha256": "4ad9f951b321df7d180ea2f60995f3696df224a0f7a0d62141d8be64db5f6b58",
+    "ipa_inventory_sha256": "f7296aaa1e419beb5ee3eece694844e93294a16bb67926449e156c0a364eff97",
+    "apk_inventory_sha256": "6a6174efd457163e35e5993e82c13b3f159e42c561b3c246b40fcfc890332828"
+  },
+  "custom_executable_emulation": {
+    "full_startup_gate": "BLOCKED, not a proven physical firmware failure",
+    "boundary_pc": "0x3bbe",
+    "boundary_access": "read RCC CTLR 0x40021000",
+    "instruction_counts": {"stock": 1358, "exact_raw": 14600, "exact_transfer": 14600},
+    "exact_raw_and_transfer_startup_trace_sha256": "72d072a1bf7fe9c20e39d246ffc677fe5d028183a37daeed84ed2c5f5eb356c6",
+    "receive_controls_passed": 9,
+    "exact_responses": ["1b0294000100547becbf0000434b583104030606d20318014a0100", "1b0294000100a60a00700000434b583104030606d20318014a0100"],
+    "report": "keyboards/ck5200/build/installation-probes/report.json",
+    "report_sha256": "ee62923aee57a99f10787f30e3baad4d52408de2242fa34fd77ffa4d4fda8b84",
+    "limit": "Receive fixture uses synthetic USB/authentication after CRT. It does not continue genuine startup past RCC."
+  },
+  "verification": {
+    "primary_hashes": "all 20 initial ledger entries rechecked unchanged",
+    "python": "37 pytest tests passed using keyboards/ck5200/.venv/bin/python",
+    "initial_wrong_test_invocation": "unittest discovery failed because pytest is not installed in system Python. Correct existing pytest suite then passed in the repository environment.",
+    "swift": "ios/ClicksInspector/test.sh passed, 16 RUN sections plus additional flagged builds and native bridges",
+    "native": "keyboards/ck5200/scripts/test.sh passed, including sanitizer-backed native harnesses",
+    "bounded_assurance": "20 cases, report passed true",
+    "prior_forensics": "six cases passed, preserved audit and journal hashes unchanged",
+    "local_simulator_debug": "editor workflow and StockReceiverTests passed",
+    "local_simulator_extension_installer": "editor workflow and StockReceiverTests passed, TEST SUCCEEDED",
+    "modified_input_and_overlap_controls": "modified executable rejected, output overlapping original evidence rejected before writing",
+    "baseline_firmware_ci": {"run": "39940002326", "sha": "65198ce8df5204352ffdc6dc7d67599e3dc18528", "conclusion": "success"},
+    "baseline_ios_ci": {"run": "39940002212", "sha": "65198ce8df5204352ffdc6dc7d67599e3dc18528", "verify": "success", "extension-editor": "failure: wait for RAM lost status after simulated power action timed out; bridge logged BrokenPipeError. Same workflow passed locally. No proven physical cause or reproducible source correction."},
+    "hosted_final_ci": "Must inspect run for published commit. Baseline results are not final-commit results."
+  },
+  "inferences": ["An unchanged or damaged active dispatch path can explain FF. Equal response bytes do not identify physical instruction addresses.", "An unseen copier may reject or skip a validly acknowledged staged image. No matching copier rule was recovered."],
+  "unknowns": ["actual installed application bytes", "physical cause of FF", "boot-stage validation/copy/error handling", "completed physical reset", "independent iPhone-only recovery", "full peripheral startup after RCC", "original iOS OS scheduling and every dynamic library edge"],
+  "preserved_state": {"physical_commands": 0, "physical_writes": 0, "resets_or_power_experiments": 0, "reconnect_experiments": 0, "physical_phone_app_changes": 0, "journal_modifications": 0, "m4": "closed", "r3": "unmet", "accepted_firmware": "unchanged"}
+}

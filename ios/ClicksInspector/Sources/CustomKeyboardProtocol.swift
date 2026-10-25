@@ -37,6 +37,8 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
     case invalidProfile
     case readbackMismatch
     case ramWritesNotAllowed
+    case auditUnavailable
+    case invalidStreamFrame
 
     var description: String {
         switch self {
@@ -70,7 +72,41 @@ enum CustomKeyboardError: Error, Equatable, CustomStringConvertible {
             "Keyboard readback does not match the requested layout"
         case .ramWritesNotAllowed:
             "Read the keyboard layout and enable RAM writes for this session first"
+        case .auditUnavailable:
+            "The update audit log could not be persisted; the trial stops before any further frame"
+        case .invalidStreamFrame:
+            "Unexpected or malformed frame on the keyboard stream"
         }
+    }
+}
+
+/// EASession delivers byte fragments, not packet boundaries. Retain partial
+/// OEM notifications even when no request is pending. Never scan past garbage
+/// or let a frame that began before a request answer that request.
+struct KeyboardPacketFramer {
+    let maximumLength: Int
+    private var frame: [UInt8] = []
+    private var frameMayReply = false
+
+    init(maximumLength: Int) { self.maximumLength = maximumLength }
+
+    mutating func append(_ bytes: [UInt8], awaitingReply: Bool) throws -> [UInt8]? {
+        var reply: [UInt8]?
+        for byte in bytes {
+            if frame.isEmpty { frameMayReply = awaitingReply && reply == nil }
+            frame.append(byte)
+            guard let length = frame.first, (4...maximumLength).contains(Int(length)) else {
+                throw CustomKeyboardError.invalidStreamFrame
+            }
+            guard frame.count == Int(length) else { continue }
+            let complete = frame
+            frame.removeAll(keepingCapacity: true)
+            if ([11, 15].contains(complete.count) && complete[1] == 2 && complete[2] == 0)
+                || (complete.count == 4 && complete[1] == 4 && complete[2] == 1) { continue }
+            guard frameMayReply, awaitingReply, reply == nil else { throw CustomKeyboardError.invalidStreamFrame }
+            reply = complete
+        }
+        return reply
     }
 }
 
@@ -82,19 +118,13 @@ struct KeyboardInfo: Equatable {
 
 /// Which images this build is allowed to flash (review 2026-10-12).
 ///
-/// The ONLY authorized artifact is the official stock V122 application image,
-/// identified by its recorded SHA-256 (the same hash pinned by
-/// keyboards/ck5200/tools/preflight_check.sh). Custom QMK flashing is closed
-/// until a separately reviewed CH32X035 image is authorized: the bundled QMK
-/// image targets the correct family now, but it has no independent recovery
-/// evidence and no review authorization, so the controller refuses every
-/// image that is not the authorized stock artifact while
-/// customFirmwareFlashingEnabled is false, independent of the UI.
+/// Image approval is separate from permission to send a physical update.
+/// StockFlashTrial accepts only official V122. ExtensionInstaller accepts only
+/// the pinned stock-derived extension. No configuration authorizes QMK images.
 enum CustomKeyboardImageAuthorization {
     static let authorizedStockSHA256 = "8ee86935f5fbd622972fa55033f29fa551ba572288123046e21d79006f3b22f8"
-
-    /// Closed until a separately reviewed CH32X035 image exists.
-    static let customFirmwareFlashingEnabled = false
+    static let authorizedExtensionSHA256 = "2f5400a30abf4dc6a2c7fa0652d666a421c9255e8eb3750b7c02dfde84e74132"
+    static let authorizedExtensionTransferSHA256 = "438e7597b069e19ef8307e51e34ba9ab4cd07c0a7256c84713cc321f05a78aa2"
 }
 
 /// Structural validation of a CK-5200 application image, the same checks

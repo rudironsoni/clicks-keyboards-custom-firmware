@@ -20,6 +20,7 @@ uint8_t ck5200_backlight_get(void) { return stub_brightness; }
 #define MATRIX_COLS 6
 
 dynamic_keymap_stub_state_t dynamic_keymap_stub;
+uint8_t matrix_get_row(uint8_t row) { (void)row; return 0; }
 
 uint8_t dynamic_keymap_get_layer_count(void) { return DYNAMIC_KEYMAP_LAYER_COUNT; }
 

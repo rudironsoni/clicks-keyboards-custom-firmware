@@ -3,7 +3,7 @@
  * wear-leveling backing store, on a host CH32-flash model with manual time.
  *
  * Everything below the matrix hardware and above the USB stack is the
- * production code path: matrix_common -> sym_defer_g debounce ->
+ * production code path: matrix_common -> CK-5200 per-key debounce ->
  * keyboard_task -> action_* -> layer switching -> keymap lookup ->
  * dynamic_keymap over real wear leveling -> host driver report capture.
  *
@@ -206,7 +206,7 @@ static void t_lt_tap(void) {
         printf(" [%02x %02x %02x %02x %02x %02x %02x]", cap_hist[h].mods, cap_hist[h].keys[0], cap_hist[h].keys[1], cap_hist[h].keys[2], cap_hist[h].keys[3], cap_hist[h].keys[4], cap_hist[h].keys[5]);
     printf("\n");
 
-    /* An event shorter than DEBOUNCE vanishes under sym_defer_g. */
+    /* An event shorter than DEBOUNCE vanishes under deferred per-key debounce. */
     printf("   -- sub-debounce tap (2 ms, shorter than DEBOUNCE 5) --\n");
     long before = cap_count;
     cap_reset_hist();
@@ -320,10 +320,17 @@ static void t_lt_hold(void) {
     settle(12);
     CHECK(hist_has(KC_RIGHT), "held Clicks + (1,2) produced KC_RIGHT");
     CHECK(report_has(KC_RIGHT), "KC_RIGHT still held (got k0=%02x)", cap_report.keys[0]);
-    set_key(1, 2, false);
     set_key(5, 2, false);
     settle(12);
+    CHECK(report_has(KC_RIGHT) && !report_has(KC_D), "cursor layer release preserves active arrow until its key releases");
+    set_key(1, 2, false);
+    settle(12);
     CHECK(report_empty(), "release all -> empty report");
+    set_key(1, 2, true);
+    settle(12);
+    CHECK(report_has(KC_D) && !report_has(KC_RIGHT), "next press returns to base-layer D");
+    set_key(1, 2, false);
+    settle(12);
 }
 
 static void t_osl_sticky_sym(void) {
@@ -346,6 +353,28 @@ static void t_osl_sticky_sym(void) {
     CHECK(!hist_has(KC_Q), "sticky SYM did NOT type through layer 0");
     CHECK(report_empty(), "one-shot auto-released the key (upstream sticky semantics)");
     printf("     observed report: mods=%02x keys=%02x %02x %02x\n", cap_report.mods, cap_report.keys[0], cap_report.keys[1], cap_report.keys[2]);
+    set_key(0, 0, false);
+    settle(12);
+    cap_reset_hist();
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_Q) && !hist_has(KC_1), "one-shot consumed: next press is base Q");
+    set_key(0, 0, false);
+    settle(12);
+
+    set_key(5, 4, true);
+    settle(220);
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_1), "held one-shot key activates symbol layer");
+    set_key(5, 4, false);
+    settle(12);
+    set_key(0, 0, false);
+    settle(12);
+    CHECK(report_empty(), "symbol sequence releases after layer key releases first");
+    set_key(0, 0, true);
+    settle(12);
+    CHECK(report_has(KC_Q), "held symbol sequence returns to base Q");
     set_key(0, 0, false);
     settle(12);
 }
@@ -417,7 +446,7 @@ static void t_consumer_encoding(void) {
 
 static void t_chatter_starvation(void) {
     idle();
-    printf("\n== T9 sym_defer_g global debounce: chatter starvation ==\n");
+    printf("\n== T9 isolation: unrelated chatter must not starve stable key ==\n");
     set_key(1, 1, true); /* KC_I stable press */
     settle(12);
     CHECK(report_has(KC_I), "stable press KC_I visible before chatter");
@@ -428,7 +457,7 @@ static void t_chatter_starvation(void) {
         set_key(0, 1, t % 4 == 0); /* chattering crossing (0,1) */
         settle(2);
     }
-    CHECK(!report_has(KC_M), "KC_M held 60 ms during chatter NEVER appeared (global debounce starved)");
+    CHECK(report_has(KC_M), "stable KC_M must register despite unrelated chatter");
     set_key(0, 1, false);
     set_key(4, 4, false);
     set_key(1, 1, false);

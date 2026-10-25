@@ -1,0 +1,35 @@
+--- a/rv32.c
++++ b/rv32.c
+@@ -131 +131 @@
+-    const int32_t immS = ((int32_t)w >> 25 << 5) | BITS(w, 11, 7);
++    const int32_t immS = sext((BITS(w, 31, 25) << 5) | BITS(w, 11, 7), 12);
+@@ -202 +202,4 @@
+-    case 0x0f: set(d, OP_FENCE, 0, 0, 0, 0); break;
++    case 0x0f:
++        if (w == 0x0000100f || (f3 == 0 && !(w & 0xf00fff80u)))
++            set(d, OP_FENCE, 0, 0, 0, 0);
++        break;
+@@ -432,0 +436 @@
++    gate_access(m, addr, size, false, 0);
+@@ -453,0 +458 @@
++    gate_access(m, addr, size, true, v);
+@@ -476,0 +482 @@
++    gate_trap(m, pc, cause, tval, irq);
+@@ -535,0 +542 @@
++    gate_mret(m);
+@@ -628,0 +636 @@
++    gate_csr(m, csr, false, 0);
+@@ -654,0 +663 @@
++    gate_csr(m, csr, true, v);
+@@ -736,0 +746,2 @@
++        c->pc = pc;
++        gate_instruction(m, pc);
+--- a/bus.c
++++ b/bus.c
+@@ -1026,0 +1027,3 @@
++    gate_access(m, addr, size, false, 0);
++    uint32_t special;
++    if (gate_bus(m, addr, size, false, &special)) return special;
+@@ -1110,0 +1114,2 @@
++    gate_access(m, addr, size, true, value);
++    if (gate_bus(m, addr, size, true, &value)) return;
